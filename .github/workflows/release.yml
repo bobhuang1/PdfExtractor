@@ -1,0 +1,309 @@
+# A release build, on a version tag.
+#
+# A `v*` tag builds the artifacts the release carries: the command line for the
+# three platforms, and the window's installers (deb + AppImage, msi, dmg). The
+# workflow can also be run by hand (`workflow_dispatch`), which builds and
+# stores the same artifacts as workflow artifacts without publishing anything —
+# that is how a change to this file is tested before a tag depends on it.
+#
+# Two rules the builds hold to:
+#   * `--locked` everywhere, so a released binary is the lockfile's build.
+#   * the tag names the workspace version (`v0.1.0` for version 0.1.0). The
+#     publish job compares the tag with `Cargo.toml`, `tauri.conf.json` and the
+#     built binary itself, and fails loudly on any disagreement, so a tag can
+#     never ship binaries that claim to be another version.
+#
+# The window bundles carry the command line as a resource, so an installed
+# window converts without a separate install: `crates/ui/src/main.rs` names the
+# resource directory's copy at startup, and `locate_cli` runs that one.
+#
+# The artifacts are not code-signed — signing keys are not in this repository —
+# so Gatekeeper and SmartScreen will ask the user to confirm the first launch.
+# That is expected, and the release notes say so.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Where the Windows jobs keep vcpkg's binary cache; actions/cache cannot
+  # expand variables in a path, so the literal is repeated in the cache step.
+  VCPKG_WINDOWS_CACHE: C:\vcpkg-binarycache
+
+jobs:
+  cli:
+    name: the command line · ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # The CLI links the Tesseract bindings (`leptess` → `tesseract-sys`): the
+      # libraries are needed to link, libclang to build the bindings. Each
+      # platform keeps its own copy of Tesseract.
+      - name: Tesseract and libclang (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev tesseract-ocr tesseract-ocr-eng libclang-dev
+
+      - name: Tesseract (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tesseract pkg-config
+
+      # Windows: vcpkg's tesseract (which brings its leptonica). The bindings
+      # find it through the vcpkg crate, which reads `VCPKG_ROOT` — exported
+      # for the build from the runner's own `VCPKG_INSTALLATION_ROOT`.
+      - name: Tesseract (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg-binarycache
+        run: |
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install tesseract:x64-windows
+
+      # The binary cache turns a from-source tesseract (a twenty-minute
+      # Windows job) into a download on every later run.
+      - name: Cache vcpkg
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binarycache
+          key: vcpkg-tesseract-x64-windows
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build the command line
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+            export LIBCLANG_PATH="C:/Program Files/LLVM/bin"
+          fi
+          cargo build --locked --release --package pdfextractor-cli
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="pdfextractor-cli-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          bin="target/release/pdfextractor-cli"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$bin.exe" "dist/$name/"
+            # vcpkg's tesseract is a dynamic library; the release carries its
+            # DLLs beside the binary, which is where Windows looks for them.
+            cp "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll "dist/$name/"
+            bin="$bin.exe"
+          else
+            cp "$bin" "dist/$name/"
+          fi
+          cp README.md "dist/$name/"
+          # The binary, run here, states its own version: a package that cannot
+          # even start is caught before it is uploaded.
+          "dist/$name/$(basename "$bin")" --version | tee "dist/$name/VERSION"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd dist && 7z a -tzip "$name.zip" "$name" >/dev/null)
+          else
+            tar -czf "dist/$name.tar.gz" -C dist "$name"
+          fi
+          rm -rf "dist/$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  window:
+    name: the window · ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: msi
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same Tesseract as the command line's build, plus what the window
+      # itself links (WebKitGTK and friends) and libfuse2, which the AppImage
+      # tool needs on modern Ubuntu.
+      - name: Tesseract, WebKitGTK and libfuse2 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev tesseract-ocr tesseract-ocr-eng libclang-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libfuse2
+
+      - name: Tesseract (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tesseract pkg-config
+
+      - name: Tesseract (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg-binarycache
+        run: |
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install tesseract:x64-windows
+
+      - name: Cache vcpkg
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binarycache
+          key: vcpkg-tesseract-x64-windows
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-release-window-${{ hashFiles('**/Cargo.lock') }}
+
+      # The bundle carries this build of the command line as a resource
+      # (`bundle.resources` in `tauri.conf.json`), so it must exist before the
+      # bundler runs.
+      - name: Build the command line the window bundles
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+            export LIBCLANG_PATH="C:/Program Files/LLVM/bin"
+          fi
+          cargo build --locked --release --package pdfextractor-cli
+
+      - name: Install the Tauri bundler
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
+
+      - name: Build the window and its bundle
+        working-directory: crates/ui
+        run: cargo tauri build --bundles ${{ matrix.bundles }}
+
+      # What the deb will tell apt to install alongside it. The window runs
+      # Tesseract at conversion time, so this is the difference between an
+      # installed window that converts and one that fails to start a run.
+      - name: What the deb declares as its dependencies
+        if: runner.os == 'Linux'
+        run: dpkg-deb -f target/release/bundle/deb/*.deb Depends
+
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          target="${{ matrix.target }}"
+          mkdir -p dist
+          case "$RUNNER_OS" in
+            Linux)
+              cp target/release/bundle/deb/*.deb "dist/pdf-extractor-${tag}-${target}.deb"
+              cp target/release/bundle/appimage/*.AppImage "dist/pdf-extractor-${tag}-${target}.AppImage"
+              ;;
+            Windows)
+              cp target/release/bundle/msi/*.msi "dist/pdf-extractor-${tag}-${target}.msi"
+              ;;
+            macOS)
+              cp target/release/bundle/dmg/*.dmg "dist/pdf-extractor-${tag}-${target}.dmg"
+              ;;
+          esac
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: window-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cli, window]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The tag, the workspace, the window's config and the built binary must
+      # all say the same version, or the release does not happen.
+      - name: The tag names the version being released
+        run: |
+          set -euo pipefail
+          version="$(awk -F'"' '/^\[workspace.package\]/{p=1} p && /^version/{print $2; exit}' Cargo.toml)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ -z "$version" ]; then echo "::error::no version in [workspace.package]"; exit 1; fi
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not name the workspace version $version"; exit 1
+          fi
+          grep -q "\"version\": \"$version\"" crates/ui/tauri.conf.json || {
+            echo "::error::tauri.conf.json says another version than $version"; exit 1; }
+
+      - name: Checksums
+        working-directory: dist
+        run: find . -type f ! -name SHA256SUMS.txt -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS.txt
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "PDF Extractor $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*

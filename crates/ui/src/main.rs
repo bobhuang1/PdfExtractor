@@ -367,6 +367,28 @@ fn main() {
 
     tauri::Builder::default()
         .manage(ActiveRun::default())
+        .setup(|app| {
+            // An installed window must convert without a separate install: a
+            // bundle carries the command line in its resource directory, and
+            // naming it here means every conversion runs the CLI the bundle was
+            // built with. Set by hand, `PDFEXTRACTOR_CLI` still wins —
+            // `locate_cli` reads it first — and without a bundle this finds
+            // nothing and changes nothing.
+            if std::env::var_os("PDFEXTRACTOR_CLI").is_none() {
+                if let Ok(resources) = app.path().resource_dir() {
+                    let name = if cfg!(windows) {
+                        "pdfextractor-cli.exe"
+                    } else {
+                        "pdfextractor-cli"
+                    };
+                    let bundled = resources.join(name);
+                    if bundled.exists() {
+                        std::env::set_var("PDFEXTRACTOR_CLI", &bundled);
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pick_path,
             start_conversion,
