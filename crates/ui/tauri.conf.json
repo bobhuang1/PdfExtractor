@@ -24,8 +24,10 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
-    "resources": {
-      "../../target/release/pdfextractor-cli*": ""
+    "linux": {
+      "deb": {
+        "depends": ["libtesseract5", "liblept5"]
+      }
     }
   }
 }
