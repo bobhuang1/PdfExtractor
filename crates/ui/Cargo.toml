@@ -1,0 +1,34 @@
+[package]
+name = "pdfextractor-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# The desktop shell: the Tauri window and its native file chooser. The library —
+# the comparison, the ratchet and the memory the window and the CLI share — has no
+# window in it, so a headless build (the CLI's `--compare` mode, a CI box) can take
+# this off and never needs a webview or GTK.
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:rfd"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri wraps the system webview (WebKitGTK / WebView2 / WKWebView), so the
+# same Rust core and the same static frontend run on all three platforms.
+tauri = { version = "2", features = [], optional = true }
+serde = { workspace = true }
+# The CLI's `--progress` records are JSON lines.
+serde_json = { workspace = true }
+# Native file/folder chooser, served by a command so the frontend needs no
+# JavaScript package manager.
+rfd = { version = "0.17", default-features = false, features = ["gtk3"], optional = true }
+
+[[bin]]
+name = "pdfextractor-ui"
+path = "src/main.rs"
+required-features = ["desktop"]

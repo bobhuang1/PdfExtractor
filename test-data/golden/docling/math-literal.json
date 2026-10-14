@@ -1,0 +1,48 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.10.0",
+  "name": "math-literal",
+  "origin": {
+    "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "binary_hash": 3232854715685371302,
+    "filename": "math-literal.docx"
+  },
+  "furniture": {
+    "self_ref": "#/furniture",
+    "children": [],
+    "content_layer": "furniture",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "body": {
+    "self_ref": "#/body",
+    "children": [
+      {
+        "$ref": "#/texts/0"
+      }
+    ],
+    "content_layer": "body",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "groups": [],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "formula",
+      "prov": [],
+      "orig": "\\iiint_{V}^{}divFdV=\\oiint_{S}^{}F \\bullet n dS",
+      "text": "\\iiint_{V}^{}divFdV=\\oiint_{S}^{}F \\bullet n dS"
+    }
+  ],
+  "pictures": [],
+  "tables": [],
+  "key_value_items": [],
+  "form_items": [],
+  "pages": {}
+}

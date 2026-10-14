@@ -1,0 +1,18 @@
+[package]
+name = "pdfextractor-docx-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+pdfextractor-core = { path = "../core" }
+# Vector drawings (`image/emf`, `image/wmf`) are played into a PNG, so a drawing
+# is carried as pixels like every other picture.
+pdfextractor-metafile = { path = "../metafile" }
+zip.workspace = true
+quick-xml.workspace = true
+tracing.workspace = true

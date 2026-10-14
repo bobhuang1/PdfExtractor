@@ -1,0 +1,18 @@
+[package]
+name = "pdfextractor-layout"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+
+[dev-dependencies]
+# The corpus tests run the real parser output through layout analysis.
+pdfextractor-pdf-parser = { path = "../pdf-parser" }
+pdfextractor-core = { path = "../core" }
+imageproc.workspace = true
+image.workspace = true
+tracing.workspace = true

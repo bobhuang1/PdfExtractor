@@ -1,0 +1,70 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.10.0",
+  "name": "EquationAsScientificNumbering",
+  "origin": {
+    "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "binary_hash": 2478314193239419195,
+    "filename": "EquationAsScientificNumbering.docx"
+  },
+  "furniture": {
+    "self_ref": "#/furniture",
+    "children": [],
+    "content_layer": "furniture",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "body": {
+    "self_ref": "#/body",
+    "children": [
+      {
+        "$ref": "#/texts/0"
+      },
+      {
+        "$ref": "#/texts/1"
+      }
+    ],
+    "content_layer": "body",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "groups": [],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [],
+      "orig": "scientific I",
+      "text": "scientific I",
+      "formatting": {
+        "bold": true,
+        "italic": false,
+        "underline": false,
+        "strikethrough": false,
+        "script": "baseline"
+      }
+    },
+    {
+      "self_ref": "#/texts/1",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "formula",
+      "prov": [],
+      "orig": "\\left(x+a\\right)^{n}=\\sum_{k=0}^{n}\\left(\\genfrac{}{}{0pt}{}{n}{k}\\right)x^{k}a^{n-k}",
+      "text": "\\left(x+a\\right)^{n}=\\sum_{k=0}^{n}\\left(\\genfrac{}{}{0pt}{}{n}{k}\\right)x^{k}a^{n-k}"
+    }
+  ],
+  "pictures": [],
+  "tables": [],
+  "key_value_items": [],
+  "form_items": [],
+  "pages": {}
+}

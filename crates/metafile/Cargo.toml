@@ -1,0 +1,16 @@
+[package]
+name = "pdfextractor-metafile"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# PNG encoding of the rasterised drawing. A commodity image codec, like the
+# DEFLATE and ZIP the other crates reuse; the drawing itself is done here.
+image.workspace = true
+
+[dev-dependencies]
+# The corpus drawings live inside DOCX packages.
+zip.workspace = true

@@ -1,0 +1,48 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.10.0",
+  "name": "math-accents",
+  "origin": {
+    "mimetype": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "binary_hash": 11203941359086172928,
+    "filename": "math-accents.docx"
+  },
+  "furniture": {
+    "self_ref": "#/furniture",
+    "children": [],
+    "content_layer": "furniture",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "body": {
+    "self_ref": "#/body",
+    "children": [
+      {
+        "$ref": "#/texts/0"
+      }
+    ],
+    "content_layer": "body",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "groups": [],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "formula",
+      "prov": [],
+      "orig": "\\acute{a}\\grave{a}\\check{a}\\breve{a}\\ocirc{a}\\vec{a}\\tilde{a}\\hat{a}\u02d9\\vec{a}\\vec{a}\\tilde{a}\\underline{a}",
+      "text": "\\acute{a}\\grave{a}\\check{a}\\breve{a}\\ocirc{a}\\vec{a}\\tilde{a}\\hat{a}\u02d9\\vec{a}\\vec{a}\\tilde{a}\\underline{a}"
+    }
+  ],
+  "pictures": [],
+  "tables": [],
+  "key_value_items": [],
+  "form_items": [],
+  "pages": {}
+}
