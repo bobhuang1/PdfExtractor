@@ -3,3 +3,6 @@
 !test-data/expected/*.json
 # The Compare mode's per-document numbers: a record, not an output, so it is kept.
 !test-data/golden/compare-baseline.json
+# The window's bundle configuration — source, not output: the release
+# workflow builds the installers from it.
+!crates/ui/tauri.conf.json
