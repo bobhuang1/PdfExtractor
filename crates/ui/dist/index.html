@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Extractor</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>PDF &amp; Office document extractor</h1>
+      <p class="subtitle">
+        Converts a file or a folder to Docling JSON by calling the
+        <code>pdfextractor-cli</code> command line. The conversion runs in the
+        background: documents appear here as they finish, and it can be stopped
+        at any time.
+      </p>
+
+      <section class="field">
+        <label for="input">Input — a file or a folder</label>
+        <div class="row">
+          <input id="input" type="text" placeholder="document.pdf, report.docx, C:\\docs, ..." />
+          <button id="pick-file" type="button">File…</button>
+          <button id="pick-folder" type="button">Folder…</button>
+        </div>
+      </section>
+
+      <section class="field">
+        <label for="output">Output (optional — defaults beside each input)</label>
+        <div class="row">
+          <input id="output" type="text" placeholder="leave empty to write beside the input" />
+          <button id="pick-output" type="button">Folder…</button>
+        </div>
+      </section>
+
+      <section class="field">
+        <label for="parallel">Parallelism</label>
+        <div class="row">
+          <input id="parallel" type="range" min="1" max="1000" value="4" />
+          <output id="parallel-value">4</output>
+        </div>
+      </section>
+
+      <section class="field">
+        <label for="compare" class="check mode">
+          <input id="compare" type="checkbox" />
+          Compare with a Docling reference
+        </label>
+        <div class="row">
+          <input
+            id="reference"
+            type="text"
+            disabled
+            placeholder="a reference JSON, or the folder of them (e.g. test-data/golden/docling)"
+          />
+          <button id="pick-reference-file" type="button" disabled>File…</button>
+          <button id="pick-reference-folder" type="button" disabled>Folder…</button>
+        </div>
+        <p class="hint">
+          Each document that finishes is shown beside the reference for it — its
+          own file, or the file of the same name in the folder — with what
+          agrees, what differs and what only one side has. Where both readings
+          published a box for a block (the PDFs do, the flow formats do not) the
+          boxes take part in the matching: a block the two readings put in the
+          same place is paired with it, two rows that stand in the same place are
+          shown as one row rather than one a side, and a block they put somewhere
+          else is a difference that says where each of them put it.
+        </p>
+      </section>
+
+      <section class="field">
+        <label>Options</label>
+        <div class="row wrap">
+          <label class="check">
+            <input id="recursive" type="checkbox" checked />
+            Recurse into subfolders
+          </label>
+          <label class="check">
+            <input id="preview" type="checkbox" />
+            Write the HTML box overlay
+          </label>
+          <label class="check">
+            OCR
+            <select id="ocr">
+              <option value="auto" selected>Auto (scanned pages only)</option>
+              <option value="always">Always</option>
+              <option value="never">Never</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="convert" type="button" class="primary">Convert</button>
+        <button id="stop" type="button" class="danger hidden">Stop</button>
+        <span id="summary" class="summary"></span>
+      </section>
+
+      <section id="run" class="run hidden">
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <p id="run-state" class="summary"></p>
+        <code id="run-command" class="command"></code>
+        <ul id="files" class="files"></ul>
+        <details class="log-box">
+          <summary>Command output</summary>
+          <pre id="log" class="output"></pre>
+        </details>
+      </section>
+
+      <section id="result" class="result hidden">
+        <h2 id="result-title">Result</h2>
+        <code id="command" class="command"></code>
+        <p id="verdict" class="verdict"></p>
+      </section>
+
+      <section id="compare-result" class="hidden">
+        <h2>Against the Docling reference</h2>
+        <div id="diffs"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+[package]
+name = "pdfextractor-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rayon.workspace = true
+# The `--progress` records are JSON lines, parsed by the desktop UI.
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+pdfextractor-core = { path = "../core" }
+pdfextractor-pdf-parser = { path = "../pdf-parser" }
+pdfextractor-docx-parser = { path = "../docx-parser" }
+pdfextractor-doc-parser = { path = "../doc-parser" }
+pdfextractor-text-parser = { path = "../text-parser" }
+pdfextractor-layout = { path = "../layout" }
+pdfextractor-ocr-engine = { path = "../ocr-engine" }
+pdfextractor-json-exporter = { path = "../json-exporter" }
+# The `--compare` mode holds each finished document to the same comparison, memory
+# and ratchet rules the window's Compare mode uses (`pdfextractor_ui::diff`), so the
+# two cannot drift apart. Without default features the desktop shell (Tauri, GTK) is
+# left out: the library is the comparison, not the window.
+pdfextractor-ui = { path = "../ui", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true

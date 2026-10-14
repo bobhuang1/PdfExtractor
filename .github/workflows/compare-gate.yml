@@ -1,0 +1,108 @@
+# The compare gate, on every push: convert the corpus and hold every document to
+# the memory beside its reference. A document that falls below the floor the
+# baseline remembers fails the run — and this job — naming itself and what fell,
+# so a fallen panel fails a build and not only a window.
+#
+# Two jobs run it. The first is the command line's own gate; the second is the
+# corpus report, which holds the same documents through the same Session and can
+# also see what a single run cannot — every reference compared, every baseline
+# entry produced, and the baseline's own recorded measurement.
+#
+# The gate is `pdfextractor-cli --compare`, the same command a person runs by
+# hand (see README, "Compare mode"). `--ocr never` is the measurement the
+# baseline records for itself (`measured` in `test-data/golden/compare-baseline
+# .json`), so the run's settings match the memory's and every rule of the
+# ratchet applies — `differs` rising and agreement falling included — not only
+# the floor under a form's placed items. A run measured any other way would be
+# held to the floor alone, which is not this gate.
+#
+# The holding itself is the library's (`crates/ui/src/gate.rs`), the same
+# Session the window's Compare panel and the corpus report hold their documents
+# through; what runs here is the command line's face on it.
+
+name: the compare gate
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  corpus:
+    name: every corpus document at or above the whole ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The CLI links the Tesseract bindings even with OCR off (`leptess` →
+      # `tesseract-sys`/`leptonica-sys`), and those crates build their bindings
+      # with libclang: the libraries are needed to link, libclang to build.
+      - name: The native libraries the bindings need
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev libclang-dev
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-compare-gate-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build the command line
+        run: cargo build --locked --package pdfextractor-cli
+
+      # The gate itself. Every document of `test-data/real` is converted once,
+      # into a directory of its own rather than beside the corpus, and held to
+      # the memory beside `test-data/golden/docling`. The exit code is the
+      # verdict, and one line per document is printed either way — a passing run
+      # shows what was held rather than silence.
+      - name: Hold the corpus to the memory beside its references
+        run: |
+          ./target/debug/pdfextractor-cli \
+            --input test-data/real \
+            --output "$RUNNER_TEMP/corpus" \
+            --ocr never \
+            --parallel 4 \
+            --compare test-data/golden/docling
+
+  ratchet:
+    name: the corpus report, worst first
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same libraries as the gate job: the CLI this test converts the corpus
+      # through links the Tesseract bindings.
+      - name: The native libraries the bindings need
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev libclang-dev
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-corpus-ratchet-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build the command line the report converts with
+        run: cargo build --locked --package pdfextractor-cli
+
+      # The corpus report: the same gate over the same Session, plus what only it
+      # can see — a reference with no document, a baseline entry no run produced,
+      # and a baseline that says it was measured some other way. `--no-default-features`
+      # keeps the desktop shell (Tauri, WebKit) out of the build: the report needs
+      # the library and the CLI binary, not the window. `--nocapture` puts the
+      # worst-first table in the job's log, which is what makes a failure readable.
+      - name: The corpus report over the whole corpus
+        run: >-
+          cargo test --locked --package pdfextractor-ui --no-default-features
+          --test corpus_report_test -- --nocapture

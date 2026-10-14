@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/core",
+  "crates/pdf-parser",
+  "crates/docx-parser",
+  "crates/doc-parser",
+  "crates/metafile",
+  "crates/text-parser",
+  "crates/layout",
+  "crates/ocr-engine",
+  "crates/json-exporter",
+  "crates/cli",
+  "crates/ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["PdfExtractor Team"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Parallelism
+rayon = "1"
+
+# Image handling (reuse - pragmatic)
+image = "0.25"
+
+# Image processing primitives
+imageproc = "0.25"
+
+# XML parsing (DOCX)
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# DEFLATE/zlib decoding for PDF FlateDecode streams (reuse - not core domain logic)
+flate2 = "1"
+
+# ZIP handling (DOCX - reuse)
+zip = "2"
+
+# OCR - start with Tesseract bindings
+leptess = "0.14"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utils
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }

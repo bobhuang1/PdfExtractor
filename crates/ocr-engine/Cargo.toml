@@ -1,0 +1,26 @@
+[package]
+name = "pdfextractor-ocr-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+pdfextractor-core = { path = "../core" }
+image.workspace = true
+tracing.workspace = true
+
+# Tesseract bindings. Needs libtesseract + libleptonica (and libclang to build).
+# OCR is a required feature, so this is on by default; it can be disabled with
+# `--no-default-features` on machines without the native libraries.
+leptess = { version = "0.14", optional = true }
+
+[features]
+default = ["tesseract"]
+tesseract = ["leptess"]
+
+[dev-dependencies]
+# Used by the end-to-end OCR test to pull an embedded image out of a fixture.
+pdfextractor-pdf-parser = { path = "../pdf-parser" }
