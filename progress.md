@@ -2029,3 +2029,15 @@ in full (`ACME`, `12345`, `Total Due`); with the shipped data removed and
 the same poison, Tesseract reported `Error opening data file
 /nonexistent/eng.traineddata` and the CLI continued without OCR, which is
 its stated policy for an engine that will not start.
+
+A local dry-run of the whole packaging pipeline (the workflow's own steps,
+run by hand: archive, deb, AppImage, version gates, `SHA256SUMS.txt`) caught
+one thing before a tag could ship it: the `pdfextractor-cli*` resource glob
+also matched cargo's `pdfextractor-cli.d` dep-info file, so every bundle
+carried a stray text file of this machine's build paths. The bundle config
+now names the command line exactly (`pdfextractor-cli`, and
+`pdfextractor-cli.exe` on Windows — which also excludes cargo's `.pdb`), and
+the rebuilt deb holds only the window binary, its desktop file and icon, and
+the command line with its `tessdata`. The deb's declared `Depends` came out
+of a real build as `libtesseract5, liblept5, libwebkit2gtk-4.1-0,
+libgtk-3-0` — the two we name, merged with the bundler's own defaults.
