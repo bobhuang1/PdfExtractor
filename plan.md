@@ -295,7 +295,14 @@ pdf-extractor/
   or fails, and it is bounded (2,000 blocks a side, 2,000 rows, 300 characters a text) so
   a pathological document cannot hang the window. Exercised end to end by
   `--selftest <doc> --selftest-ref <reference>`
-- [ ] Installers/bundling (`.deb`/`.app`/`.msi`, per-platform icons, signing)
+- [x] Installers/bundling: a `v*` tag builds and publishes them — `.deb` and
+  `.AppImage` (Linux), `.msi` (Windows), `.dmg` (macOS) — with per-platform
+  icons (`.ico`/`.icns` grown from the PNG), this build of the command line
+  inside the bundle (which the window names at startup) and the `tessdata` the
+  OCR reads beside it, so an installed window converts without a separate
+  install (`.github/workflows/release.yml`)
+- [ ] Code signing: the artifacts are unsigned, so Gatekeeper and SmartScreen
+  ask on first open; signing keys are not in this repository
 
 ### Phase 9: GPU Acceleration (Optional - after MVP)
 - [ ] Detect GPU adapters at runtime (wgpu)

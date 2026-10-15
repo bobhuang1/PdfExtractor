@@ -1949,3 +1949,83 @@ an assertion; what is left is genuinely new capability.
   generator, the version caveat and what the comparison deliberately ignores are all in
   `test-data/golden/README.md`.
 - Known-good toolchain: rustc/cargo 1.99.0, edition 2021.
+
+## Release engineering (new)
+
+Releases are tag-driven. A `v*` tag opens a draft release, builds the artifacts
+on all three platforms, uploads them into the draft, and the last job checks the
+tag against the workspace version (and the `VERSION` every CLI archive reports
+about itself), writes `SHA256SUMS.txt` and publishes. The same workflow runs by
+hand — `workflow_dispatch` builds and packages everything and publishes nothing,
+which is how a change to it is tested before a tag depends on it.
+
+What a release carries, per platform: the command line (`tar.gz`/`zip`, with the
+Tesseract DLLs beside it on Windows) and the window's installer — `.deb` and
+`.AppImage` (Linux), `.msi` (Windows), `.dmg` (macOS). Three things had to be
+built for that to be true, all of it new:
+
+- **Icons**: `.ico` (seven sizes) and `.icns` (eight, retina included) grown
+  from the existing 128px `icon.png`, which the deb already used.
+- **The bundle configuration** (`crates/ui/tauri.conf.json`) is now kept in the
+  repository — the `*.json` ignore rule carves out one more exception, as it did
+  for the golden references — with `bundle.active` on and the deb declaring
+  `libtesseract5`/`liblept5`: the bundler's own dependency list knows WebKitGTK
+  and GTK but not the OCR runtime an installed window converts with.
+- **The command line rides inside every bundle**, in the resource directory,
+  and the window names that copy at startup (`crates/ui/src/main.rs`): an
+  installed window converts without a separate install. The resource *globs*
+  are passed on the release build's command line rather than committed, because
+  tauri-build resolves them at compile time and fails any build where one
+  matches nothing — a plain `cargo build`, the compare gate included, must not
+  need a release binary to exist. On Windows the vcpkg Tesseract DLLs are
+  copied beside the binary before bundling, which is where both the bundler's
+  glob and Windows' own loader look for them.
+
+Two things the first run of the workflow taught, both now fixed in it: Actions
+artifact storage is a per-account quota this account has run out of, so the
+artifacts travel as release assets (draft first, `gh release upload` per
+platform, publish last) where release storage is per-release; and the
+committed resource globs broke every ordinary build, as above. The Windows
+jobs build Tesseract from vcpkg sources (~40 minutes cold, measured) behind a
+binary cache, so the first Windows run of a workflow change is the slow one
+and later runs are minutes — but only a *green* run saves the cache: a failed
+job skips its post step, which is why the fix below paid for the build twice.
+
+The artifacts are unsigned (signing keys are not in this repository), so
+Gatekeeper and SmartScreen ask on first open; that is the open line in the
+plan now split off from "installers/bundling".
+
+The second hand-run failed both Windows jobs inside `leptonica-sys` —
+"package leptonica is not installed for vcpkg triplet
+x64-windows-static-md". vcpkg-rs, the crate that finds vcpkg's libraries,
+picks that triplet unless told otherwise, while the workflow installs
+`tesseract:x64-windows`; the four other jobs were green, which is what a
+hand-run is for. Both build steps now export `VCPKGRS_DYNAMIC=1` — the
+crate's required opt-in for a dynamic triplet, which also selects
+`x64-windows` to match — and the failure, the reasoning and the fix are in
+the workflow's own comments.
+
+The same run exposed a gap no platform had yet noticed: nothing shipped
+`eng.traineddata`. The deb declared the OCR runtime but no language data,
+and Windows and a bare container have none to find — an installed window
+could start a conversion and have Tesseract refuse to load. Every package
+now carries `tessdata/eng.traineddata` beside the executable (fetched from
+tesseract-ocr/tessdata_fast at a pinned commit and checked by sha256 in the
+workflow), and `ocr-engine` looks there first: `OcrEngine::new` points
+Tesseract at the package's own `tessdata` when the binary has one beside it
+and passes `None` when it does not, so an ordinary build behaves exactly as
+it did before — the compare gate included. The bundle mapping rides the
+same `--config` resources, and the mapping itself is tauri's rule ("if
+processing a glob and `current_dest` is not empty we put all globbed paths
+under `current_dest` preserving the file name"), read in tauri-utils'
+`ResourcePathsIter` rather than guessed, because a file *named* `tessdata`
+would have looked installed and never worked. Three tests pin the rule
+down: the layout is recognised, a package laid out this way starts OCR, and
+an empty datapath does *not* silently read the system copy — without that
+third one, the second would pass on any machine that has Tesseract already.
+End to end, the release binary run from a shipped layout with
+`TESSDATA_PREFIX` poisoned to `/nonexistent` recognised the scanned invoice
+in full (`ACME`, `12345`, `Total Due`); with the shipped data removed and
+the same poison, Tesseract reported `Error opening data file
+/nonexistent/eng.traineddata` and the CLI continued without OCR, which is
+its stated policy for an engine that will not start.

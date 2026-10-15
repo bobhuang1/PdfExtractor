@@ -49,6 +49,36 @@ and [plan.md](plan.md) for the full roadmap.
   OCR); Windows uses WebView2 and macOS uses WKWebView. Nothing else is required
   — the frontend is plain HTML/CSS/JS, so no Node or bundler is involved.
 
+## Releases
+
+Every `v*` tag builds and publishes a release (`.github/workflows/release.yml`),
+and the tag must name the version the binaries report — `v0.1.0` for version
+`0.1.0`; the workflow compares the tag with `Cargo.toml`, `tauri.conf.json` and
+the `VERSION` inside every archive, and refuses to publish otherwise. A release
+carries, for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon):
+
+* `pdfextractor-cli-<tag>-<target>.tar.gz` / `.zip` — the command line with its
+  README and, beside it, `tessdata/eng.traineddata`: the binary looks for OCR
+  data next to itself first, so every archive runs OCR on a machine with no
+  Tesseract install (Windows has none to find). The Windows archive also
+  carries the Tesseract DLLs beside the binary and needs nothing else. On
+  Linux and macOS the Tesseract *runtime* must be installed (`sudo apt install
+  libtesseract5` on Debian/Ubuntu, `brew install tesseract` on macOS) — the
+  same library the build linked.
+* The window's installer: `pdf-extractor-<tag>-<target>.deb` / `.AppImage` /
+  `.msi` / `.dmg`. Every bundle carries the command line built beside it —
+  with its DLLs on Windows and the same `tessdata` beside it on every
+  platform — so an installed window converts without a separate install; the
+  deb declares `libtesseract5`/`liblept5` for apt to pull, and on macOS
+  conversions need `brew install tesseract`.
+
+`SHA256SUMS.txt` covers every file of the release. The artifacts are **not
+code-signed** — signing keys are not in this repository — so Gatekeeper and
+SmartScreen will ask the first time you open one. The workflow also runs by
+hand (`workflow_dispatch`), which builds and packages everything but
+publishes nothing; that is how a change to it is tested before a tag depends
+on it.
+
 ## Build and test
 
 ```bash
