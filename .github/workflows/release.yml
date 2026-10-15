@@ -329,14 +329,16 @@ jobs:
           # The bundle carries the command line the window names at startup
           # (`crates/ui/src/main.rs`) and, beside it, the tessdata OCR reads —
           # an installed window converts without a Tesseract install of its own.
-          # The resource globs are passed here rather than committed:
+          # The resource entries are passed here rather than committed:
           # tauri-build resolves them at compile time and fails a build where
-          # one matches nothing, and `*.dll` matches nothing outside Windows —
+          # one matches nothing, `*.dll` matches nothing outside Windows —
           # while an ordinary `cargo build` must never need a release binary to
-          # exist.
-          config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":"","../../target/package-tessdata/*":"tessdata"}}}'
+          # exist. The command line is named exactly (no glob): a glob also
+          # swept in cargo's `pdfextractor-cli.d` dep-info file, which a local
+          # dry-run found sitting in the deb and the AppImage.
+          config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli":"","../../target/package-tessdata/*":"tessdata"}}}'
           if [ "$RUNNER_OS" = "Windows" ]; then
-            config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":"","../../target/release/*.dll":"","../../target/package-tessdata/*":"tessdata"}}}'
+            config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli.exe":"","../../target/release/*.dll":"","../../target/package-tessdata/*":"tessdata"}}}'
           fi
           cargo tauri build --bundles ${{ matrix.bundles }} --config "$config"
 
