@@ -83,6 +83,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The English data Tesseract recognises with. Every package carries it
+      # beside the binary (see `ocr-engine`'s shipped-tessdata lookup), so OCR
+      # runs on a machine with no Tesseract install of its own — Windows has
+      # none to find. Pinned to a commit and checked by hash: a released
+      # package's OCR data is the same bytes on every build.
+      - name: English tessdata, pinned
+        shell: bash
+        env:
+          TESSDATA_COMMIT: 923915d4ced2a7235221788285785a29c4a42d4a
+          TESSDATA_SHA256: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+        run: |
+          set -euo pipefail
+          # Under target/ rather than the source tree: the workspace stays
+          # clean, and this runs after checkout (which cleans untracked files).
+          mkdir -p target/package-tessdata
+          curl -fsSL \
+            "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$TESSDATA_COMMIT/eng.traineddata" \
+            -o target/package-tessdata/eng.traineddata
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "$TESSDATA_SHA256  target/package-tessdata/eng.traineddata" | sha256sum -c -
+          else
+            echo "$TESSDATA_SHA256  target/package-tessdata/eng.traineddata" | shasum -a 256 -c -
+          fi
+
       # The CLI links the Tesseract bindings (`leptess` → `tesseract-sys`): the
       # libraries are needed to link, libclang to build the bindings. Each
       # platform keeps its own copy of Tesseract.
@@ -135,6 +159,12 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
             export LIBCLANG_PATH="C:/Program Files/LLVM/bin"
+            # vcpkg-rs' default triplet is x64-windows-static-md and it refuses
+            # a dynamic one without this opt-in — while the packages above
+            # install `tesseract:x64-windows`. Without this the build dies with
+            # "package leptonica is not installed for vcpkg triplet
+            # x64-windows-static-md".
+            export VCPKGRS_DYNAMIC=1
           fi
           cargo build --locked --release --package pdfextractor-cli
 
@@ -155,6 +185,10 @@ jobs:
             cp "$bin" "dist/$name/"
           fi
           cp README.md "dist/$name/"
+          # The OCR data the binary looks for beside itself, so the archive
+          # runs on a machine with no Tesseract installed.
+          mkdir -p "dist/$name/tessdata"
+          cp target/package-tessdata/eng.traineddata "dist/$name/tessdata/"
           # The binary, run here, states its own version: a package that cannot
           # even start is caught before it is uploaded.
           "dist/$name/$(basename "$bin")" --version | tee "dist/$name/VERSION"
@@ -196,6 +230,26 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      # The English data Tesseract recognises with, pinned and checked by hash
+      # (see the command line's job): the bundle carries it beside the command
+      # line, so an installed window can run OCR on its own.
+      - name: English tessdata, pinned
+        shell: bash
+        env:
+          TESSDATA_COMMIT: 923915d4ced2a7235221788285785a29c4a42d4a
+          TESSDATA_SHA256: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+        run: |
+          set -euo pipefail
+          mkdir -p target/package-tessdata
+          curl -fsSL \
+            "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$TESSDATA_COMMIT/eng.traineddata" \
+            -o target/package-tessdata/eng.traineddata
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "$TESSDATA_SHA256  target/package-tessdata/eng.traineddata" | sha256sum -c -
+          else
+            echo "$TESSDATA_SHA256  target/package-tessdata/eng.traineddata" | shasum -a 256 -c -
+          fi
 
       # The same Tesseract as the command line's build, plus what the window
       # itself links (WebKitGTK and friends) and libfuse2, which the AppImage
@@ -248,6 +302,12 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
             export LIBCLANG_PATH="C:/Program Files/LLVM/bin"
+            # vcpkg-rs' default triplet is x64-windows-static-md and it refuses
+            # a dynamic one without this opt-in — while the packages above
+            # install `tesseract:x64-windows`. Without this the build dies with
+            # "package leptonica is not installed for vcpkg triplet
+            # x64-windows-static-md".
+            export VCPKGRS_DYNAMIC=1
           fi
           cargo build --locked --release --package pdfextractor-cli
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -267,14 +327,16 @@ jobs:
         shell: bash
         run: |
           # The bundle carries the command line the window names at startup
-          # (`crates/ui/src/main.rs`). The resource globs are passed here rather
-          # than committed: tauri-build resolves them at compile time and fails
-          # a build where one matches nothing, and `*.dll` matches nothing
-          # outside Windows — while an ordinary `cargo build` must never need a
-          # release binary to exist.
-          config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":""}}}'
+          # (`crates/ui/src/main.rs`) and, beside it, the tessdata OCR reads —
+          # an installed window converts without a Tesseract install of its own.
+          # The resource globs are passed here rather than committed:
+          # tauri-build resolves them at compile time and fails a build where
+          # one matches nothing, and `*.dll` matches nothing outside Windows —
+          # while an ordinary `cargo build` must never need a release binary to
+          # exist.
+          config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":"","../../target/package-tessdata/*":"tessdata"}}}'
           if [ "$RUNNER_OS" = "Windows" ]; then
-            config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":"","../../target/release/*.dll":""}}}'
+            config='{"bundle":{"resources":{"../../target/release/pdfextractor-cli*":"","../../target/release/*.dll":"","../../target/package-tessdata/*":"tessdata"}}}'
           fi
           cargo tauri build --bundles ${{ matrix.bundles }} --config "$config"
 
@@ -358,6 +420,35 @@ jobs:
           done
           (cd dist && find . -type f ! -name SHA256SUMS.txt -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
+
+      # What the auto-generated notes cannot know: what each package needs to
+      # run, and that nothing here is signed.
+      - name: Say what the release needs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json body -q .body > dist/notes.md
+          cat >> dist/notes.md <<'EOF'
+
+          ## What each package needs
+
+          - **Windows (`.zip`, `.msi`)**: nothing else — the command line and the
+            window carry Tesseract and its English data.
+          - **Linux command line (`.tar.gz`)**: `libtesseract5`
+            (`sudo apt install libtesseract5` on Debian/Ubuntu); the OCR data is
+            in the archive.
+          - **Linux window (`.deb`, `.AppImage`)**: the deb declares its own
+            dependencies; for the AppImage, `libtesseract5` on the host.
+          - **macOS (`.tar.gz`, `.dmg`)**: `brew install tesseract` — the binaries
+            link Homebrew's Tesseract.
+
+          None of the binaries are code-signed, so Gatekeeper and SmartScreen
+          will ask you to confirm the first launch.
+          EOF
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --notes-file dist/notes.md
 
       - name: Publish the release
         env:

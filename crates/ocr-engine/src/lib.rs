@@ -12,6 +12,8 @@
 #[cfg(feature = "tesseract")]
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(feature = "tesseract")]
+use std::path::{Path, PathBuf};
 
 /// A recognised word with a pixel bounding box `[left, top, right, bottom]`.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,12 +57,40 @@ pub struct OcrEngine {
     tess: leptess::LepTess,
 }
 
+/// Where Tesseract should find its data, when the package ships it.
+///
+/// A released package — the command line's zip, the installed window's bundled
+/// copy — carries `tessdata/<lang>.traineddata` beside the executable, so OCR
+/// runs on a machine with no Tesseract install of its own (Windows has none to
+/// find, and neither macOS nor a minimal container). `None` keeps Tesseract's
+/// own default unchanged: its compiled-in data directory, or `TESSDATA_PREFIX`
+/// when that is set.
+#[cfg(feature = "tesseract")]
+fn shipped_datapath(lang: &str) -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let tessdata = tessdata_beside(exe.parent()?, lang)?;
+    Some(tessdata.to_string_lossy().into_owned())
+}
+
+/// `<beside>/tessdata/<lang>.traineddata`, when the package carries it.
+#[cfg(feature = "tesseract")]
+fn tessdata_beside(beside: &Path, lang: &str) -> Option<PathBuf> {
+    let tessdata = beside.join("tessdata");
+    tessdata
+        .join(format!("{lang}.traineddata"))
+        .is_file()
+        .then_some(tessdata)
+}
+
 impl OcrEngine {
     /// Create an engine for `lang` (e.g. `"eng"`).
     pub fn new(lang: &str) -> Result<Self> {
         #[cfg(feature = "tesseract")]
         {
-            let tess = leptess::LepTess::new(None, lang).with_context(|| {
+            // A package that carries its own tessdata points Tesseract at it;
+            // anything else leaves Tesseract to its system default.
+            let shipped = shipped_datapath(lang);
+            let tess = leptess::LepTess::new(shipped.as_deref(), lang).with_context(|| {
                 format!(
                     "failed to initialise Tesseract for language '{lang}'; is tessdata installed?"
                 )
@@ -210,5 +240,88 @@ mod tests {
     fn ignores_non_word_rows_and_blanks() {
         let r = parse_tsv(TSV);
         assert!(r.words.iter().all(|w| !w.text.trim().is_empty()));
+    }
+
+    /// A unique scratch directory under the system temp.
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "pdfextractor-ocr-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// English data from the machine running the test, when it has any.
+    fn system_eng() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(prefix) = std::env::var("TESSDATA_PREFIX") {
+            let prefix = PathBuf::from(prefix);
+            candidates.push(prefix.join("tessdata").join("eng.traineddata"));
+            candidates.push(prefix.join("eng.traineddata"));
+        }
+        candidates.extend([
+            PathBuf::from("/usr/share/tesseract-ocr/5/tessdata/eng.traineddata"),
+            PathBuf::from("/usr/share/tesseract-ocr/4.00/tessdata/eng.traineddata"),
+            PathBuf::from("/opt/homebrew/share/tessdata/eng.traineddata"),
+            PathBuf::from("/usr/local/share/tessdata/eng.traineddata"),
+        ]);
+        candidates.into_iter().find(|p| p.is_file())
+    }
+
+    #[test]
+    fn a_tessdata_dir_beside_the_binary_is_recognised() {
+        let dir = scratch("layout");
+        // Nothing beside the binary, nothing to point Tesseract at: the system
+        // default stays in force, exactly as before this existed.
+        assert_eq!(tessdata_beside(&dir, "eng"), None);
+
+        std::fs::create_dir_all(dir.join("tessdata")).unwrap();
+        std::fs::write(dir.join("tessdata").join("eng.traineddata"), b"").unwrap();
+        assert_eq!(
+            tessdata_beside(&dir, "eng"),
+            Some(dir.join("tessdata")),
+            "a package's own tessdata directory is recognised"
+        );
+        // The language must match: other languages are not ours to provide.
+        assert_eq!(tessdata_beside(&dir, "fra"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_package_laid_out_this_way_can_start_ocr() {
+        let Some(eng) = system_eng() else {
+            eprintln!("no eng.traineddata on this machine; layout test only");
+            return;
+        };
+        let dir = scratch("shipped");
+        std::fs::create_dir_all(dir.join("tessdata")).unwrap();
+        std::fs::copy(&eng, dir.join("tessdata").join("eng.traineddata")).unwrap();
+
+        let datapath = tessdata_beside(&dir, "eng").expect("the layout is recognised");
+        leptess::LepTess::new(Some(datapath.to_str().unwrap()), "eng")
+            .expect("Tesseract starts on the package's own tessdata alone");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_datapath_does_not_silently_read_the_system_copy() {
+        // The test above proves nothing if Tesseract falls back to its
+        // compiled-in data directory whenever the given one comes up empty;
+        // on a machine that has system data, this is what rules that out.
+        let dir = scratch("empty");
+        let started = leptess::LepTess::new(Some(dir.to_str().unwrap()), "eng");
+        assert!(
+            started.is_err(),
+            "an empty datapath started anyway, so Tesseract consulted data outside it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
