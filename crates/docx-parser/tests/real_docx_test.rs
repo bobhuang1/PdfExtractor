@@ -66,39 +66,99 @@ fn every_math_fixture_yields_a_formula() {
     }
 }
 
-/// Radicals keep their degree, and the structure is visible in the text.
+/// Radicals keep their degree, and the degree is an optional argument.
 #[test]
-fn linearises_radicals() {
+fn renders_radicals_as_sqrt() {
     let doc = parse("math-rad.docx");
-    let joined = formulas(&doc).join("\n");
-    assert!(joined.contains('√'), "no radical sign in {joined:?}");
-    assert!(
-        joined.contains("√[3]"),
-        "the cube root's degree was dropped: {joined:?}"
+    assert_eq!(
+        formulas(&doc),
+        vec!["\\sqrt{4}", "\\sqrt[3]{x+1}"],
+        "radicals do not match Docling's LaTeX"
     );
 }
 
 /// The n-ary operator character lives in an XML *attribute*
-/// (`<m:chr m:val="∑"/>`); reading only child text silently loses it.
+/// (`<m:chr m:val="∑"/>`); reading only child text silently loses it. The
+/// command plus `_{…}^{…}` limits are exactly Docling's rendering.
 #[test]
 fn nary_operators_come_from_attributes() {
     let doc = parse("math-nary.docx");
-    let joined = formulas(&doc).join("\n");
-    assert!(
-        joined.contains('∑') || joined.contains('∏') || joined.contains('∮'),
-        "n-ary operator character was lost: {joined:?}"
+    assert_eq!(
+        formulas(&doc),
+        vec!["\\oiiint_{1}^{2}x+1", "\\prod_{a}^{}b", "\\sum_{}^{2}x"],
+        "n-ary operators do not match Docling's LaTeX"
     );
 }
 
-/// A real published equation, checked against its mathematical content rather
-/// than the exact rendering.
+/// A real published equation, pinned to Docling's own conversion of it.
 #[test]
 fn recovers_the_binomial_theorem() {
     let doc = parse("EquationWithAboveAndBelowCaption.docx");
-    let joined = formulas(&doc).join("\n").replace(' ', "");
-    assert!(joined.contains("∑"), "no summation: {joined:?}");
-    assert!(joined.contains("(x+a)^n"), "left side lost: {joined:?}");
-    assert!(joined.contains("a^(n-k)"), "expansion lost: {joined:?}");
+    let found = formulas(&doc);
+    assert_eq!(
+        found[0],
+        "\\left(x+a\\right)^{n}=\\sum_{k=0}^{n}\\left(\\genfrac{}{}{0pt}{}{n}{k}\\right)x^{k}a^{n-k}",
+        "the theorem does not match Docling's LaTeX"
+    );
+    assert!(
+        found[1].starts_with("\\left(1+x\\right)^{n}=1+\\frac{nx}{1!}"),
+        "the expansion lost its fractions: {found:?}"
+    );
+    assert!(
+        found[1].ends_with("\\text{ \\textellipsis }"),
+        "the trailing ellipsis is not LaTeX: {found:?}"
+    );
+}
+
+/// Scripts, matrices, the four fraction styles, functions and limits use the
+/// commands Docling writes for the same constructs.
+#[test]
+fn writes_structures_with_doclings_commands() {
+    let scripts = formulas(&parse("math-subscripts.docx"));
+    assert_eq!(
+        &scripts[..5],
+        ["x^{y}+e^{x}", "x^{b}", "x_{b}", "a_{c}^{b}", "_{2}^{1}"]
+    );
+
+    let matrix = formulas(&parse("math-matrix.docx"));
+    assert_eq!(
+        matrix,
+        vec!["\\left[\\begin{matrix}1&2\\\\3&4\\end{matrix}\\right]"]
+    );
+
+    let stacks = formulas(&parse("math-vertical_stacks.docx"));
+    assert_eq!(
+        stacks,
+        vec![
+            "\\frac{a}{b}",
+            "{a}/{b}",
+            "\\genfrac{}{}{0pt}{}{a}{b}",
+            "\\genfrac{}{}{0pt}{}{a}{\\genfrac{}{}{0pt}{}{b}{c}}",
+        ]
+    );
+
+    let limit = formulas(&parse("math-lim.docx"));
+    assert_eq!(limit, vec!["\\lim_{x \\text{ \\textrightarrow } 1}x"]);
+}
+
+/// A symbol is written as its command, not as the Unicode character: Greek
+/// letters, relations, accents and delimiters all survive as LaTeX.
+#[test]
+fn writes_symbols_and_accents_as_commands() {
+    let accents = formulas(&parse("math-accents.docx"));
+    assert_eq!(
+        accents,
+        vec!["\\acute{a}\\grave{a}\\check{a}\\breve{a}\\ocirc{a}\\vec{a}\\tilde{a}\\hat{a}˙\\vec{a}\\vec{a}\\tilde{a}\\underline{a}"]
+    );
+
+    let literal = formulas(&parse("math-literal.docx"));
+    assert_eq!(
+        literal,
+        vec!["\\iiint_{V}^{}divFdV=\\oiint_{S}^{}F \\bullet n dS"]
+    );
+
+    let escaping = formulas(&parse("math-escaping.docx"));
+    assert_eq!(escaping, vec!["- \\infty <x< \\infty"]);
 }
 
 /// Headings, list items and tables are labelled rather than flattened.
@@ -129,7 +189,7 @@ fn labels_headings_lists_and_tables() {
         .items
         .iter()
         .find_map(|i| match i {
-            DocxItem::Table { rows } => Some(rows),
+            DocxItem::Table { rows, .. } => Some(rows),
             _ => None,
         })
         .expect("a table");

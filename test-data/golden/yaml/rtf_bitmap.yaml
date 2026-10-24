@@ -1,0 +1,64 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/pictures/0'
+  - $ref: '#/texts/2'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: rtf_bitmap.rtf
+origin:
+  binary_hash: 17203226540678510565
+  filename: rtf_bitmap.rtf
+  mimetype: application/rtf
+pages: {}
+pictures:
+- children: []
+  content_layer: body
+  image:
+    mimetype: image/png
+    size:
+      height: 16.0
+      width: 24.0
+    uri: rtf_bitmap_images/img1.png
+  label: picture
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/pictures/0'
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: A word processor's bitmap
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: A word processor's bitmap
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: The picture below is embedded as a bitmap.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: The picture below is embedded as a bitmap.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: And a paragraph after it.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: And a paragraph after it.
+version: 1.10.0

@@ -1,0 +1,39 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: social_cards.html
+origin:
+  binary_hash: 13201121588040093027
+  filename: social_cards.html
+  mimetype: text/html
+pages: {}
+pictures: []
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Q3 review
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Q3 review
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Revenue held while costs rose, and the board approved the plan.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: Revenue held while costs rose, and the board approved the plan.
+version: 1.10.0

@@ -25,9 +25,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Documents whose renderings are pinned, byte for byte: the documents the
 /// Markdown goldens share, plus `pictures.md`, whose picture the three other
 /// writers each have to place — so one document's formats and its Markdown can
-/// be reviewed side by side — and `chart_deck.pptx`, whose only picture is a
+/// be reviewed side by side — `chart_deck.pptx`, whose only picture is a
 /// drawing with no file, so the writers have nothing to place and must not
-/// invent a link to nothing.
+/// invent a link to nothing, `social_cards.html`, whose head facts are not
+/// words in the body at all, so the HTML golden is what pins them, and
+/// `picture_names.html`, whose picture's file name carries a space and an
+/// ampersand, so the HTML golden pins the name the writer escapes.
 const CASES: &[&str] = &[
     "hello.pdf",            // the smallest fixture: one heading-sized line
     "dummy.pdf",            // a one-paragraph PDF
@@ -36,6 +39,8 @@ const CASES: &[&str] = &[
     "irs_f1040.pdf",        // a long form: many tables, columns and furniture
     "flow.html",            // a flow format: headings, lists, code and a table
     "late_header.html",     // a table whose header row is declared below a caption
+    "social_cards.html",    // the head's description, canonical URL and social cards
+    "picture_names.html",   // a picture named with a space and an ampersand
     "fenced.md",            // Markdown in, HTML/text/YAML out
     "pictures.md",          // Markdown in with a picture: its file is copied and referenced
     "merged_cells.docx",    // a DOCX whose table merges cells: rowspan/colspan in HTML
@@ -60,6 +65,8 @@ fn input_of(name: &str) -> PathBuf {
         "hello.pdf"
         | "flow.html"
         | "late_header.html"
+        | "social_cards.html"
+        | "picture_names.html"
         | "fenced.md"
         | "pictures.md"
         | "merged_cells.docx"
@@ -264,6 +271,52 @@ fn the_html_golden_picture_is_copied_beside_the_page() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The social-card fixture is here for what a body reading cannot see: the
+/// committed HTML golden carries the page's description, canonical URL and
+/// every card line, escaped and in the order the head stated them. Reading the
+/// golden rather than a fresh rendering is deliberate — a regeneration that
+/// dropped the head would still match itself, and this is what fails instead.
+#[test]
+fn the_social_cards_golden_pins_the_head_facts() {
+    let html = std::fs::read_to_string(golden_of("html", "html", "social_cards.html"))
+        .expect("the social-card HTML golden");
+    let expected = [
+        "<title>Q3 review</title>",
+        r#"<meta name="description" content="Quarterly results &amp; outlook">"#,
+        r#"<link rel="canonical" href="https://example.com/reports/q3?quarter=3&amp;region=eu">"#,
+        r#"<meta property="og:title" content="Q3 &amp; costs">"#,
+        r#"<meta property="og:type" content="article">"#,
+        r#"<meta property="og:url" content="https://example.com/reports/q3?quarter=3&amp;region=eu">"#,
+        r#"<meta property="og:image" content="https://example.com/cards/q3.png">"#,
+        r#"<meta property="og:image:width" content="1200">"#,
+        r#"<meta property="og:image:height" content="630">"#,
+        r#"<meta property="og:image:alt" content="A chart of Q3 &amp; costs">"#,
+        r#"<meta name="twitter:card" content="summary_large_image">"#,
+        r#"<meta name="twitter:title" content="Q3 &amp; costs">"#,
+        r#"<meta name="twitter:image" content="https://example.com/cards/q3.png">"#,
+    ];
+
+    let mut cursor = 0;
+    for line in expected {
+        let offset = html[cursor..].find(line).unwrap_or_else(|| {
+            panic!("the golden is missing {line:?}, or moved it before the line above")
+        });
+        cursor += offset + line.len();
+    }
+    // The head is a statement about the page, not words on it.
+    for line in expected.iter().skip(1) {
+        let content = line
+            .split_once("content=\"")
+            .or_else(|| line.split_once("href=\""))
+            .map(|(_, value)| value.trim_end_matches("\">"))
+            .unwrap_or_default();
+        assert!(
+            content.is_empty() || !html.contains(&format!("<p>{content}</p>")),
+            "{line:?} leaked into the body"
+        );
+    }
 }
 
 #[test]

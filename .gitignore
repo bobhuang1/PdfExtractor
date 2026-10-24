@@ -3,6 +3,10 @@
 !test-data/expected/*.json
 # The Compare mode's per-document numbers: a record, not an output, so it is kept.
 !test-data/golden/compare-baseline.json
+# Real Docling conversions: golden references, not conversions of ours.
+!test-data/golden/docling/*.json
+# The photographed corpus's ground truth: written with the images, not an output.
+!test-data/photos/corpus.json
 # The window's bundle configuration — source, not output: the release
 # workflow builds the installers from it.
 !crates/ui/tauri.conf.json

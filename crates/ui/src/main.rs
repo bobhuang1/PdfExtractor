@@ -5,6 +5,14 @@
 //! sends on load (which also lets `--selftest` prove the webview mounted and
 //! the IPC round-trips).
 //!
+//! Which input formats the window offers is not decided here: [`input_formats`]
+//! asks the CLI (`--list-input-formats`), and both the line and headings the page
+//! draws them under and the chooser's filter are that answer. It is kept between
+//! asks, and [`refresh_input_formats`] asks again — so a binary rebuilt or replaced while
+//! the window is open, or a `PDFEXTRACTOR_CLI` pointed at a new path, is picked
+//! up without reopening it. [`cli_program`] names the binary a refresh resolved,
+//! for the line beside the formats.
+//!
 //! The **Compare** mode is wired here too: when the form carries a reference,
 //! every document that finishes is compared with it and the result is sent to
 //! the page beside the document's own report.
@@ -17,8 +25,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use pdfextractor_ui::{
-    diff, gate, locate_cli, outcome, pump, DiffLine, Finished, Job, LogLine, PlanLine,
-    ProgressLine, RunEvent, Settings, Started,
+    chooser_filters, diff, gate, locate_cli, outcome, pump, AcceptedFormats, DiffLine, Finished,
+    Formats, Job, LogLine, PlanLine, ProgressLine, RunEvent, Settings, Started,
 };
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -70,16 +78,80 @@ struct Running {
     job: Job,
 }
 
-/// Native file/folder chooser. `kind` is `"file"` or `"folder"`.
+/// Native file/folder chooser. `kind` is `"document"` (a file the extractor
+/// reads), `"file"` (any file, such as a comparison's reference) or `"folder"`.
 #[tauri::command]
-fn pick_path(kind: String) -> Option<String> {
-    let dialog = rfd::FileDialog::new();
+fn pick_path(formats: State<'_, AcceptedFormats>, kind: String) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new();
+    // A document is filtered by the formats the CLI named — the kept answer, so a
+    // refresh on the page is the filter here too — so the chooser offers what a
+    // run will take and nothing it would refuse. The filters are grouped the way
+    // `--help` groups them: "All documents" first with every name, then one entry
+    // per family under the heading the help prints, all of them the CLI's own.
+    // A CLI that could not be asked leaves the chooser unfiltered — picking from no
+    // list beats picking from an invented one — and the page says why on the same
+    // line.
+    if kind == "document" {
+        if let Ok(formats) = formats.get() {
+            for (label, extensions) in chooser_filters(&formats) {
+                dialog = dialog.add_filter(label, &extensions);
+            }
+        }
+    }
     let picked = if kind == "folder" {
         dialog.pick_folder()
     } else {
         dialog.pick_file()
     };
     picked.map(|path| path.to_string_lossy().into_owned())
+}
+
+/// The input formats the CLI accepts and their families, for the page to name
+/// and group under the same headings as the chooser.
+///
+/// Asked rather than assumed: the window shows the set a run will take, so a
+/// reader added to the command line reaches the window with no change here.
+#[tauri::command]
+async fn input_formats(formats: State<'_, AcceptedFormats>) -> Result<Formats, String> {
+    // The page groups by the same `families` the native chooser's filters are
+    // built from. Spawning the CLI is a blocking call, kept off the window's
+    // thread so the page is never held while the answer is on its way.
+    ask(formats, AcceptedFormats::get).await
+}
+
+/// The command line binary the window would run now, for the page to name
+/// beside the formats. Resolved when asked, so a refresh shows a moved
+/// `PDFEXTRACTOR_CLI` rather than the path the window opened with.
+#[tauri::command]
+fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
+    formats.program()
+}
+
+/// Ask the CLI again, replacing the kept answer.
+///
+/// The binary a run uses can be rebuilt, replaced or repaired while the window is
+/// open, and `PDFEXTRACTOR_CLI` can be pointed at a different binary without
+/// restarting the window; either way the old answer would go on naming the
+/// formats of the one it asked when it opened, and a reader added to the new
+/// binary would be missing from the line, the chooser and — worse — a run would
+/// take formats the window never offered. The program is resolved again, then
+/// asked; the fresh answer lets the page redraw both the line and its headings,
+/// and the chooser filters by the same answer because it is kept in one place.
+#[tauri::command]
+async fn refresh_input_formats(formats: State<'_, AcceptedFormats>) -> Result<Formats, String> {
+    ask(formats, AcceptedFormats::refresh).await
+}
+
+/// Run one ask off the window's thread: `spawn_blocking` starts a process, and the
+/// page must stay live while the CLI answers.
+async fn ask(
+    formats: State<'_, AcceptedFormats>,
+    which: impl FnOnce(&AcceptedFormats) -> Result<Formats, String> + Send + 'static,
+) -> Result<Formats, String> {
+    let formats = formats.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || which(&formats))
+        .await
+        .map_err(|error| format!("could not ask the CLI which formats it reads: {error}"))?
 }
 
 /// Validate the form and start the CLI in the background.
@@ -387,10 +459,19 @@ fn main() {
                     }
                 }
             }
+            // Asked for when the page loads, and re-askable from the page afterwards.
+            // Constructed here, after the bundled binary has been named, so the
+            // process it looks for is the one a run would start. It follows the
+            // environment on every refresh, so repointing `PDFEXTRACTOR_CLI` takes
+            // effect without reopening the window.
+            app.manage(AcceptedFormats::from_environment());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             pick_path,
+            input_formats,
+            cli_program,
+            refresh_input_formats,
             start_conversion,
             cancel_conversion,
             frontend_ready,

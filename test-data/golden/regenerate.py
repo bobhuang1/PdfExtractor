@@ -23,7 +23,19 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CORPUS = REPOSITORY / "test-data" / "real"
+# Hand-written fixtures live beside the corpus, not in it (`inventory.xlsx`,
+# the XLSX parser's fixture; `invoice_scan.png`, the image parser's); a
+# reference for one is generated the same way.
+FIXTURES = REPOSITORY / "test-data"
 OUT = Path(__file__).resolve().parent / "docling"
+
+
+def locate(name: str) -> Path | None:
+    for base in (CORPUS, FIXTURES):
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -36,9 +48,9 @@ def main(argv: list[str]) -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     converter = DocumentConverter()
     for name in argv[1:]:
-        source = CORPUS / name
-        if not source.exists():
-            print(f"no such corpus document: {name}", file=sys.stderr)
+        source = locate(name)
+        if source is None:
+            print(f"no such corpus document or fixture: {name}", file=sys.stderr)
             return 2
         print(f"converting {name} ...")
         result = converter.convert(source)

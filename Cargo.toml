@@ -5,11 +5,19 @@ members = [
   "crates/pdf-parser",
   "crates/docx-parser",
   "crates/doc-parser",
+  "crates/xlsx-parser",
+  "crates/pptx-parser",
+  "crates/image-parser",
   "crates/metafile",
+  "crates/svg",
+  "crates/drawingml",
+  "crates/chart",
+  "crates/picture-formats",
   "crates/text-parser",
   "crates/layout",
   "crates/ocr-engine",
   "crates/json-exporter",
+  "crates/md-exporter",
   "crates/cli",
   "crates/ui",
 ]
@@ -19,7 +27,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["PdfExtractor Team"]
 license = "MIT OR Apache-2.0"
-rust-version = "1.75"
+rust-version = "1.92"
 
 [workspace.dependencies]
 # Error handling
@@ -29,6 +37,8 @@ thiserror = "1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The YAML writer encodes the same document model Docling's `--to yaml` writes.
+serde_yaml = "0.9"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -38,6 +48,12 @@ rayon = "1"
 
 # Image handling (reuse - pragmatic)
 image = "0.25"
+# JPEG 2000 pixels, which `image` does not decode. A JP2 picture is transcoded
+# to PNG before it reaches the model, because Docling cannot name `image/jp2`.
+hayro-jpeg2000 = "0.4"
+# The directories of a multi-page TIFF, which `image` reads only the first of:
+# a scanner's batch is a page per directory, so the chain is walked here.
+tiff = "0.11"
 
 # Image processing primitives
 imageproc = "0.25"
@@ -57,6 +73,14 @@ leptess = "0.14"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Image embedding: a `data:` URI carries the picture's bytes in the document
+# itself (`--image-export-mode embedded`).
+base64 = "0.23"
+
+# LaTeX to MathML for the HTML writer: an equation is written as the typeset
+# markup a browser draws, with its TeX kept in an `<annotation>`.
+pulldown-latex = "0.8"
 
 # Utils
 uuid = { version = "1", features = ["v4", "serde"] }

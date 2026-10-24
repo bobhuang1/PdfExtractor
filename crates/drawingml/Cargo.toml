@@ -1,0 +1,24 @@
+[package]
+name = "pdfextractor-drawingml"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The shape markup is XML, read into the small tree a drawing needs.
+quick-xml.workspace = true
+# A painted shape is rasterised onto the same canvas the metafiles are played
+# onto, at the same 144 dpi, and written with the same PNG encoder.
+pdfextractor-metafile = { path = "../metafile" }
+# A shape can be filled with a picture, and a fill is painted through the shape's
+# own geometry: the media is decoded into the pixels the fill is drawn with. An
+# SVG fill is drawn by the same renderer an SVG picture is (at the fill's own
+# frame), and an encoding the image crate cannot name — WebP, JPEG 2000 — is
+# transcoded first, as every other picture in a package is.
+pdfextractor-svg = { path = "../svg" }
+pdfextractor-image-parser = { path = "../image-parser" }
+image.workspace = true
+tracing.workspace = true
+

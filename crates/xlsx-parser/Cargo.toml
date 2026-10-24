@@ -1,0 +1,23 @@
+[package]
+name = "pdfextractor-xlsx-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# The SpreadsheetML parts are XML in a ZIP: the same infrastructure DOCX uses.
+quick-xml.workspace = true
+zip.workspace = true
+# Excel dates are serial day numbers; turning one into a date is exactly the
+# calendar arithmetic `chrono` is for, and the workspace already carries it.
+chrono.workspace = true
+# A worksheet's picture is a media part, and which formats are pictures is the
+# one list the whole extractor reads: a format added there is a picture in a
+# workbook too, and one that is not there is not.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# A chart a sheet draws is not a picture file but a chart part — data, not
+# pixels — and it is read by the same reader a deck's charts go through.
+pdfextractor-chart = { path = "../chart" }

@@ -10,6 +10,12 @@ rust-version.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 pdfextractor-core = { path = "../core" }
+# A JPEG 2000 image XObject (`/Filter /JPXDecode`) is decoded, not passed on:
+# Docling cannot name `image/jp2` in an image reference. The decoding and the
+# PNG it is written as are the same ones a `.jp2` input goes through, so this
+# crate asks the image reader rather than keeping a second JPEG 2000 decoder
+# (and a second registration of its `image` hook) of its own.
+pdfextractor-image-parser = { path = "../image-parser" }
 image.workspace = true
 flate2.workspace = true
 tracing.workspace = true

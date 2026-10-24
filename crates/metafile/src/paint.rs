@@ -439,8 +439,55 @@ impl Canvas {
         }
     }
 
+    /// Composite `color` over the pixel at `(x, y)` at `alpha` (0..=1).
+    ///
+    /// A gradient stop and a shadow are both a colour seen *through* something —
+    /// a stop's transparency, or a shadow's own alpha — so they have to blend
+    /// with what is already on the surface rather than replace it. The canvas
+    /// is opaque, so this is a plain source-over mix.
+    pub fn blend_pixel(&mut self, x: i32, y: i32, color: Color, alpha: f64) {
+        if !self.visible(x, y) || alpha <= 0.0 {
+            return;
+        }
+        if alpha >= 1.0 {
+            self.store(x, y, color);
+            return;
+        }
+        let under = self.color_at(x, y);
+        let mix = |src: u8, dst: u8| {
+            (f64::from(dst) + (f64::from(src) - f64::from(dst)) * alpha)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+        self.store(
+            x,
+            y,
+            Color {
+                r: mix(color.r, under.r),
+                g: mix(color.g, under.g),
+                b: mix(color.b, under.b),
+            },
+        );
+    }
+
     /// Fill the polygons in `contours`, each implicitly closed.
     pub fn fill_polygons(&mut self, contours: &[Vec<Point>], rule: FillRule, color: Color) {
+        self.fill_polygons_shaded(contours, rule, &mut |_, _| (color, 1.0));
+    }
+
+    /// Fill the polygons with the colour that belongs at each pixel.
+    ///
+    /// `shade` is given the centre of the pixel on the canvas and answers the
+    /// colour to put there and how opaque it is, which is what a gradient needs:
+    /// the colour is a function of where it lands, not of the shape it fills.
+    /// The scan conversion — crossings, the fill rule and the span arithmetic —
+    /// is the same either way.
+    pub fn fill_polygons_shaded(
+        &mut self,
+        contours: &[Vec<Point>],
+        rule: FillRule,
+        shade: &mut dyn FnMut(f64, f64) -> (Color, f64),
+    ) {
         if self.clip.is_empty() {
             return;
         }
@@ -495,7 +542,7 @@ impl Canvas {
                 FillRule::Alternate => {
                     for pair in crossings.chunks(2) {
                         if let [from, to] = pair {
-                            self.fill_span(y, from.0, to.0, color);
+                            self.fill_shaded_span(y, from.0, to.0, shade);
                         }
                     }
                 }
@@ -508,7 +555,7 @@ impl Canvas {
                         }
                         winding += direction;
                         if winding == 0 {
-                            self.fill_span(y, from, x, color);
+                            self.fill_shaded_span(y, from, x, shade);
                         }
                     }
                 }
@@ -517,16 +564,28 @@ impl Canvas {
     }
 
     /// Fill from `x0` up to but not including `x1`, on the row whose centre is
-    /// `y + 0.5`.
-    fn fill_span(&mut self, y: i32, x0: f64, x1: f64, color: Color) {
+    /// `y + 0.5`, with the colour `shade` gives each pixel.
+    fn fill_shaded_span(
+        &mut self,
+        y: i32,
+        x0: f64,
+        x1: f64,
+        shade: &mut dyn FnMut(f64, f64) -> (Color, f64),
+    ) {
         if y < self.clip.top || y >= self.clip.bottom {
             return;
         }
         // A pixel is inside the span when its centre is.
         let first = ((x0 - 0.5).ceil() as i32).max(self.clip.left);
         let after = ((x1 - 0.5).ceil() as i32).min(self.clip.right);
+        let scan = y as f64 + 0.5;
         for x in first..after {
-            self.put_pixel(x, y, color);
+            let (color, alpha) = shade(x as f64 + 0.5, scan);
+            if alpha >= 1.0 {
+                self.put_pixel(x, y, color);
+            } else {
+                self.blend_pixel(x, y, color, alpha);
+            }
         }
     }
 

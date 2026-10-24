@@ -1,0 +1,11 @@
+[package]
+name = "pdfextractor-chart"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# A chart part is XML — the caches that hold the plotted numbers included.
+quick-xml.workspace = true

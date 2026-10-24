@@ -1339,14 +1339,18 @@ fn place_of(item: &Value, document: &Value) -> Option<Place> {
         // coordinates that mean different things on the two sides.
         _ => return None,
     };
-    Some(Place {
+    let place = Place {
         page,
         left: l.min(r),
         top,
         right: l.max(r),
         bottom,
         page_size: page_size(document, page),
-    })
+    };
+    // A box with no area is not a place: a deck writes one for an item that is
+    // nowhere on its slide (a speaker note), and two of those have not been put
+    // in different places. It says no more than a box that is absent.
+    (area(place) > 0.0).then_some(place)
 }
 
 /// A page's size in points, as the document states it, or `None` where it does not.
@@ -4634,6 +4638,34 @@ mod tests {
             note.contains("not in the same place: page 1 vs page 2"),
             "{note}"
         );
+    }
+
+    #[test]
+    fn two_items_with_no_box_are_not_in_different_places() {
+        // A deck writes a zero box for an item that is nowhere on its slide — a
+        // speaker note. Both readings stand the same note at the origin, which is
+        // the same absence of a place, not a disagreement about one: the row is
+        // about the words, and there is no box to accuse of moving.
+        let nowhere = [0.0, 0.0, 0.0, 0.0];
+        let ours = sized(
+            document(&[at(text("text", "A note."), 1, nowhere, "TOPLEFT")]),
+            600.0,
+            800.0,
+        );
+        let theirs = sized(
+            document(&[at(text("text", "A note."), 1, nowhere, "TOPLEFT")]),
+            600.0,
+            800.0,
+        );
+
+        let rows = rows(&ours, &theirs);
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(rows[0].verdict, Verdict::Same, "{rows:#?}");
+        assert!(rows[0].note.is_none(), "{rows:#?}");
+        assert!(rows[0].ours[0].place.is_none(), "a zero box is no place");
+        let compared = summary(&ours, &theirs);
+        assert_eq!(compared.placed, 0, "{compared:#?}");
+        assert_eq!(compared.differs, 0, "{compared:#?}");
     }
 
     #[test]

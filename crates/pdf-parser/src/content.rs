@@ -116,6 +116,32 @@ const AVG_GLYPH_WIDTH: f64 = 0.5;
 /// A `TJ` offset at or below this is a word gap (see the module docs).
 const SPACE_KERNING: f64 = -120.0;
 
+/// A same-line `Td` that overshoots what has been drawn since the previous
+/// repositioning by more than this many em is a gap the producer expressed by
+/// moving the pen instead of writing a space. One that lands where the glyph
+/// advances already stopped is not a gap at all — it is the producer drawing
+/// each run as its own `Td`, which is how `test-data/real/dummy.pdf` is written
+/// and how its words used to come apart (`Dumm y  PDF  fi le`).
+///
+/// The corpus's two kinds of `Td` separate cleanly on the measured overshoot:
+/// a repositioning lands within rounding of the advance (`dummy.pdf` worst
+/// 0.004 em, `irs_f1040`'s per-letter draws *negative*), while the narrowest
+/// word gap a producer actually expresses this way is 0.0164 em
+/// (`math_layernorm`'s `μ and σ`) and ordinary ones run 0.25–0.37 em. 0.01 em
+/// sits in the empty band between them.
+const TD_GAP_EM: f64 = 0.01;
+
+/// A `Td` that lands *short* of where the drawn advance ended, by more than
+/// this, is also a break: the producer's own metrics disagree with the
+/// declared `/Widths` by that much, and it does not jump back that far inside
+/// a word. `math_gan`'s algorithmic `for number of training iterations  do`
+/// lands 0.75 em back of ours (its `Td` counts none of the `-250` kerns it
+/// wrote between the words) — while the letter-by-letter repositioning of
+/// `irs_f1040` never goes past 0.02 em back. The empty band between them is
+/// why this is a second constant and not `TD_GAP_EM` applied to the
+/// difference.
+const TD_GAP_BACKWARD_EM: f64 = 0.12;
+
 /// Vertical movement at or above this (points) starts a new line.
 const NEW_LINE_DY: f64 = 0.5;
 
@@ -344,6 +370,10 @@ impl ContentParser {
         // measured rather than assumed.
         let mut line = String::new();
         let mut line_advance = 0.0_f64;
+        // `line_advance` as of the last same-line `Td`. The difference between
+        // the two is what has been drawn since that repositioning, which is
+        // what tells the next `Td` apart from a word gap (see `TD_GAP_EM`).
+        let mut anchor_em = 0.0_f64;
         let mut line_has_real_widths = false;
         let mut line_origin = (0.0_f64, 0.0_f64);
         let mut line_font_size = font_size;
@@ -410,6 +440,7 @@ impl ContentParser {
                 if line.is_empty() {
                     // Starting a fresh line, so the pen has not travelled yet.
                     line_advance = 0.0;
+                    anchor_em = 0.0;
                     line_has_real_widths = false;
                     // Text space -> device space: the text matrix first, then the
                     // CTM. The order matters and is the spec's (PDF 1.7, 9.4.2:
@@ -815,11 +846,35 @@ impl ContentParser {
                         tlm = (tlm.0 + dx, tlm.1 + dy);
                         tm = tlm;
                         if dy.abs() < NEW_LINE_DY {
-                            // Same line: the pen simply moved, so the run is wider.
-                            if dx > 0.0 && font_size.abs() > 0.0 {
-                                line_advance += dx / font_size;
+                            // Same line: the pen moved along the run, and what
+                            // the move means depends on what has been drawn
+                            // since the last one. A producer that draws each
+                            // run as its own `Td` lands exactly where the glyph
+                            // advances stopped — `dummy.pdf` jumps 50.1 pt
+                            // after an advance of 49.6 pt — and that is not a
+                            // word break: the text's own space characters are
+                            // the spaces. Only a jump that overshoots the drawn
+                            // advance is a gap the producer expressed by moving
+                            // the pen instead of writing one, and only that
+                            // earns the space `show!` inserts — as does a jump
+                            // that lands far short of it (see
+                            // `TD_GAP_BACKWARD_EM`).
+                            let jump = if font_size.abs() > 0.0 {
+                                dx / font_size
+                            } else {
+                                0.0
+                            };
+                            let gap = jump - (line_advance - anchor_em);
+                            if gap > TD_GAP_EM || gap < -TD_GAP_BACKWARD_EM {
+                                pending_space = true;
                             }
-                            pending_space = true;
+                            // The box keeps counting the move as travel, as
+                            // before: this change is about whether a space is
+                            // inserted, not about how wide the run is drawn.
+                            if dx > 0.0 && font_size.abs() > 0.0 {
+                                line_advance += jump;
+                            }
+                            anchor_em = line_advance;
                         } else {
                             flush!();
                             pending_space = false;

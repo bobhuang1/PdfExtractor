@@ -143,6 +143,19 @@ pub fn draw_text(
     }
 }
 
+/// How wide `text` is when drawn `cell_height` pixels tall.
+///
+/// Every character takes one cell and its gap, which is the pen movement
+/// [`draw_text`] makes; a caller that has to fit a string into a box decides the
+/// height it asks for from this. Nothing outside printable ASCII is drawn, but
+/// it still advances the pen, so it is counted here too.
+pub fn text_width(text: &str, cell_height: f64) -> f64 {
+    if !cell_height.is_finite() || cell_height <= 0.0 {
+        return 0.0;
+    }
+    text.chars().count() as f64 * (cell_height / GLYPH_ROWS as f64) * ADVANCE as f64
+}
+
 /// The dot pattern of a character, or `None` when the font has no glyph for it.
 fn glyph(character: char) -> Option<&'static [u8; GLYPH_ROWS]> {
     let code = character as u32;

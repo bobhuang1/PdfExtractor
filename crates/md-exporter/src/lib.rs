@@ -56,6 +56,13 @@
 //!   `data:` URI (`embedded`), or a `<!-- image -->` comment where the picture
 //!   stood (`placeholder`). The two mode names and the placeholder text are
 //!   Docling's own.
+//! * **Head facts become front matter.** A page read from HTML keeps its
+//!   description, canonical URL and Open Graph/Twitter cards beside the model,
+//!   where Docling cannot hold them. A Markdown rendering of such a page starts
+//!   with YAML front matter holding them (`description`, `canonical`, and a
+//!   `social` list of `key`/`content`), so writing the page, reading it back and
+//!   writing it again keeps the head it came with. A document with none gains no
+//!   front matter.
 //! * **Groups** are marked, not flattened. Markdown has no groups, so the
 //!   writer surrounds each one with HTML comments that render as nothing:
 //!   `<!-- pdfextractor:group <label> <layer> <name> -->` and
@@ -172,11 +179,72 @@ pub fn render_with_images(
     // page-labelled document, mixed into its order) and is skipped per item by
     // the shared walk.
     walk_body_with(doc, include_notes, &mut renderer);
-    let mut out = renderer.blocks.join("\n\n");
-    if !out.is_empty() {
+    let body = renderer.blocks.join("\n\n");
+    let mut out = String::new();
+    if let Some(front) = front_matter(doc) {
+        out.push_str("---\n");
+        out.push_str(&front);
+        out.push_str("\n---\n");
+    }
+    if !body.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&body);
         out.push('\n');
     }
     out
+}
+
+/// The page's head facts as YAML front matter, when it has any.
+///
+/// `social` is a list of `key`/`content` records rather than a mapping because
+/// a card is an ordered statement: `og:image:width` belongs to the image before
+/// it, and a page may state the same key twice. A mapping would sort the keys
+/// and keep only the last, which changes what the page said.
+fn front_matter(doc: &DoclingDocument) -> Option<String> {
+    let head = &doc.html_head;
+    let mut fields = serde_yaml::Mapping::new();
+    if let Some(description) = &head.description {
+        fields.insert(
+            serde_yaml::Value::String("description".to_string()),
+            serde_yaml::Value::String(description.clone()),
+        );
+    }
+    if let Some(canonical) = &head.canonical {
+        fields.insert(
+            serde_yaml::Value::String("canonical".to_string()),
+            serde_yaml::Value::String(canonical.clone()),
+        );
+    }
+    if !head.social.is_empty() {
+        let cards: Vec<serde_yaml::Value> = head
+            .social
+            .iter()
+            .map(|(key, content)| {
+                let mut card = serde_yaml::Mapping::new();
+                card.insert(
+                    serde_yaml::Value::String("key".to_string()),
+                    serde_yaml::Value::String(key.clone()),
+                );
+                card.insert(
+                    serde_yaml::Value::String("content".to_string()),
+                    serde_yaml::Value::String(content.clone()),
+                );
+                serde_yaml::Value::Mapping(card)
+            })
+            .collect();
+        fields.insert(
+            serde_yaml::Value::String("social".to_string()),
+            serde_yaml::Value::Sequence(cards),
+        );
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(fields))
+        .expect("a page's head is strings and a list of them");
+    Some(yaml.trim_end_matches('\n').to_string())
 }
 
 /// Write `doc` as Markdown to `path`.
@@ -624,7 +692,9 @@ pub(crate) fn is_bullet_glyph(marker: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pdfextractor_core::{DocumentBuilder, GridCell, GridTable, PictureData, TextLabel};
+    use pdfextractor_core::{
+        DocumentBuilder, GridCell, GridTable, HtmlHead, PictureData, TextLabel,
+    };
 
     /// One slide, its speaker notes inside the slide's group and a comment in
     /// its own `comment_section` group — the shape the PPTX reader builds.
@@ -806,6 +876,66 @@ mod tests {
              > **Notes:** One line split here.\n> **Notes:** Second paragraph.\n\n\
              <!-- pdfextractor:/group -->\n"
         );
+    }
+
+    /// A page read from HTML keeps its head beside the model; Markdown has no
+    /// head, so it states the same facts as YAML front matter. The cards are a
+    /// list, not a mapping: a repeated key and the order of an image and its
+    /// width are part of what the page said.
+    #[test]
+    fn a_pages_head_facts_become_yaml_front_matter() {
+        let mut b = DocumentBuilder::new("demo");
+        b.add_labeled_item("Q3 review", "title", None, None, None);
+        b.set_html_head(HtmlHead {
+            description: Some("Quarterly results & outlook".to_string()),
+            canonical: Some("https://example.com/reports/q3?quarter=3&region=eu".to_string()),
+            social: vec![
+                ("og:title".to_string(), "Q3 & costs".to_string()),
+                (
+                    "og:image".to_string(),
+                    "https://example.com/q3.png".to_string(),
+                ),
+                ("og:image:width".to_string(), "1200".to_string()),
+                (
+                    "og:image".to_string(),
+                    "https://example.com/q3@2x.png".to_string(),
+                ),
+                (
+                    "twitter:card".to_string(),
+                    "summary_large_image".to_string(),
+                ),
+            ],
+        });
+        let markdown = render(&b.build());
+        let (yaml, body) = markdown
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n\n"))
+            .expect("a front matter and a blank line before the body");
+        let value: serde_json::Value = serde_yaml::from_str(yaml).expect("front matter is YAML");
+        assert_eq!(value["description"], "Quarterly results & outlook");
+        assert_eq!(
+            value["canonical"],
+            "https://example.com/reports/q3?quarter=3&region=eu"
+        );
+        let cards = value["social"].as_array().expect("a card list");
+        let keys: Vec<&str> = cards
+            .iter()
+            .map(|card| card["key"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "og:title",
+                "og:image",
+                "og:image:width",
+                "og:image",
+                "twitter:card"
+            ],
+            "the cards are listed in the order the page stated them"
+        );
+        assert_eq!(cards[2]["content"], "1200");
+        assert_eq!(cards[3]["content"], "https://example.com/q3@2x.png");
+        assert_eq!(body, "# Q3 review\n");
     }
 
     #[test]

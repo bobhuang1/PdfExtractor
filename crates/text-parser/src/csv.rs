@@ -5,14 +5,17 @@
 //! doubled `""` standing for one quote. The whole file is one table, so the
 //! row/column structure the format exists to express is preserved.
 
-use crate::{Block, TextDocument};
+use crate::{Block, TableGrid, TextDocument};
 
 /// Parse delimited text with `delimiter`, typically `,` or `\t`.
 pub fn parse(bytes: &[u8], delimiter: u8) -> TextDocument {
     let rows = records(bytes, delimiter);
     let mut doc = TextDocument::default();
     if !rows.is_empty() {
-        doc.items.push(Block::Table { rows });
+        // A delimited file says nothing about merges: every field is one slot.
+        doc.items.push(Block::Table {
+            grid: TableGrid::from_rows(&rows),
+        });
     }
     doc
 }

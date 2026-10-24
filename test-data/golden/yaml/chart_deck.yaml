@@ -1,0 +1,211 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/texts/2'
+  - $ref: '#/pictures/0'
+  content_layer: body
+  label: chapter
+  name: slide-0
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+key_value_items: []
+name: chart_deck
+origin:
+  binary_hash: 17221670117816961590
+  filename: chart_deck.pptx
+  mimetype: application/vnd.openxmlformats-officedocument.presentationml.presentation
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 6858000.0
+      width: 9144000.0
+pictures:
+- captions:
+  - $ref: '#/texts/2'
+  children: []
+  content_layer: body
+  label: picture
+  meta:
+    classification:
+      predictions:
+      - class_name: bar_chart
+    tabular_chart:
+      chart_data:
+        num_cols: 3
+        num_rows: 3
+        table_cells:
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 1
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 0
+          text: ''
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 2
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 0
+          text: Before
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 3
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 0
+          text: After
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 2
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 1
+          text: Measured
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 1
+          text: '12'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 1
+          text: '15'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 3
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 2
+          text: Predicted
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 2
+          text: '18'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 2
+          text: ''
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6126480.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 8412480.0
+      t: 2651760.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/0'
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: A drawing with no picture file
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 1417638.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686800.0
+      t: 274638.0
+    charspan:
+    - 0
+    - 30
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: A drawing with no picture file
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: The chart below is a drawing of its data, not an image part.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 2377440.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 8412480.0
+      t: 1463040.0
+    charspan:
+    - 0
+    - 60
+    page_no: 1
+  self_ref: '#/texts/1'
+  text: The chart below is a drawing of its data, not an image part.
+- children: []
+  content_layer: body
+  label: caption
+  orig: Units by run
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6126480.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 8412480.0
+      t: 2651760.0
+    charspan:
+    - 0
+    - 12
+    page_no: 1
+  self_ref: '#/texts/2'
+  text: Units by run
+version: 1.10.0

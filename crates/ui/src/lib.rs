@@ -5,6 +5,12 @@
 //! the argument vector it produces for the CLI, the child process, and the
 //! parser that turns the CLI's `--progress` stream into events for the page.
 //!
+//! The formats the window offers are not written down here either: [`ask_input_formats`]
+//! runs the CLI's `--list-input-formats` and reads the answer, so the window names
+//! what a run will take rather than a copy of it that can drift. [`AcceptedFormats`]
+//! is that answer kept between asks — and re-asked on demand, so a binary rebuilt
+//! while the window is open is the one the window names.
+//!
 //! The window also has a **Compare** mode, which shows each finished document
 //! beside a Docling reference of the same file: [`diff`] does the comparing, and
 //! [`DiffLine`] is what the page receives. [`gate`] is how a finished document is
@@ -544,6 +550,302 @@ pub struct Finished {
     pub tally: Tally,
 }
 
+/// One heading of the CLI's format list: a family's name as `--help` prints it,
+/// and the formats under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Family {
+    pub name: String,
+    pub input_formats: Vec<String>,
+}
+
+/// The CLI's answer to `--list-input-formats`: every format a run takes, and
+/// those formats under the headings `--help` prints them in.
+///
+/// `names` is the flat set — what a run accepts, which the page counts. `families`
+/// is the same set arranged for the page and the chooser, in the help's own order,
+/// so the window can offer *Pictures* beside *Word* without inventing a grouping
+/// of its own that could drift from the one the help states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Formats {
+    pub names: Vec<String>,
+    pub families: Vec<Family>,
+}
+
+/// Ask the CLI which input formats this build accepts.
+///
+/// The window offers, names and filters by exactly the set a run reads, asked of
+/// the binary that will do the reading: `--list-input-formats` prints it as JSON
+/// and exits, so a reader added to the command line appears in the window without
+/// a list being kept — and drifting — on this side. Nothing is converted and no
+/// input path is needed: the CLI answers the question and stops.
+///
+/// The names come back dotted, the way a user writes a file's name. One printed
+/// without a dot is given one, so the page and the native chooser read the same
+/// spelling, and a name that is not an extension is refused rather than passed to
+/// a chooser that would quietly offer less than the run reads.
+pub fn ask_input_formats(program: &str) -> Result<Formats, String> {
+    let output = Command::new(program)
+        .arg("--list-input-formats")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not run {program} --list-input-formats: {error}"))?;
+    if !output.status.success() {
+        // The CLI's own reason, when it gave one: `anyhow` writes `Error: …`.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("it gave no reason");
+        return Err(format!(
+            "{program} --list-input-formats exited with {}: {reason}",
+            output.status
+        ));
+    }
+    parse_formats(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|problem| format!("{program} --list-input-formats: {problem}"))
+}
+
+/// Read the flag's record: `{"input_formats": [".pdf", …], "families": […]}`.
+///
+/// The flat array is the run's set and arrives in the order the CLI prints it,
+/// deduplicated because it ends up in a file chooser. `families` is that set under
+/// the headings `--help` groups it by, kept in the CLI's order: it is only there
+/// for the chooser's grouping, so a family that names nothing is left out rather
+/// than offered as an empty filter. An answer with no `families` at all — an older
+/// CLI — is still readable: everything goes under one heading, rather than the
+/// window refusing a list the run would take.
+fn parse_formats(answer: &str) -> Result<Formats, String> {
+    let record: serde_json::Value = serde_json::from_str(answer.trim())
+        .map_err(|error| format!("its answer is not JSON ({error})"))?;
+    let listed = record
+        .get("input_formats")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "its answer has no `input_formats` array".to_string())?;
+
+    let names = parse_names(listed, "`input_formats`")?;
+    if names.is_empty() {
+        return Err("it named no input formats".to_string());
+    }
+
+    let families = match record.get("families") {
+        None => one_group(&names),
+        Some(value) => {
+            let listed = value
+                .as_array()
+                .ok_or_else(|| "its `families` is not an array".to_string())?;
+            let mut families = Vec::with_capacity(listed.len());
+            for entry in listed {
+                let family = entry
+                    .as_object()
+                    .ok_or_else(|| format!("`families` holds a {entry}, not a family"))?;
+                let name = family
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    return Err("`families` holds a family with no name".to_string());
+                }
+                let names = family
+                    .get("input_formats")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| format!("the {name:?} family has no `input_formats` array"))?;
+                let input_formats = parse_names(names, &format!("the {name:?} family"))?;
+                if !input_formats.is_empty() {
+                    families.push(Family {
+                        name: name.to_string(),
+                        input_formats,
+                    });
+                }
+            }
+            if families.is_empty() {
+                return Err("its `families` named no input formats".to_string());
+            }
+            families
+        }
+    };
+
+    Ok(Formats { names, families })
+}
+
+/// The dotted, deduplicated names of one JSON array, refusing anything that is not
+/// an extension: a chooser handed a name it cannot filter by would quietly offer
+/// less than a run reads.
+fn parse_names(listed: &[serde_json::Value], what: &str) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::with_capacity(listed.len());
+    for entry in listed {
+        let Some(name) = entry.as_str() else {
+            return Err(format!("{what} holds a {entry}, not a name"));
+        };
+        let extension = name.trim().trim_start_matches('.');
+        if extension.is_empty()
+            || !extension
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
+        {
+            return Err(format!("{what} holds {name:?}, which is not an extension"));
+        }
+        let dotted = format!(".{extension}");
+        if !names.contains(&dotted) {
+            names.push(dotted);
+        }
+    }
+    Ok(names)
+}
+
+/// The one heading a CLI without families gets: everything, grouped as a whole.
+fn one_group(names: &[String]) -> Vec<Family> {
+    vec![Family {
+        name: "Documents".to_string(),
+        input_formats: names.to_vec(),
+    }]
+}
+
+/// The filters a native chooser is given, grouped the way `--help` groups them.
+///
+/// "All documents" comes first with every name, because that is what most picks
+/// want; then one filter per family in the CLI's order, so a person opening a
+/// picture can choose *Pictures* and see only those, under the same heading the
+/// help prints. Families are the CLI's own — this side never invents a name for a
+/// group — and a family that offers no filterable extension is left out rather
+/// than added as an empty entry.
+pub fn chooser_filters(formats: &Formats) -> Vec<(String, Vec<String>)> {
+    let mut filters = Vec::with_capacity(formats.families.len() + 1);
+    let all = bare_extensions(&formats.names);
+    if !all.is_empty() {
+        filters.push(("All documents".to_string(), all));
+    }
+    for family in &formats.families {
+        let extensions = bare_extensions(&family.input_formats);
+        if !extensions.is_empty() {
+            filters.push((family.name.clone(), extensions));
+        }
+    }
+    filters
+}
+
+/// The CLI's answer to `--list-input-formats`, kept between asks.
+///
+/// The window asks on load and the native chooser asks on every click, so the
+/// answer is kept rather than a process started per click. Keeping it forever is
+/// the other half of the problem: a binary rebuilt, replaced or moved while the
+/// window is open would never be seen, because the window would go on naming the
+/// formats of the one it asked first. [`Self::refresh`] is the way back — it asks
+/// the CLI again and keeps what *that* binary says.
+///
+/// A failure is kept too: a binary that cannot be found cannot be found twice
+/// either, and the reason belongs on the page rather than in a silent nothing.
+/// It never survives a refresh, which is exactly the ask a repaired binary
+/// should be found by.
+type Answer = Result<Formats, String>;
+
+/// Which program an ask runs.
+#[derive(Clone)]
+enum ProgramSource {
+    /// The caller named the binary, so it stays named.
+    Fixed(String),
+    /// Look the binary up at each ask, so a changed `PDFEXTRACTOR_CLI` is seen.
+    Environment,
+}
+
+impl ProgramSource {
+    fn resolve(&self) -> String {
+        match self {
+            ProgramSource::Fixed(program) => program.clone(),
+            ProgramSource::Environment => locate_cli(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AcceptedFormats {
+    source: ProgramSource,
+    answer: Arc<Mutex<Option<Answer>>>,
+}
+
+impl AcceptedFormats {
+    /// The formats `program` names, to be asked for when first needed.
+    ///
+    /// Use this when the caller owns the path. The window uses
+    /// [`Self::from_environment`] instead, because its binary can be pointed
+    /// somewhere else while it is open.
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            source: ProgramSource::Fixed(program.into()),
+            answer: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The formats of whichever CLI `PDFEXTRACTOR_CLI` names now.
+    ///
+    /// The path is resolved on every ask, and every refresh asks again, so
+    /// moving the variable to a new binary takes effect without restarting the
+    /// window. Without the variable, [`locate_cli`]'s usual search — beside the
+    /// UI binary, then `PATH` — is what is resolved.
+    pub fn from_environment() -> Self {
+        Self {
+            source: ProgramSource::Environment,
+            answer: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The program the window would run now.
+    ///
+    /// For an environment-backed instance this resolves `PDFEXTRACTOR_CLI`
+    /// again, so the page can name the binary a refresh has just moved to.
+    pub fn program(&self) -> String {
+        self.source.resolve()
+    }
+
+    /// The kept answer, asking the CLI the first time and again after a refresh.
+    pub fn get(&self) -> Result<Formats, String> {
+        match self.kept() {
+            Some(answer) => answer,
+            None => self.ask(),
+        }
+    }
+
+    /// Ask the CLI again, replacing whatever was kept.
+    ///
+    /// What a window calls when the binary it runs may have been fixed or
+    /// replaced underneath it, or when `PDFEXTRACTOR_CLI` has been pointed at a
+    /// new path: the answer afterwards is the one a run would get now, not the
+    /// one it got when the window opened.
+    pub fn refresh(&self) -> Result<Formats, String> {
+        self.ask()
+    }
+
+    /// What was answered last, and nothing when nothing has been asked.
+    fn kept(&self) -> Option<Answer> {
+        self.answer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn ask(&self) -> Result<Formats, String> {
+        let answer = ask_input_formats(&self.source.resolve());
+        *self
+            .answer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(answer.clone());
+        answer
+    }
+}
+
+/// The same names without their dots, which is the form a native chooser filters
+/// by: `add_filter` takes extensions, not file names.
+pub fn bare_extensions(formats: &[String]) -> Vec<String> {
+    formats
+        .iter()
+        .map(|format| format.trim().trim_start_matches('.').to_string())
+        .filter(|extension| !extension.is_empty())
+        .collect()
+}
+
 /// Where the UI expects to find the CLI.
 ///
 /// An explicit `PDFEXTRACTOR_CLI` wins; otherwise the binary sitting next to
@@ -606,6 +908,329 @@ mod tests {
                 "auto",
                 "--progress",
             ]
+        );
+    }
+
+    /// The window's formats are the CLI's own answer, not a list kept here: the
+    /// record is read as printed, and a name the chooser cannot filter by is
+    /// refused rather than quietly dropped.
+    #[test]
+    fn the_accepted_formats_are_read_out_of_the_clis_answer() {
+        let answer = r#"{"input_formats": [".pdf", ".docx", ".md"]}"#;
+        assert_eq!(
+            parse_formats(answer).unwrap().names,
+            vec![".pdf", ".docx", ".md"]
+        );
+
+        // A name printed without its dot reads the same, and a repeat is one
+        // entry once the list reaches a chooser.
+        let undotted = r#"{"input_formats": ["pdf", ".PDF", "pdf"]}"#;
+        assert_eq!(
+            parse_formats(undotted).unwrap().names,
+            vec![".pdf", ".PDF"],
+            "names are kept as the CLI spells them"
+        );
+    }
+
+    /// The families are not this side's idea of a grouping: they are read under the
+    /// names the help prints, in the help's order, so the chooser's headings can be
+    /// the same words a reader of `--help` already knows.
+    #[test]
+    fn the_families_are_read_in_the_order_the_help_prints_them() {
+        let answer = r#"{
+            "input_formats": [".pdf", ".docx", ".png", ".jpg"],
+            "families": [
+                {"name": "PDF", "input_formats": [".pdf"]},
+                {"name": "Word", "input_formats": ["docx"]},
+                {"name": "Pictures", "input_formats": [".png", ".jpg", "png"]},
+                {"name": "Empty", "input_formats": []}
+            ]
+        }"#;
+        let formats = parse_formats(answer).unwrap();
+        assert_eq!(formats.names, vec![".pdf", ".docx", ".png", ".jpg"]);
+        assert_eq!(
+            formats.families,
+            vec![
+                Family {
+                    name: "PDF".to_string(),
+                    input_formats: vec![".pdf".to_string()],
+                },
+                Family {
+                    name: "Word".to_string(),
+                    input_formats: vec![".docx".to_string()],
+                },
+                Family {
+                    name: "Pictures".to_string(),
+                    input_formats: vec![".png".to_string(), ".jpg".to_string()],
+                },
+            ],
+            "a family that names nothing is no filter, so it is left out"
+        );
+    }
+
+    /// An older CLI prints the flat list alone. The window still has a chooser: one
+    /// heading holding everything, rather than a refusal to offer what a run reads.
+    #[test]
+    fn a_cli_without_families_still_gives_one_heading() {
+        let formats =
+            parse_formats(r#"{"input_formats": [".pdf", ".md"]}"#).expect("a flat answer");
+        assert_eq!(
+            formats.families,
+            vec![Family {
+                name: "Documents".to_string(),
+                input_formats: vec![".pdf".to_string(), ".md".to_string()],
+            }]
+        );
+    }
+
+    /// The page groups by the same answer the chooser does: `names` stays flat for
+    /// the count, and each family reaches it as a heading with its own formats.
+    #[test]
+    fn the_format_answer_serializes_with_the_pages_family_headings() {
+        let formats = Formats {
+            names: vec![".pdf".to_string(), ".docx".to_string()],
+            families: vec![
+                Family {
+                    name: "PDF".to_string(),
+                    input_formats: vec![".pdf".to_string()],
+                },
+                Family {
+                    name: "Word".to_string(),
+                    input_formats: vec![".docx".to_string()],
+                },
+            ],
+        };
+        let value = json(&formats);
+        assert_eq!(value["names"], serde_json::json!([".pdf", ".docx"]));
+        assert_eq!(value["families"][0]["name"], "PDF");
+        assert_eq!(
+            value["families"][0]["inputFormats"],
+            serde_json::json!([".pdf"]),
+            "the page reads the camelCase field"
+        );
+        assert_eq!(
+            value["families"][1]["inputFormats"],
+            serde_json::json!([".docx"])
+        );
+    }
+
+    /// What the native chooser is handed: every name under "All documents" first,
+    /// then one filter per family in the help's order, without dots because a
+    /// filter takes extensions rather than file names.
+    #[test]
+    fn the_chooser_gets_all_documents_then_one_filter_per_family() {
+        let formats = Formats {
+            names: vec![".pdf".to_string(), ".docx".to_string(), ".png".to_string()],
+            families: vec![
+                Family {
+                    name: "PDF".to_string(),
+                    input_formats: vec![".pdf".to_string()],
+                },
+                Family {
+                    name: "Word".to_string(),
+                    input_formats: vec![".docx".to_string()],
+                },
+                Family {
+                    name: "Pictures".to_string(),
+                    input_formats: vec![".png".to_string()],
+                },
+            ],
+        };
+        assert_eq!(
+            chooser_filters(&formats),
+            vec![
+                (
+                    "All documents".to_string(),
+                    vec!["pdf".to_string(), "docx".to_string(), "png".to_string()]
+                ),
+                ("PDF".to_string(), vec!["pdf".to_string()]),
+                ("Word".to_string(), vec!["docx".to_string()]),
+                ("Pictures".to_string(), vec!["png".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_a_format_list_is_refused_with_the_reason() {
+        for (answer, expected) in [
+            ("no formats here", "not JSON"),
+            ("[]", "no `input_formats` array"),
+            (r#"{"input_formats": []}"#, "named no input formats"),
+            (r#"{"input_formats": [".pdf", 7]}"#, "not a name"),
+            (r#"{"input_formats": [".p df"]}"#, "not an extension"),
+            (r#"{"input_formats": [""]}"#, "not an extension"),
+            (
+                r#"{"input_formats": [".pdf"], "families": {}}"#,
+                "not an array",
+            ),
+            (
+                r#"{"input_formats": [".pdf"], "families": [7]}"#,
+                "not a family",
+            ),
+            (
+                r#"{"input_formats": [".pdf"], "families": [{"input_formats": [".pdf"]}]}"#,
+                "no name",
+            ),
+            (
+                r#"{"input_formats": [".pdf"], "families": [{"name": "PDF"}]}"#,
+                "no `input_formats` array",
+            ),
+            (
+                r#"{"input_formats": [".pdf"], "families": [{"name": "PDF", "input_formats": [7]}]}"#,
+                "the \"PDF\" family holds a 7",
+            ),
+            (
+                r#"{"input_formats": [".pdf"], "families": []}"#,
+                "`families` named no input formats",
+            ),
+        ] {
+            let problem =
+                parse_formats(answer).expect_err(&format!("{answer} was read as a format list"));
+            assert!(
+                problem.contains(expected),
+                "{answer}: expected {expected:?}, got {problem:?}"
+            );
+        }
+    }
+
+    /// A CLI that is not there is a reason on the page, not a panic in the
+    /// window — the same call runs before a conversion would, so the message is
+    /// the first sign the binary is missing.
+    #[test]
+    fn a_cli_that_cannot_be_asked_is_an_error_naming_it() {
+        let problem =
+            ask_input_formats("/definitely/not/a/program").expect_err("a missing program answered");
+        assert!(
+            problem.contains("/definitely/not/a/program"),
+            "the program is not named: {problem}"
+        );
+    }
+
+    /// An existing program that answers something else — `echo` prints the flag
+    /// back — is an error about the answer, not a list of nonsense names.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_that_answers_something_else_is_an_error_about_the_answer() {
+        let problem =
+            ask_input_formats("/bin/echo").expect_err("echo's answer was read as a format list");
+        assert!(problem.contains("not JSON"), "{problem}");
+    }
+
+    /// The window asks once and asks again: the kept answer is what the chooser
+    /// filters by, and a refresh replaces it with what the binary says *now* —
+    /// which is how a CLI rebuilt or replaced under an open window is picked up.
+    ///
+    /// The stand-in binary answers from a counter of its own calls, so "asked
+    /// again" is a fact about the process, not about the return value.
+    #[cfg(unix)]
+    #[test]
+    fn a_refresh_asks_the_cli_again_so_a_replaced_binary_is_seen() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "pdfextractor-formats-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory for the stand-in CLI");
+        let script = dir.join("cli.sh");
+        // First ask: one format. Every ask after: the fixed binary's two.
+        let stand_in = r#"#!/bin/sh
+            dir=$(dirname "$0")
+            n=$(cat "$dir/calls" 2>/dev/null || echo 0)
+            n=$((n + 1))
+            echo $n > "$dir/calls"
+            if [ "$n" -eq 1 ]; then
+              echo '{"input_formats": [".pdf"]}'
+            else
+              echo '{"input_formats": [".pdf", ".rtf"]}'
+            fi
+            "#;
+        std::fs::write(&script, stand_in).expect("the stand-in CLI");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("an executable stand-in CLI");
+
+        let formats = AcceptedFormats::new(script.to_string_lossy().into_owned());
+        assert_eq!(formats.get().unwrap().names, vec![".pdf"]);
+        assert_eq!(
+            formats.get().unwrap().names,
+            vec![".pdf"],
+            "the answer is kept, not asked for again on every chooser click"
+        );
+        assert_eq!(formats.refresh().unwrap().names, vec![".pdf", ".rtf"]);
+        assert_eq!(
+            formats.get().unwrap().names,
+            vec![".pdf", ".rtf"],
+            "the refresh replaced the kept answer"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The window's formats follow the environment, not the path it resolved
+    /// when it opened: a refresh re-resolves `PDFEXTRACTOR_CLI`, so pointing it
+    /// at a rebuilt binary in another directory takes effect without restarting.
+    #[cfg(unix)]
+    #[test]
+    fn a_refresh_re_resolves_the_cli_named_by_the_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let previous = std::env::var_os("PDFEXTRACTOR_CLI");
+        let dir = std::env::temp_dir().join(format!(
+            "pdfextractor-relocate-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory for the stand-in CLIs");
+        let write = |name: &str, formats: &str| {
+            let path = dir.join(name);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\necho '{{\"input_formats\": [{formats}]}}'\n"),
+            )
+            .expect("a stand-in CLI");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("an executable stand-in CLI");
+            path
+        };
+        let first = write("first.sh", "\".pdf\"");
+        let second = write("second.sh", "\".pdf\", \".rtf\"");
+
+        std::env::set_var("PDFEXTRACTOR_CLI", &first);
+        let formats = AcceptedFormats::from_environment();
+        assert_eq!(formats.get().unwrap().names, vec![".pdf"]);
+        assert_eq!(formats.program(), first.to_string_lossy());
+
+        std::env::set_var("PDFEXTRACTOR_CLI", &second);
+        assert_eq!(
+            formats.program(),
+            second.to_string_lossy(),
+            "the displayed program follows the environment"
+        );
+        assert_eq!(
+            formats.get().unwrap().names,
+            vec![".pdf"],
+            "the kept answer is not re-resolved until a refresh"
+        );
+        assert_eq!(
+            formats.refresh().unwrap().names,
+            vec![".pdf", ".rtf"],
+            "the refresh still asked the binary the environment named at setup"
+        );
+        assert_eq!(formats.get().unwrap().names, vec![".pdf", ".rtf"]);
+
+        match previous {
+            Some(value) => std::env::set_var("PDFEXTRACTOR_CLI", value),
+            None => std::env::remove_var("PDFEXTRACTOR_CLI"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_chooser_is_given_the_names_without_their_dots() {
+        assert_eq!(
+            bare_extensions(&[".pdf".to_string(), ".jpg".to_string()]),
+            vec!["pdf", "jpg"]
         );
     }
 

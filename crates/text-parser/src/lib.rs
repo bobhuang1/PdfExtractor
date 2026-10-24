@@ -270,10 +270,10 @@ pub struct TextDocument {
     pub page_width: f64,
     pub page_height: f64,
     pub items: Vec<Block>,
-    /// What an HTML page's head said about the page itself: its
-    /// `<meta name="description">` and the URL a `<link rel="canonical">`
-    /// named. Neither is rendered, so neither is a block; a format with no head
-    /// of its own leaves both unset.
+    /// What a page said about itself: its `<meta name="description">` and the
+    /// URL a `<link rel="canonical">` named, or the same facts in a Markdown
+    /// file's YAML front matter. Neither is rendered, so neither is a block; a
+    /// format that states neither leaves both unset.
     pub description: Option<String>,
     pub canonical: Option<String>,
     /// The Open Graph and Twitter card `<meta>` statements the head made, as the
@@ -283,7 +283,7 @@ pub struct TextDocument {
     /// A list of `(key, content)` rather than two lists for the two
     /// vocabularies: the key names which vocabulary it belongs to, and the order
     /// matters — a card names an image and then that image's width in the meta
-    /// after it. A format with no head of its own has no cards.
+    /// after it. A format that states no cards has none.
     pub social: Vec<(String, String)>,
 }
 

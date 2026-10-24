@@ -893,7 +893,6 @@ Most differing rows (both readings have the block and disagree about it)
   Part of its 4.4% residual is the finer-split and repeated-text effect the golden README
   documents; the rows are the syntax.
 
-
 ### Box overlay preview (`--preview`) — new
 - `crates/cli/src/preview.rs` writes a self-contained `.preview.html` beside the JSON.
   Every extracted box is drawn at its true coordinates, colour-coded by source
@@ -9763,6 +9762,21 @@ DrawingML's `decode` (a shape filled with a drawing). The crate's header now
 states the rule beside the other two that belong to the document rather than to
 the drawing — the size and the background.
 
+**The drawing's own statement (bug 96, continued).** The first rule was the
+format's default rather than the drawing's: a `preserveAspectRatio="none"` (the
+author asking for a stretched fill), a non-centring alignment, or `slice` was
+not read, so a drawing that asked for its frame to be filled got a letterbox
+instead. `root_preserve_aspect_ratio` now reads the root `<svg>` element's
+`preserveAspectRatio` — skipping an XML declaration or a comment ahead of it and
+ignoring a nested element's statement, which governs that element's own content
+— and `frame_transform` fits the drawing's viewport into the frame by it:
+`none` takes the two scales independently, `slice` takes the larger and lets the
+pixmap's bounds crop the overflow, and each of the nine alignments places the
+drawing against the edge or corner its name names. A missing or malformed value
+stays `xMidYMid meet`, the format's default and what the crate did before. The
+parsing is `svgtypes`' own (`AspectRatio`), the parser resvg uses, now a direct
+dependency rather than a transitive one.
+
 **Held by tests.** In the SVG crate,
 `a_frame_of_another_shape_letterboxes_the_drawing` puts the 40 × 24 fixture in a
 40 × 40 frame and in an 80 × 24 frame at 144 dpi: canvases 80 × 80 and 160 × 48,
@@ -9776,25 +9790,37 @@ last rows of the 72 × 72 grid to transparency with the panel at the centre. The
 existing `the_placement_decides_the_pixel_grid` and `the_raster_is_what_the_png_holds`
 keep their sizes because their frames already match the drawing's.
 
-**Verification.** `cargo test -p pdfextractor-svg` **8** (one new);
-`cargo test -p pdfextractor-cli --bins` **36** (one new, was 35);
-`--test cli_test` **101** (326 s) — the SVG picture fixtures still come out at
+For the drawing's own fit, `preserve_aspect_ratio_none_stretches_the_drawing_into_the_frame`
+paints the pale panel into both margins of the 160 × 48 canvas; `..._slice_fills_and_clips_the_drawing`
+holds all four edge midpoints of the 80 × 80 canvas painted; `..._aligns_a_drawing_the_frame_is_wider_than`
+leaves the left 80 pixels clear under `xMaxYMax meet`; and
+`..._slice_crops_at_the_stated_corner` shows the blue right half at the frame's
+left edge under `xMaxYMax slice` where centring would start in the red. The
+root-tag test covers a declaration and a comment ahead of `<svg`, both quote
+kinds, a `>` inside another attribute, a nested statement, and malformed or
+unquoted values. In the CLI, `an_office_svg_is_placed_by_its_own_preserve_aspect_ratio`
+runs `none`, `xMidYMid slice` and `xMaxYMax meet` through `office_media` and
+decodes the PNGs it returns: every edge painted, every edge painted after
+cropping, and the 80 × 48 drawing pinned to the right of a 120 × 48 grid.
+
+**Verification.** `cargo test -p pdfextractor-svg` **13** (five new);
+`cargo test -p pdfextractor-cli --bins` **37** (one new, was 36);
+`--test cli_test` **113** (883 s) — the SVG picture fixtures still come out at
 144 × 86 with their panel and stroke, the shape-fill and LibreOffice re-save
 tests are unchanged; `--test md_golden_test` **17** and `--test
 formats_golden_test` **10** with no golden moved, since no pinned document's
 picture is an SVG; and `-p pdfextractor-svg -p pdfextractor-drawingml -p
-pdfextractor-pptx-parser -p pdfextractor-docx-parser` green (50, 26, 25, 16, 8, 2,
-2 passed across their suites). `cargo fmt --all --check` clean; clippy reports
-only the lints that were there before.
+pdfextractor-pptx-parser -p pdfextractor-docx-parser` green (13, 25, 26, 53 in
+their unit suites and 16, 2, 2, 2 in their fixture suites). `cargo fmt --all
+--check` clean; clippy reports only the lints that were there before.
 
-**Remaining limitations.** The rule is the format's default rather than the
-drawing's own statement: a `preserveAspectRatio="none"` (the author asking for a
-stretched fill) or a non-centring alignment is not read, and neither does the
-crate implement `slice`. A near-matching frame — `svg_blip_pictures`' 72 × 43 pt
-frame around a 40 × 24 drawing — now leaves a sub-pixel clear sliver on two
-sides, which no reader can see but which is why that PNG is no longer a
-pixel-exact stretch of the drawing. Metafiles (EMF/WMF) still fill their box as
-before; this was about SVG.
+**Remaining limitations.** The frame is the viewport the drawing is fitted
+into, so a near-matching frame — `svg_blip_pictures`' 72 × 43 pt frame around a
+40 × 24 drawing — leaves a sub-pixel clear sliver on two sides under the default
+`meet`, which no reader can see but which is why that PNG is no longer a
+pixel-exact stretch of the drawing. `preserveAspectRatio` is read on the root
+only, as it must be for placement; a nested element's own fit is left to usvg.
+Metafiles (EMF/WMF) still fill their box as before; this was about SVG.
 
 ## A multi-page TIFF is a page per sheet (bug 97)
 
@@ -9859,9 +9885,51 @@ same direction as the GIF's.
 **Remaining limitations.** The first sheet is handed to Tesseract as the file's
 own bytes — leptonica decodes it, so a bilevel or palette first sheet still
 works — while later sheets travel as PNGs this reader decoded, which is why an
-unconverted colour type drops a later sheet rather than failing the document. A
-TIFF's per-directory orientation tag is not read: the first directory's statement
-turns the whole batch, as the first frame's does for a GIF.
+unconverted colour type drops a later sheet rather than failing the document.
+
+## Each TIFF sheet is turned by its own tag (bug 97, continued)
+
+`tiff_frames` read every directory but not its orientation: the pages came back
+as their stored pixels, and `convert_image` treated them as if they all carried
+the first sheet's tag. A batch whose first sheet was scanned sideways turned
+every later upright sheet with it (and with a first tag whose quarter turn was
+not the only statement, swapped the later sheets' page sizes); a first sheet
+stored upright left later sideways sheets unturned. A directory's tag is that
+directory's statement about that sheet, not a fact about the batch.
+
+**The reader.** `tiff_page` reads tag 274 from the directory it is decoding
+before reading its pixels — `get_tag_unsigned::<u16>`, with a missing value, a
+value too wide for the tag, or one outside 1–8 read as stored — and applies it
+to that sheet's RGBA through the same `image` orientation turn the other
+formats use. The returned grid and the PNG are therefore the upright sheet, and
+`PngPicture`'s width and height are that sheet's upright grid. The first sheet
+is unchanged: `ImageDocument` still reads its tag, and `convert_image` still
+turns the file's own bytes by it before recognition.
+
+**The CLI.** `tiff_stack` says whether `later` is a TIFF's directories or a
+GIF's frames. A later TIFF sheet is already upright and is used as it came — the
+first sheet's `applied` turn is not applied again — and the no-OCR page is sized
+from its upright grid without the first sheet's axis swap. A GIF's later frames
+still take the first frame's turn: a GIF states no orientation of its own, and
+its frames are one strip of the same picture.
+
+**Held by tests.** `each_tiff_directory_is_turned_by_its_own_orientation` writes
+a three-directory TIFF through `tiff`'s encoder, the same 4 × 2 red/blue sheet
+stored in each directory, tagged 6, 1 and 3. `tiff_frames` gives a 2 × 4 page
+whose top half is red and bottom blue for tag 6, a 4 × 2 page still red-left for
+the unturned second sheet, and a 4 × 2 page with its colours swapped for tag 3.
+In the CLI, `a_tiffs_sheets_are_turned_by_their_own_orientation_tags` writes
+6 × 4, 5 × 3 and 6 × 4 directories tagged 6, 1 and 8 at 72 dpi and converts with
+`--ocr never`: the pages are 4 × 6, 5 × 3 and 4 × 6. An implementation that
+applied the first tag to the batch would make the second page 3 × 5, and one
+that ignored the tags would leave the first and third 6 × 4.
+
+**Verification.** `cargo test -p pdfextractor-image-parser` **22 + 14** (one new
+unit test); `cargo test -p pdfextractor-cli --test cli_test` **114** (one new,
+816 s);
+`cargo test -p pdfextractor-cli --bins` **37**; `cargo fmt --all --check` clean;
+clippy reports only the lints that were already there; the existing three-sheet
+`pages.tiff` test still passes in both OCR and no-OCR modes.
 
 ## The window can ask the CLI again (bug 98)
 
@@ -9923,11 +9991,43 @@ beside the conversion's own report. In the mock page, the line read
 `Reads 4 format(s)`, and **Ask again** redrew it as `Reads 5 format(s): … .webp`
 with `data-count` 5, the button re-enabled and no console error.
 
-**Remaining limitations.** A refresh asks the CLI `locate_cli` named when the
-window set up; a binary that moved to another path still needs the window
-restarted with `PDFEXTRACTOR_CLI` (or the bundled location) naming it — the
-refresh is about the file at that path being replaced, which is the rebuild case.
-Anything already in flight keeps running the binary it started, as it should.
+**Remaining limitations.** Anything already in flight keeps running the binary
+it started, as it should.
+
+## A refresh re-resolves `PDFEXTRACTOR_CLI` (bug 98, continued)
+
+`AcceptedFormats` was constructed with `locate_cli()`'s answer and kept that
+path for every ask. A refresh therefore found a rebuilt file at the same path,
+but a binary moved somewhere else — the new `PDFEXTRACTOR_CLI` value — was not
+seen until the window reopened. The window already resolved the binary again for
+every conversion; its format line and chooser did not.
+
+**The resolver.** `AcceptedFormats` holds a `ProgramSource`: `Fixed(path)` when
+a caller names the binary (`new`, which the tests use with stand-in scripts), or
+`Environment`, which calls [`locate_cli`](crates/ui/src/lib.rs) on each ask.
+[`AcceptedFormats::from_environment`](crates/ui/src/lib.rs) is the window's
+constructor. `get` still keeps the answer, so a chooser click starts no process;
+`refresh` resolves again and asks the binary the environment names *now*. A
+missing variable falls back to the sibling binary and then `PATH`, as before.
+
+**The shell.** `main.rs` manages `AcceptedFormats::from_environment()` after the
+bundled binary has been named. `refresh_input_formats` re-resolves and asks; a
+conversion's `locate_cli()` was already fresh, so a repointed variable reaches
+both the formats and the run without a restart.
+
+**Held by tests.** `a_refresh_re_resolves_the_cli_named_by_the_environment`
+(lib.rs) creates two stand-in scripts and points `PDFEXTRACTOR_CLI` at the first:
+`get()` answers the first's `.pdf`, changing the variable leaves the kept answer
+alone, `refresh()` answers the second's `.pdf` and `.rtf`, and `get()` afterwards
+is the second answer. The environment is restored when the test ends.
+
+**Verification.** `cargo test -p pdfextractor-ui --lib` **101** passed (one new);
+`cargo fmt --all --check` and `git diff --check` clean; clippy reports only the
+existing `map_or` lint in `diff.rs`. The whole `cargo test -p pdfextractor-ui`
+run also passed its compare (5) and placed-row (8) suites; its corpus-report
+test failed on a baseline that was already stale — `FloatingPictures` 99.2% →
+99.1%, and `merged_table` absent from `compare-baseline.json` — neither touched
+by this change.
 
 ## The window's chooser offers the help's families (bug 99)
 
@@ -10167,6 +10267,52 @@ so the ramp is the two stops edge to edge rather than the shaped one Word draws.
 A shadow is a single hard-edged copy at its stated offset and opacity — VML
 states no blur — and patterns, textures and 3-D remain unpainted.
 
+## A VML gradient's focus shapes its ramp (bug 102 follow-up)
+
+**What was asked.** A VML autoshape whose `v:fill` carries `focus` or `focussize`
+was shaded as if neither were there: the ramp ran from one end of the frame to
+the other, so a fill Word draws as a band of one colour inside another came out
+as a plain two-colour fade. The previous entry left exactly this as its
+limitation.
+
+**The painter.** [crates/docx-parser/src/vml.rs](crates/docx-parser/src/vml.rs)
+reads both attributes, which VML defines for the two gradient types separately.
+A linear ramp's `focus` moves the middle of the blend: at the default 0 the
+second colour sits at the far end, at 50% it sits in the middle with the first
+at both ends, at -50% the other way round, and at ±100% the ramp is reversed —
+the cases VML's own documentation states. That is a stop in the middle rather
+than a slide of the two ends, so `axial` writes three stops (two when the middle
+lands on an end, so the default focus writes the same two stops as before).
+
+A radial ramp's `focussize` states the width and height of the region the first
+stop fills, as percentages of the shape's, so [crates/drawingml/src/paint.rs](crates/drawingml/src/paint.rs)'s
+`GradientKind::Radial` gained a `focus` pair of radii beside `center` and
+`radius`; the default 0,0 — and DrawingML's, which never states one — is the
+point the ramp already started from. `Gradient::position` places a point between
+the two ellipses along its own ray: it counts the point against the inner
+ellipse and the outer one, both of which scale with distance, so the point's
+share of the gap follows from the two counts. A focus region wider than the ramp
+can reach is capped at the frame's farthest edge, which is where the outer
+ellipse passes.
+
+**Held by tests.** `a_linear_focus_moves_the_middle_of_the_ramp` shades the same
+40 × 20 pt box at 50%, -50% and 100% and reads the pixels: red at both ends and
+blue in the middle, the reverse, and blue leading red.
+`a_radial_focus_size_holds_the_start_colour_flat` gives a radial fill a 50%
+focus region and finds the start colour still exact 15 px from the centre, where
+the same box without one has already mixed, while the edge has reached the
+second colour.
+
+**Verification.** `cargo test -p pdfextractor-docx-parser` **55 + 16** (two
+new); `cargo test -p pdfextractor-drawingml` **25**, unchanged — a path gradient
+with no focus region computes the same positions it did. `cargo fmt --all
+--check` clean. No golden or fixture moved: the fixture's shapes state neither
+attribute.
+
+**Remaining limitations.** `focus` is read for linear fills only, which is what
+VML defines it for; a radial fill's colour order is the model's own and was not
+revisited here. Patterns, textures and 3-D remain unpainted.
+
 ## The bent arrows are held to a real writer's deck (bug 102 follow-up)
 
 **What was asked.** The seven arrows that bend round rather than step —
@@ -10198,7 +10344,20 @@ the bottom left, head at the top right, and empty space below the band. These
 are the same facts the painter's unit test pins, now read back from a deck the
 writer produced.
 
-**Verification.** `cargo test -p pdfextractor-pptx-parser` **26 + 2 + 2**;
+**The whole pipeline.**
+`every_preset_shape_of_a_deck_is_exported` in
+[crates/cli/tests/cli_test.rs](crates/cli/tests/cli_test.rs) converts the deck
+with the real binary and holds the *export* to it, which the package reader's
+test cannot: 68 pictures in the JSON, each naming its own file in
+`preset_deck_images/` (68 distinct names, and nothing else in the directory),
+each file decoding to its frame's 180 × 100 pixels — 360 × 100 for the elbow and
+the curve — with ink on it rather than white, and all 68 named by `<img src>` in
+the HTML render. A preset that stopped being painted, or a picture the model
+counted but never wrote beside the JSON, fails there rather than only in the
+reader.
+
+**Verification.** `cargo test -p pdfextractor-pptx-parser` **26 + 2 + 2**; the
+new `cargo test -p pdfextractor-cli --test cli_test every_preset_shape_of_a_deck_is_exported` passes against the real binary;
 `cargo fmt --all --check` clean. The regenerated fixture parses to 68 pictures,
 all 180 × 100 pixels except the two connectors at 360 × 100.
 
@@ -10228,6 +10387,57 @@ drawing's own.
 
 **Verification.** All six LibreOffice re-save tests pass against the installed
 `soffice` (`6 passed`); `cargo fmt --all --check` clean.
+
+## Every picture part a fixture test accepts is a declared, related part
+
+**What was asked.** The same audit, for the tests that need no office
+application: a committed OOXML fixture whose picture parts a test leans on is
+only a document holding pictures if the package declares each part's media type
+and a relationship reaches it. A test that opens a media part by name would go
+on passing after either statement was lost, because it never asked the package
+whether the part it read was one.
+
+**What the audit found.** Five tests read a fixture's package directly, and all
+five took the pictures for granted:
+
+- `an_svg_picture_stated_in_an_svg_blip_is_the_drawing_not_its_png_fallback`
+  opened the drawing part and required the PNG fallback beside it to exist;
+- `the_same_svg_converts_the_same_however_it_is_stored` read both drawings and
+  their relationship parts, and checked that the relationships mention the file
+  names — but nothing checked that the parts' types are declared;
+- `a_picture_in_an_alternate_content_choice_is_the_drawing_not_its_fallback`,
+  `a_fallback_only_picture_is_the_fallback` and
+  `a_shape_filled_with_a_picture_is_painted_into_the_shape` read only the
+drawing part, so the media parts behind it were trusted rather than asked
+about.
+
+The six LibreOffice re-save tests above were already held to both statements;
+these five are the same fixtures read without the application.
+
+**The fix.** `assert_picture_parts_are_declared_and_related` in
+[crates/cli/tests/cli_test.rs](crates/cli/tests/cli_test.rs) walks every media
+part of a package and requires a `<Default>` or `<Override>` in
+`[Content_Types].xml` that names its media type, and a relationship whose target
+reaches the part. It also requires the package to hold at least one picture part
+it knows, so a fixture that lost its pictures outright fails rather than passing
+vacuously. All five tests call it on their fixture before reading the drawing.
+
+**What is not in scope.** `corpus_drawings` in
+[crates/metafile/tests/metafile_test.rs](crates/metafile/tests/metafile_test.rs)
+picks `word/media/*.emf|wmf` by extension, but it plays the drawings instead of
+claiming the document holds them, so a stray part would add a drawing to play
+rather than a picture to the document. The parser tests (`docx`, `pptx`, `xlsx`)
+take pictures through the reader, which resolves them by relationship — what
+they assert is the reader's answer, and the reader's own part resolution is
+where that promise lives.
+
+**Verification.** The five tests pass against the committed fixtures, whose
+PNG and SVG media parts are all declared and reached. The gate is not vacuous:
+with the `svg` `<Default>` removed from a copy of `svg_embed_pictures.docx`,
+`the_same_svg_converts_the_same_however_it_is_stored` fails with
+`word/media/diagram.svg is in the package but declared as no image/svg part`,
+and passes again once the fixture is restored. `cargo fmt --all --check` clean;
+clippy reports nothing new.
 
 ## A fallback-only picture is proven by LibreOffice, not only by this reader
 
@@ -10277,3 +10487,396 @@ with it.
 **Verification.** `cargo test -p pdfextractor-cli --test cli_test` **106 passed**
 with the installed LibreOffice 24.2, including the two new tests and all seven
 `libreoffice_opens_and_resaves` tests. `cargo fmt --all --check` clean.
+
+## A slide's picture background is the page's image
+
+**What was asked.** Read a slide's picture background — `p:cSld/p:bg/p:bgPr` with
+an `a:blipFill` — so a deck's photographic backdrops come through as the page's
+image.
+
+**Why it was missing.** A picture background is not a shape: PowerPoint writes
+it outside the shape tree, so the reader that walked only `p:spTree` never saw
+it. A deck could carry a full-page photograph and still produce a page with no
+image and no picture of it at all.
+
+**The fixture.** [make_background_deck.py](test-data/make_background_deck.py)
+writes [background_deck.pptx](test-data/background_deck.pptx), a two-slide deck
+authored by python-pptx. Its first slide states `images/scan.jpg` — the 620 ×
+350 scan the other office fixtures use — in
+`p:cSld/p:bg/p:bgPr/a:blipFill`, with the media part named by that slide's own
+relationships. Its second slide has no `p:bg` at all, so the test is per-slide
+rather than deck-wide. python-pptx cannot author a picture fill on a
+background, so the one missing piece is added to the saved package the way
+PowerPoint writes it; the first slide also keeps a sentence in front of the
+backdrop. The installed LibreOffice opens the fixture and re-saves it with a
+`p:bg` still on the first slide.
+
+**The reader.** `pptx-parser` now gives each `Slide` a
+`background: Option<PictureShape>`. It reads
+`p:cSld/p:bg/p:bgPr/a:blipFill/a:blip`, resolves
+the `r:embed` through the slide's relationships, and uses the same blip reading
+as an ordinary picture — the `asvg:svgBlip` drawing when the fill carries one,
+the raster otherwise, and EXIF orientation applied — at the full slide box. The
+background is not added to `Slide::shapes`: it is behind the slide's items, not
+one of them.
+
+**The document.** `convert_pptx` writes the backdrop beside the JSON as
+`slide<page>_background.<ext>` and records it as the page's `image`, through a
+new `DocumentBuilder::set_page_image`. The `ImageRef` keeps the picture's own
+type, 620 × 350 pixel grid and the 62 dpi its 620 pixels across the 720 pt page
+imply; a background whose type Docling cannot name, or whose grid is unknown,
+leaves the page without an image rather than with a partial one. The background
+is deliberately not a picture item: it is the page's image, not a block in the
+slide's group. The page is added before the image is named so the `Page` exists
+to hold it.
+
+**The tests.**
+- [background_test.rs](crates/pptx-parser/tests/background_test.rs) reads the
+  fixture and holds the first slide to the JPEG's own bytes at the full slide
+  box, a single text shape and no picture shape; the second slide to no
+  background. It also proves the fixture's own bytes are `images/scan.jpg`.
+- `a_slides_picture_background_is_the_pages_image` in
+  [cli_test.rs](crates/cli/tests/cli_test.rs) converts the deck end to end and
+  holds `pages["1"].image` to `image/jpeg`, 620 × 350, 62 dpi and the file it
+  names beside the JSON — byte for byte the fixture's scan. `pages["2"]` has no
+  image, `pictures` is empty, and both slides' sentences are still their text.
+
+**Docs.** The PPTX row, the picture section and the test-document layout of
+[README.md](README.md) describe the background form, the fixture and the page
+image.
+
+**Verification.** `cargo test -p pdfextractor-pptx-parser` **32 passed** (26 unit,
+2 background, 2 preset, 2 shapes); `cargo test -p pdfextractor-cli --test
+cli_test` **113 passed** (one new) in 441.77 s; `docling-core` accepted the
+background deck's JSON (`1/1 document(s)`); `cargo fmt --all --check` clean.
+
+## A `.jpc` inside an office package is read as the picture it holds
+
+**What was asked.** Put a `.jpc` JPEG 2000 into a DOCX and a PPTX fixture and
+check it is read as the picture it holds, not as a part whose name happens to be
+one the table carries.
+
+**The fixture.** [make_webp_jp2_pictures.py](test-data/make_webp_jp2_pictures.py)
+now writes [images/diagram.jpc](test-data/images/diagram.jpc) as a **bare
+codestream**, not a JP2 container under another name. Pillow saves a JP2
+whatever the file is called, so the generator takes the `jp2c` payload out of
+the box tree; the result opens with `FF 4F FF 51` (`SOC`, then the `SIZ` marker)
+and has no `ihdr` or `resc` to state its grid. The graph is 36 × 22, distinct
+from the 60 × 36 WebP and the 40 × 24 JP2 around it, so a test cannot pass by
+finding the wrong picture twice.
+
+The DOCX and PPTX now each carry three pictures in order: the WebP, the JP2
+container, and the `.jpc` codestream. The generator places a third distinct PNG
+stub, renames its media part to `image3.jpc`, points the relationships at it, and
+declares `jpc` as `image/jp2`. The part names are still asserted, so a library
+that renumbers the stubs fails while building the fixture rather than silently
+leaving a PNG in the package.
+
+**The check.**
+`a_webp_and_both_jpeg_2000_spellings_embedded_in_office_files_become_png_pictures`
+converts each fixture through the real binary and holds the result to three
+`image/png` pictures at 60 × 36, 40 × 24 and 36 × 22. The 36 × 22 one must be
+byte-for-byte the same PNG `transcode_to_png` makes from `diagram.jpc` on its
+own, so the test is holding the `.jpc`'s pixels, not merely a picture-sized box;
+the render must name all three PNGs. The LibreOffice re-save test now states that
+both JPEG 2000 spellings — container and codestream — are the parts the
+application drops, and that the original package gives three pictures where the
+re-save gives one.
+
+**Verification.** `cargo test -p pdfextractor-cli --test cli_test` **113 passed**
+in 351.23 s, including the updated conversion and LibreOffice tests.
+`docling-core` accepted both converted fixtures (`2/2 document(s)`), and the
+written files are real 60 × 36, 40 × 24 and 36 × 22 PNGs. `cargo fmt --all
+--check` and `git diff --check` clean.
+
+## The late-header hoist is pinned in the render goldens
+
+**What was asked.** Make the Markdown and HTML writers render a table whose
+header row is declared later by moving that row to the top of the render, and pin
+the result. The writers already did this — bug 94's `pipe_table` and
+`table_html` found the first row with a `column_header` cell rather than testing
+row 0 — but no committed render golden carried a table that exercised it.
+
+**The fixture.** [late_header.html](test-data/late_header.html) is a small flow
+document whose table writes a `colspan="2"` caption row first and
+`<th>Month</th><th>Total</th>` on row 1. Its JSON therefore marks row 1 as the
+header and leaves row 0 data, which is the model-side fact the writers have to
+honour rather than reading the grid position.
+
+**The pin.** The fixture joins the shared Markdown and format golden case lists,
+which commits four outputs:
+
+* [markdown/late_header.md](test-data/golden/markdown/late_header.md) starts with
+  `| Month          | Total |` above the separator, then writes the caption and
+  the two data rows;
+* [html/late_header.html](test-data/golden/html/late_header.html) puts the names
+  in `<thead>` and the caption first in `<tbody>`;
+* [text/late_header.txt](test-data/golden/text/late_header.txt) pins the same
+  table in the pipe form the text writer shares with Markdown; and
+* [yaml/late_header.yaml](test-data/golden/yaml/late_header.yaml) keeps the model
+  as it is: `Monthly totals` at row 0, the two `<th>` cells at row 1, and the
+  data rows after them.
+
+The Markdown fixed point reads the hoisted pipe table back as a row-0 header and
+re-renders it unchanged. The HTML fixed point reads `<thead>` and writes the same
+page, and the HTML round-trip gate compares the Markdown written from the source
+with the Markdown written from that page — so the hoist is stable from both
+sides rather than correct only when the source is read once.
+
+**Verification.** `cargo test -p pdfextractor-cli --test md_golden_test
+--test formats_golden_test` **17 + 10 passed**, including
+`every_markdown_golden_is_a_fixed_point`,
+`every_html_golden_is_a_fixed_point`, and
+`every_golden_round_trips_through_html_with_notes`. `cargo fmt --all --check`
+and `git diff --check` clean.
+
+## `merged_table.rtf` joins the Docling comparison corpus
+
+**What was asked.** Generate a Docling reference reading for
+[merged_table.rtf](test-data/merged_table.rtf) and add it to the comparison
+corpus.
+
+**The reference.** `test-data/golden/regenerate.py` reads the fixture through
+Docling's word-processor backend (RTF is one of the formats that backend
+accepts, beside DOCX and DOC) and writes
+[docling/merged_table.json](test-data/golden/docling/merged_table.json). It is
+Docling's own `export_to_dict()`, with 10 text items and one 4 × 3 table whose
+`North` cell spans two rows and whose `250` cell spans two columns. The
+reference keeps the first row's three `column_header` cells; the heading levels
+are title and two section headers.
+
+**The corpus.** The comparison test discovers references by file, so the new
+JSON is enough for `merged_table.rtf` to be converted and compared on every run;
+`corpus_input` already looks beside the corpus for a fixture. Its first run
+reports **0/0 pages, text agreement 0.953**, three headings kept and no merged
+blocks; the table-cell check counts none of the cells, because each cell's
+anchor is shorter than its twelve-character floor. A new
+`a_word_processor_rtf_conforms_to_the_docling_schema` holds the same output to
+the committed `DoclingDocument` schema, so the fixture does not only agree with
+a reading — it is also a legal document.
+
+**Docs.** The golden README now counts **41** references (37 corpus documents
+and four fixtures) and lists RTF beside PDF, DOCX, XLSX, PPTX, images and
+Markdown as a format Docling reads itself; the main README's compatibility row
+matches.
+
+**Verification.** `DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test
+-p pdfextractor-cli --test docling_golden_test` **28 passed** in 268.99 s, the
+new schema test and the comparison against all 41 references included.
+`cargo fmt --all --check` clean.
+
+## An animated WebP is a page per frame
+
+An animated WebP states its animation in an `ANIM` chunk and paints one `ANMF`
+frame at a time on that canvas, exactly as a GIF draws frames on its logical
+screen. The reader already treated a GIF's frames as pages and a TIFF's
+directories as sheets, but a WebP arriving as the input was one page: the still
+image the header describes, with its later frames left decoding only to
+whoever could demux them. An animation of three printed pages therefore became
+the first page and lost the other two without saying so.
+
+**The reader.** `crates/image-parser` gains `webp_frames`, which opens the file
+through `image`'s own `WebPDecoder` — it already has `image-webp` for stills —
+and returns every frame as its own PNG when `has_animation()` is true. Frames
+are composited on the `ANIM` canvas by the decoder, so a frame that paints only
+part of the canvas keeps what came before it; each is laid on white for the
+reason a GIF's frame is. A still WebP returns nothing, because its one page is
+already the caller's. The GIF and WebP frame-to-PNG work now goes through one
+`picture_of_frame`, so both animations composite transparency on white the same
+way.
+
+**The CLI.** `convert_image` asks for GIF frames and WebP frames, takes
+whichever stack is more than one frame as `animation`, and uses it for both the
+first page's OCR pixels (so recognition never depends on whether leptonica was
+built with WebP support) and the later pages. Each page is the canvas's size at
+the 72 dpi a WebP without a resolution states. A still WebP, a one-frame
+animation and every other image keep the path they had.
+
+**The fixture.** `test-data/make_animation_webp.py` writes
+`test-data/images/turning.webp`: three 480 × 160 pages saying `WEBP ONE`,
+`WEBP TWO` and `WEBP THREE`, saved losslessly with Pillow's `save_all` so every
+frame is a whole page on the canvas. The file declares no resolution, as WebP
+has no density field, so each page is 480 × 160 points at 72 dpi.
+
+**Held by tests.** `an_animated_webp_is_one_picture_per_frame` (image-parser's
+fixture test) reads the canvas as 480 × 160 with no declared dpi, gets three
+PNGs at that size in play order, checks each decodes and carries ink, and pins
+that `scan.webp` yields no animation and a GIF is not read by the WebP path.
+`an_animated_webp_is_a_page_per_frame` (CLI) converts the fixture with
+`--ocr always` and holds the document to three pages at 480 × 160, each showing
+its own frame's words and no other frame's.
+
+**Verification.** `cargo test -p pdfextractor-image-parser` **22 + 15** (one new
+fixture test); `cargo test -p pdfextractor-cli --test cli_test` **115** (one
+new, 957 s); `cargo test -p pdfextractor-cli --bins` **37**; `cargo fmt --all --check`
+clean; clippy reports only the lints that were already there.
+
+**Remaining limitations.** A WebP animation's later frames do not consult the
+file's EXIF orientation; the first page still does, and a WebP without a tag
+behaves as every other untagged animation here. Each frame is decoded by
+`image`'s WebP decoder, so a frame whose bitstream that decoder rejects drops
+out rather than failing the document.
+
+## The window names the CLI it is using
+
+**What was asked.** Show which `pdfextractor-cli` binary the window is using,
+next to the formats line. A refreshed formats count says a binary was re-asked,
+but not *which* one; after repointing `PDFEXTRACTOR_CLI` the path was only
+visible once a run started.
+
+**The shell.** [`cli_program`](crates/ui/src/main.rs) returns
+[`AcceptedFormats::program`](crates/ui/src/lib.rs), which resolves the same
+`ProgramSource` the formats are asked through — `locate_cli()` for the window,
+the fixed path for a caller that named one. It is a separate command from the
+format asks, so a formats failure still leaves the binary nameable; it is
+registered beside `input_formats` and `refresh_input_formats`.
+
+**The page.** [index.html](crates/ui/dist/index.html) puts a `Binary` line under
+`.formats-row`, with the path in `#cli-program`; [app.js](crates/ui/dist/app.js)
+loads it after each format ask (`loadCliProgram`, awaited by `loadFormats` and by
+the refresh's `finally`) and sets both its text and its title, so a long path is
+readable without widening the form. A failure to resolve is shown on the line in
+the fault colour rather than leaving `resolving…` behind.
+[style.css](crates/ui/dist/style.css) lets the path wrap anywhere.
+[mock.js](crates/ui/dist/mock.js) names `/usr/local/bin/pdfextractor-cli` before
+the re-ask and a rebuilt `/opt/pdfextractor-dev/pdfextractor-cli` after it, so the
+path moving is exercised in a plain browser too.
+
+**Held by tests.** The re-resolution test
+`a_refresh_re_resolves_the_cli_named_by_the_environment` now also checks
+`program()` before and after the variable moves, so the displayed path is tied to
+the same environment the formats follow. The page's self-test report gains
+`cli="..."`, taken from the rendered `#cli-program`, so the line is checked
+through the real webview rather than only in the mock.
+
+**Verification.** `cargo test -p pdfextractor-ui --lib` **101 passed**;
+`cargo check -p pdfextractor-ui --all-targets` clean; `node --check` on `app.js`
+and `mock.js`; `cargo fmt --all --check` and `git diff --check` clean. In the
+mock page the line read `/usr/local/bin/pdfextractor-cli`, and **Ask again**
+redrew it as `/opt/pdfextractor-dev/pdfextractor-cli` with the formats growing
+from 4 to 5. In the real window `pdfextractor-ui --selftest test-data/brief.docx`
+exited 0 and reported `formats=33` and
+`cli="/home/bob/GitHub/PdfExtractor/target/debug/pdfextractor-cli"`, the path the
+run's own command line carried.
+
+**Remaining limitations.** A conversion already in flight keeps the binary it
+started; the line names the binary a run would use now, and moves on the next
+format ask rather than on an event from the run.
+
+## The page groups the formats like the chooser
+
+**What was asked.** Show the families on the page too, so the formats line is
+grouped under the same headings as the **File…** chooser. The chooser already
+grouped by the CLI's `families`; the page printed one flat list, so a person
+reading it could not tell which heading a reader belonged to without opening the
+dialog.
+
+**The answer.** `Formats` and `Family` in
+[crates/ui/src/lib.rs](crates/ui/src/lib.rs) now serialize for the page, with
+`inputFormats` as the nested field. `input_formats` and `refresh_input_formats`
+return the whole answer — the flat `names` and the ordered `families` — rather
+than only `names`, so the page and the native chooser are built from one value
+and cannot draw different headings. `cli_program` is unchanged. A new unit test,
+`the_format_answer_serializes_with_the_pages_family_headings`, pins the camelCase
+shape the page reads.
+
+**The page.** [index.html](crates/ui/dist/index.html) keeps the summary and binary
+in a `.formats-text` column beside **Ask again**, then adds an empty `<dl
+id="format-families">`. [app.js](crates/ui/dist/app.js) draws one `<div>` per
+family with a `<dt>` heading and a `<dd>` of its formats; `showFormats` uses the
+same function for the load and the re-ask, so the two cannot disagree. The
+summary reads `Reads 33 format(s) in 7 families`; a failure clears the old rows
+as well as saying why, and a re-ask clears them while it waits rather than
+leaving the previous binary's headings beside an asking line.
+[style.css](crates/ui/dist/style.css) lays the headings in a fixed-width column
+and wraps long format lists. [mock.js](crates/ui/dist/mock.js) now answers with
+four families and adds `.webp` to *Pictures* on the re-ask.
+
+**Verification.** `cargo test -p pdfextractor-ui --lib` **102 passed** (one new);
+`cargo check -p pdfextractor-ui --all-targets` and `cargo fmt --all --check`
+clean; `node --check` on `app.js` and `mock.js`. In the mock page the list drew
+`PDF .pdf`, `Word .docx`, `Works/WordPerfect .wpd`, `Pictures .png`, and after
+**Ask again** the summary became `Reads 5 format(s) in 4 families` with
+`Pictures .png, .webp`. In the real window
+`pdfextractor-ui --selftest test-data/brief.docx` exited 0 and reported
+`formats=33` with
+`families="PDF|Word|Excel|PowerPoint|Works/WordPerfect|Text and markup|Pictures"`,
+from the rendered `<dt>`s.
+
+**Remaining limitations.** The page trusts the CLI's families as it trusted its
+names; the integration test already holds the families and the flat list to the
+same set, which is what keeps a format from disappearing between the summary and
+the groups.
+
+## The head facts are pinned by an HTML golden
+
+**What was asked.** Add a test fixture page with social cards and cover it in the
+HTML golden suite, so the head facts are pinned in the committed goldens too.
+
+The description, canonical URL and Open Graph/Twitter cards already had unit and
+round-trip tests, but no committed golden carried them: a change that dropped a
+card from the writer would be caught by `cli_test`, while the byte-level HTML
+suite never saw a page whose head said anything.
+
+**The fixture.** [test-data/social_cards.html](test-data/social_cards.html) is a
+short page whose body is a title and one paragraph, and whose head states a
+description, a canonical URL with a query (`&amp;` in the source), Open Graph
+title/type/URL, an image followed by its width, height and alt, and a Twitter
+card/title/image. The entities exercise decoding on the way in and escaping on
+the way out; the image's width, height and alt follow it so the golden pins that
+the card order is kept.
+
+**The suite.** [formats_golden_test.rs](crates/cli/tests/formats_golden_test.rs)
+adds the fixture to `CASES` and its input lookup, so all three renderings are
+committed: [html/social_cards.html](test-data/golden/html/social_cards.html),
+[text/social_cards.txt](test-data/golden/text/social_cards.txt) and
+[yaml/social_cards.yaml](test-data/golden/yaml/social_cards.yaml). The new
+`the_social_cards_golden_pins_the_head_facts` reads the committed HTML golden and
+requires every description, canonical, Open Graph and Twitter line in order,
+escaped, and absent from the body — so a regeneration that quietly loses the
+head fails rather than matching itself. The existing
+`every_html_golden_is_a_fixed_point` then reads the new page back and requires the
+same head bytes again.
+
+**Verification.** `cargo test -p pdfextractor-cli --test formats_golden_test`
+**11 passed** (one new); the three new goldens were generated with the same
+`--to html/text/yaml --ocr never` command the suite uses, then the non-updating
+suite compared them byte for byte. `cargo fmt --all --check` and `git diff --check`
+clean.
+
+## A picture in a Word table cell is the document's picture too
+
+**What was asked.** Read a picture a Word document states inside a table cell.
+
+**What the fixture found.** The PPTX reader already walked into the group and took
+its picture; the DOCX reader did not. A cell's paragraph was written into the cell
+and the cell into the table, and the pictures that paragraph carried were dropped
+on the way, so `mc_fallback_pictures.docx` gave one picture where the file stated
+two. The real corpus agrees the loss was real:
+[test-data/real/drawing.docx](test-data/real/drawing.docx) states twelve pictures
+inside its table cells, and this reader reported none of them.
+
+**The reader.** [parser.rs](crates/docx-parser/src/parser.rs) `finish_paragraph`
+now materialises a cell's pictures into the body where the cell was read, just
+before the table item the cell belongs to. A table of this model is rows of text,
+so a cell has nowhere to hold a picture; the picture therefore stands beside the
+table it belongs to rather than being left out of the document the file describes.
+A unit test (`a_picture_in_a_table_cell_stands_before_its_table`) pins the order
+the body comes out in: the sentence before, the picture, the table, the sentence
+after.
+
+**The corpus baseline.** Reading a cell's picture moves the Compare baseline,
+so it was accepted with the diff as the argument
+(`CORPUS_BASELINE=update cargo test -p pdfextractor-ui --test
+corpus_report_test`): `drawing` gains eleven rows (271 → 282) and eleven rows
+only we have (29 → 40), which are the pictures its cells state and Docling's
+reference does not. `merged_table` joins the baseline as a document the corpus
+gained. `FloatingPictures` reads 99.2% → 99.1% on character agreement, which
+this change cannot have caused — its LibreOffice conversion states no picture in
+a cell — so that drift is the tree's other pending reader work carried in the
+baseline rather than hidden.
+
+**Remaining limitation.** A picture in a cell is not placed *in* the cell by the
+model, which carries cell text only: it travels in the body immediately before its
+table. A reader that needs to know which cell held a picture cannot ask this
+model yet.

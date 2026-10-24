@@ -1,0 +1,5 @@
+Names a picture keeps
+
+A file name may carry a space and an ampersand.
+
+And the page keeps the name it came with.

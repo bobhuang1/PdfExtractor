@@ -21,6 +21,16 @@ pub struct PlacedImage {
     pub image: PageImage,
 }
 
+/// One `/Link` annotation: the rectangle it is drawn over, and the URI it
+/// opens — an external target as written, or a `#page=N` fragment for an
+/// internal destination.
+#[derive(Debug, Clone)]
+pub struct PageLink {
+    /// `[l, t, r, b]`, top-left origin, already turned with the page.
+    pub rect: [f64; 4],
+    pub uri: String,
+}
+
 /// A page with its extracted text spans and any embedded images.
 #[derive(Debug, Clone)]
 pub struct ExtractedPage {
@@ -38,6 +48,13 @@ pub struct ExtractedPage {
     /// an underline — as `[l, t, r, b]`, top-left origin. A page draws one above a
     /// footnote, and it is what tells a note at the foot of a page from body text.
     pub rules: Vec<[f64; 4]>,
+    /// The page's own `/Rotate`, in degrees clockwise (0, 90, 180 or 270).
+    /// Every box above is already turned to match it; the raw pixels of
+    /// `images` are not — they are the bytes the file holds — which is what
+    /// an OCR pass over a rotated page has to be told.
+    pub rotation: i32,
+    /// The page's `/Link` annotations: the box each covers and where it opens.
+    pub links: Vec<PageLink>,
 }
 
 #[derive(Debug)]
@@ -395,6 +412,136 @@ impl PdfDocument {
         }
     }
 
+    /// The page's `/Link` annotations.
+    ///
+    /// `/A` `/S` `/URI` gives an external target as written; a `/Dest` (or a
+    /// `/GoTo` action's `/D`) is an internal jump, kept as the `#page=N`
+    /// fragment a reader can follow. A *named* destination cannot be resolved
+    /// without the document's name tree and is left out rather than guessed
+    /// at. Rectangles are flipped out of PDF's bottom-left origin here; the
+    /// caller turns them with the page's rotation, as it does a figure.
+    fn page_links(
+        &self,
+        page: &HashMap<String, PdfValue>,
+        page_nodes: &[&PdfValue],
+        page_height: f64,
+    ) -> Vec<PageLink> {
+        let Some(annots) = page
+            .get("Annots")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.as_array())
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in annots {
+            let Some(annot) = self.resolve(entry) else {
+                continue;
+            };
+            if annot
+                .get("Subtype")
+                .and_then(|v| self.resolve(v))
+                .and_then(|v| v.as_name())
+                != Some("Link")
+            {
+                continue;
+            }
+            // Flag bit 2 is “hidden”: a link that is not drawn is not a link a
+            // reader can see or press, and its rectangle covers text that
+            // does not go anywhere.
+            let hidden = annot
+                .get("F")
+                .and_then(|v| self.resolve(v))
+                .and_then(|v| v.as_number())
+                .is_some_and(|flags| (flags as i64) & 2 != 0);
+            if hidden {
+                continue;
+            }
+            let Some(uri) = self.link_uri(annot, page_nodes) else {
+                continue;
+            };
+            let Some(rect) = self.link_rect(annot, page_height) else {
+                continue;
+            };
+            out.push(PageLink { rect, uri });
+        }
+        out
+    }
+
+    /// Where a link annotation points.
+    fn link_uri(&self, annot: &PdfValue, page_nodes: &[&PdfValue]) -> Option<String> {
+        if let Some(action) = annot.get("A").and_then(|v| self.resolve(v)) {
+            match action
+                .get("S")
+                .and_then(|v| self.resolve(v))
+                .and_then(|v| v.as_name())
+            {
+                Some("URI") => {
+                    return match action.get("URI").and_then(|v| self.resolve(v)) {
+                        Some(PdfValue::String(uri)) => Some(uri.clone()),
+                        _ => None,
+                    };
+                }
+                Some("GoTo") => {
+                    return action
+                        .get("D")
+                        .and_then(|v| self.resolve(v))
+                        .and_then(|dest| self.dest_page(dest, page_nodes))
+                        .map(|page| format!("#page={page}"));
+                }
+                // Any other action (a named action, a launch, a script) does
+                // not open a URI, and inventing one would fabricate a target.
+                _ => return None,
+            }
+        }
+        // No `/A`: some producers put the destination on the annotation itself.
+        annot
+            .get("Dest")
+            .and_then(|v| self.resolve(v))
+            .and_then(|dest| self.dest_page(dest, page_nodes))
+            .map(|page| format!("#page={page}"))
+    }
+
+    /// The page number (1-based) a destination names.
+    ///
+    /// An array destination opens with the page it points at — usually a
+    /// reference, occasionally a bare name or a string a name tree would
+    /// resolve; the latter two are left for [`Self::dest_page`] to refuse.
+    fn dest_page(&self, dest: &PdfValue, page_nodes: &[&PdfValue]) -> Option<i32> {
+        let target = dest.as_array()?.first()?;
+        let resolved = self.resolve(target)?;
+        for (index, node) in page_nodes.iter().enumerate() {
+            let Some(node) = self.resolve(node) else {
+                continue;
+            };
+            if std::ptr::eq(node, resolved) || node == resolved {
+                return Some((index + 1) as i32);
+            }
+        }
+        None
+    }
+
+    /// A link annotation's `/Rect`, flipped into top-left origin.
+    fn link_rect(&self, annot: &PdfValue, page_height: f64) -> Option<[f64; 4]> {
+        let coords: Vec<f64> = annot
+            .get("Rect")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.as_array())?
+            .iter()
+            .filter_map(|v| self.resolve(v).and_then(|v| v.as_number()))
+            .collect();
+        if coords.len() != 4 {
+            return None;
+        }
+        let (x0, y0, x1, y1) = (coords[0], coords[1], coords[2], coords[3]);
+        Some([
+            x0.min(x1),
+            page_height - y0.max(y1),
+            x0.max(x1),
+            page_height - y0.min(y1),
+        ])
+    }
+
     /// Extract every page's text together with its size.
     pub fn extract(&self) -> Vec<ExtractedPage> {
         let mut page_nodes: Vec<&PdfValue> = Vec::new();
@@ -467,6 +614,27 @@ impl PdfDocument {
                 }
             }
 
+            // `/Rotate` turns the page clockwise before the viewer shows it
+            // (PDF 1.7, 7.7.3) and is inheritable like `/MediaBox`. The
+            // content stream's coordinates are unrotated, so the page is
+            // turned here — once — and everything downstream sees the page
+            // as displayed.
+            let rotation = self
+                .inherited(dict, "Rotate")
+                .and_then(|v| self.resolve(v))
+                .and_then(|v| v.as_number())
+                .map(|degrees| {
+                    let snapped = (degrees.round() as i32).rem_euclid(360);
+                    // The spec requires a multiple of 90; anything else is
+                    // ignored rather than guessed at.
+                    if snapped % 90 == 0 {
+                        snapped
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+
             let fonts = self.page_fonts(dict);
             let resources = self
                 .inherited(dict, "Resources")
@@ -499,15 +667,48 @@ impl PdfDocument {
                 .collect();
             let rules = content.rules;
 
+            // A `/Link` annotation is a fact about the page, not about its
+            // content stream, so it is read from the page dict and flipped out
+            // of PDF's bottom-left origin here.
+            let mut links = self.page_links(dict, &page_nodes, height);
+
+            let mut spans = content.spans;
+            let mut placed_images = placed_images;
+            let mut figures: Vec<[f64; 4]> = figures;
+            let mut rules = rules;
+            if rotation != 0 {
+                for span in &mut spans {
+                    span.bbox = turn_box(span.bbox, rotation, width, height);
+                    // The run no longer reads along the page's own reading
+                    // direction — it is sideways text now, and layout keeps
+                    // such runs out of the horizontal lines it builds.
+                    span.rotated = true;
+                }
+                for placed in &mut placed_images {
+                    placed.bbox = turn_box(placed.bbox, rotation, width, height);
+                }
+                for bbox in figures.iter_mut().chain(rules.iter_mut()) {
+                    *bbox = turn_box(*bbox, rotation, width, height);
+                }
+                for link in &mut links {
+                    link.rect = turn_box(link.rect, rotation, width, height);
+                }
+                if rotation == 90 || rotation == 270 {
+                    std::mem::swap(&mut width, &mut height);
+                }
+            }
+
             pages.push(ExtractedPage {
                 page_no: (idx + 1) as i32,
                 width,
                 height,
-                spans: content.spans,
+                spans,
                 images: images.into_values().collect(),
                 placed_images,
                 figures,
                 rules,
+                rotation,
+                links,
             });
         }
 
@@ -971,12 +1172,35 @@ impl PdfDocument {
             });
         }
         if filters.iter().any(|f| f == "JPXDecode") {
-            return Some(PageImage {
-                width,
-                height,
-                data: raw.clone(),
-                mime: "image/jp2",
-            });
+            // A JPEG 2000 is decoded rather than passed on. Docling cannot name
+            // `image/jp2` in an image reference, so a page whose picture is one
+            // used to come out as the box with no image that started this line
+            // of work; the pixels are the codestream's own — `/Width` and
+            // `/Height` are only what the file says they are — and the picture
+            // leaves as a PNG. The stream may be either of the two things a
+            // `.jp2` file is made of, the container with its boxes or the bare
+            // codestream, and the image reader takes both.
+            match pdfextractor_image_parser::transcode_to_png(raw) {
+                Some(picture) => {
+                    return Some(PageImage {
+                        width: picture.width,
+                        height: picture.height,
+                        data: picture.data,
+                        mime: "image/png",
+                    })
+                }
+                // A codestream this build cannot decode is still a picture the
+                // page drew; its own bytes are carried rather than dropping it.
+                None => {
+                    tracing::debug!("a JPEG 2000 image did not decode; carrying it as stored");
+                    return Some(PageImage {
+                        width,
+                        height,
+                        data: raw.clone(),
+                        mime: "image/jp2",
+                    });
+                }
+            }
         }
 
         let data = self.decode_stream(value);
@@ -1230,6 +1454,19 @@ fn terminator_follows(data: &[u8], at: usize) -> bool {
         .is_some_and(|rest| rest.starts_with(b"endstream"))
 }
 
+/// `[l, t, r, b]` on a `width × height` page, turned clockwise by `degrees`
+/// and still measured top-left — the same turn the viewer gives the page
+/// before showing it (`/Rotate`).
+fn turn_box(bbox: [f64; 4], degrees: i32, width: f64, height: f64) -> [f64; 4] {
+    let [l, t, r, b] = bbox;
+    match degrees {
+        90 => [height - b, l, height - t, r],
+        180 => [width - r, height - b, width - l, height - t],
+        270 => [b, width - r, t, width - l],
+        _ => bbox,
+    }
+}
+
 /// Whether box `a` covers most of box `b`.
 ///
 /// Used to drop the rectangle a producer may stroke around an image, which is
@@ -1413,6 +1650,26 @@ mod tests {
             hex,
         );
         assert_eq!(document().decode_stream(&stream), content);
+    }
+
+    /// A JPEG 2000 the decoder cannot read is still a picture the page drew:
+    /// its own bytes are carried rather than the picture being dropped, which
+    /// is the same choice a Word or PowerPoint package makes for a JPEG 2000
+    /// its decoder does not know.
+    #[test]
+    fn an_unreadable_jpx_image_keeps_its_bytes() {
+        let stream = PdfValue::Stream(
+            dict(&[
+                ("Width", PdfValue::Integer(64)),
+                ("Height", PdfValue::Integer(48)),
+                ("Filter", PdfValue::Name("JPXDecode".to_string())),
+            ]),
+            b"not a codestream".to_vec(),
+        );
+        let image = document().decode_image_xobject(&stream).expect("a picture");
+        assert_eq!(image.mime, "image/jp2");
+        assert_eq!(image.data, b"not a codestream");
+        assert_eq!((image.width, image.height), (64, 48));
     }
 
     /// A stream with no predictor must come through untouched: `/DecodeParms`
