@@ -1,0 +1,21 @@
+[package]
+name = "pdfextractor-md-exporter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# A picture can be carried inside the page as a base64 `data:` URI instead of
+# being referenced beside it (`--image-export-mode embedded`).
+base64.workspace = true
+pdfextractor-core = { path = "../core" }
+# The HTML writer typesets an equation as MathML, keeping its LaTeX in an
+# `<annotation>` so the page reads back as the equation it was.
+pulldown-latex.workspace = true
+# The YAML writer goes through the JSON value so its keys come out in the
+# order `--to json` writes them (serde_json's map is sorted).
+serde_json.workspace = true
+serde_yaml.workspace = true

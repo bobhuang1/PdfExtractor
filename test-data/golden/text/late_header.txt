@@ -1,0 +1,9 @@
+Quarterly report
+
+Figures are provisional.
+
+| Month          | Total |
+|----------------|-------|
+| Monthly totals |       |
+| January        | 10    |
+| February       | 12    |
