@@ -2917,31 +2917,69 @@ fn a_picture_in_an_alternate_content_choice_is_the_drawing_not_its_fallback() {
 
 /// A picture can be stated for an older reader only: an `mc:AlternateContent`
 /// with no `mc:Choice`, only `mc:Fallback`. The fallback is then the picture,
-/// not a duplicate of one beside it. Each fixture holds one 60 × 36 orange
-/// raster that way, with a sentence before and after it.
+/// not a duplicate of one beside it. Each fixture states two 60 × 36 orange
+/// rasters that way, with a sentence before and after each: one in the body, and
+/// one inside a container the reader has to walk into rather than meet in the
+/// body — a table's cell in the DOCX, a group on the slide — so alternate content
+/// is read wherever the picture stands and not only where a paragraph of the body
+/// starts.
 ///
-/// The test first holds each package to that shape — one `mc:AlternateContent`,
-/// one `mc:Fallback`, no `mc:Choice`, and the picture inside the fallback —
-/// because a fixture that grew a choice would otherwise pass by testing it — and
-/// then to the conversion: one 60 × 36 `image/png` written beside the JSON, the
-/// orange raster's own pixels, one `<img>` in the render, and each sentence once.
+/// The test first holds each package to that shape — two `mc:AlternateContent`s,
+/// two `mc:Fallback`s, no `mc:Choice`, one of them in the body and one in the
+/// container, each fallback carrying its picture — because a fixture that grew a
+/// choice would otherwise pass by testing it — and then to the conversion: two
+/// 60 × 36 `image/png`s written beside the JSON with the orange raster's own
+/// pixels, two `<img>`s in the render, the container's picture read between the
+/// sentences that frame the container, and each sentence once.
 #[test]
 fn a_fallback_only_picture_is_the_fallback() {
+    /// Where a fixture's second picture is stated: the container the reader has
+    /// to walk into, rather than a paragraph of the body.
+    struct PictureIn {
+        fixture: &'static str,
+        /// The part the pictures are stated in.
+        drawing: &'static str,
+        /// What a fallback branch names its picture with.
+        fallback_copy: &'static str,
+        /// The element the second fallback is written inside, and its close: a
+        /// table's cell in the DOCX, a group on the slide. The first picture is
+        /// outside it, in the body.
+        open: &'static str,
+        close: &'static str,
+        /// What the fixture's own sentences call the container.
+        name: &'static str,
+    }
+
     let ws = Workspace::new("mc-fallback");
-    for (fixture, drawing, fallback_copy) in [
-        (
-            "mc_fallback_pictures.docx",
-            "word/document.xml",
-            "v:imagedata",
-        ),
-        (
-            "mc_fallback_pictures.pptx",
-            "ppt/slides/slide1.xml",
-            "<p:pic>",
-        ),
+    for container in [
+        PictureIn {
+            fixture: "mc_fallback_pictures.docx",
+            drawing: "word/document.xml",
+            fallback_copy: "v:imagedata",
+            open: "<w:tc>",
+            close: "</w:tc>",
+            name: "table",
+        },
+        PictureIn {
+            fixture: "mc_fallback_pictures.pptx",
+            drawing: "ppt/slides/slide1.xml",
+            fallback_copy: "<p:pic>",
+            open: "<p:grpSp>",
+            close: "</p:grpSp>",
+            name: "group",
+        },
     ] {
+        let PictureIn {
+            fixture,
+            drawing,
+            fallback_copy,
+            open,
+            close,
+            name,
+        } = container;
         let input = repository_root().join("test-data").join(fixture);
         let bytes = std::fs::read(&input).expect("the office fixture");
+        assert_picture_parts_are_declared_and_related(&package_parts(&bytes, fixture), fixture);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
             .unwrap_or_else(|e| panic!("{fixture}: not a ZIP: {e}"));
         let mut drawing_xml = String::new();
@@ -2956,28 +2994,50 @@ fn a_fallback_only_picture_is_the_fallback() {
 
         assert_eq!(
             drawing_xml.matches("<mc:AlternateContent>").count(),
-            1,
-            "{fixture}: the picture is not stated as alternate content"
+            2,
+            "{fixture}: the two pictures are not stated as alternate content"
         );
         assert_eq!(
             drawing_xml.matches("<mc:Choice>").count(),
             0,
-            "{fixture}: the fallback has a choice beside it, so it is not fallback-only"
+            "{fixture}: a choice is stated beside a fallback, so the pictures are not \
+             fallback-only"
         );
         assert_eq!(
             drawing_xml.matches("<mc:Fallback>").count(),
-            1,
-            "{fixture}: the fallback is not the picture's only branch"
+            2,
+            "{fixture}: the fallback is not each picture's only branch"
         );
-        let fallback = drawing_xml
-            .split("<mc:Fallback>")
-            .nth(1)
-            .and_then(|rest| rest.split("</mc:Fallback>").next())
-            .expect("a fallback branch");
-        assert!(
-            fallback.contains(fallback_copy),
-            "{fixture}: the fallback does not carry the picture"
-        );
+
+        // One picture is the body's own; the other is stated inside the
+        // container, where a reader that stops at the body's paragraphs never
+        // reaches it.
+        let (before_the_container, rest) = drawing_xml
+            .split_once(open)
+            .unwrap_or_else(|| panic!("{fixture}: no {open} holds the second picture"));
+        let inside_the_container = rest
+            .split_once(close)
+            .map(|(inside, _)| inside)
+            .unwrap_or_else(|| panic!("{fixture}: {open} is never closed"));
+        for (place, xml) in [
+            ("in the body".to_string(), before_the_container),
+            (format!("in the {name}"), inside_the_container),
+        ] {
+            assert_eq!(
+                xml.matches("<mc:AlternateContent>").count(),
+                1,
+                "{fixture}: the picture {place} is not stated as alternate content"
+            );
+            let fallback = xml
+                .split("<mc:Fallback>")
+                .nth(1)
+                .and_then(|rest| rest.split("</mc:Fallback>").next())
+                .unwrap_or_else(|| panic!("{fixture}: the picture {place} has no fallback"));
+            assert!(
+                fallback.contains(fallback_copy),
+                "{fixture}: the fallback {place} does not carry the picture"
+            );
+        }
 
         let output = ws.join(&format!("{fixture}.json"));
         run_ok(&[
@@ -2997,39 +3057,42 @@ fn a_fallback_only_picture_is_the_fallback() {
         let pictures = doc["pictures"].as_array().expect("a pictures list");
         assert_eq!(
             pictures.len(),
-            1,
-            "{fixture}: the fallback is the document's one picture: {pictures:#?}"
+            2,
+            "{fixture}: the body's fallback and the one in the {name} are the document's \
+             pictures: {pictures:#?}"
         );
-        let image = &pictures[0]["image"];
-        assert_eq!(
-            (
-                image["size"]["width"].as_f64(),
-                image["size"]["height"].as_f64()
-            ),
-            (Some(60.0), Some(36.0)),
-            "{fixture}: the fallback is not its own size: {image:#?}"
-        );
-        assert_eq!(
-            image["mimetype"], "image/png",
-            "{fixture}: the fallback is not a raster: {image:#?}"
-        );
-        let uri = image["uri"].as_str().expect("an image uri");
-        let written = std::fs::read(ws.join(uri)).expect("the picture written beside the JSON");
-        let raster = image::load_from_memory(&written)
-            .expect("the fallback decodes")
-            .to_rgba8();
-        assert_eq!(raster.dimensions(), (60, 36), "{fixture}: {uri}");
-        assert_eq!(
-            raster.get_pixel(0, 0).0,
-            [224, 140, 40, 255],
-            "{fixture}: {uri} is not the orange box the fallback carries"
-        );
+        for picture in pictures {
+            let image = &picture["image"];
+            assert_eq!(
+                (
+                    image["size"]["width"].as_f64(),
+                    image["size"]["height"].as_f64()
+                ),
+                (Some(60.0), Some(36.0)),
+                "{fixture}: a fallback is not its own size: {image:#?}"
+            );
+            assert_eq!(
+                image["mimetype"], "image/png",
+                "{fixture}: a fallback is not a raster: {image:#?}"
+            );
+            let uri = image["uri"].as_str().expect("an image uri");
+            let written = std::fs::read(ws.join(uri)).expect("the picture written beside the JSON");
+            let raster = image::load_from_memory(&written)
+                .expect("a fallback decodes")
+                .to_rgba8();
+            assert_eq!(raster.dimensions(), (60, 36), "{fixture}: {uri}");
+            assert_eq!(
+                raster.get_pixel(0, 0).0,
+                [224, 140, 40, 255],
+                "{fixture}: {uri} is not the orange box a fallback carries"
+            );
+        }
 
         let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
         assert_eq!(
             html.matches("<img src=\"").count(),
-            1,
-            "{fixture}: the render does not show the fallback once:\n{html}"
+            2,
+            "{fixture}: the render does not show both fallbacks:\n{html}"
         );
         let texts = doc["texts"].as_array().expect("a text list");
         let words = texts
@@ -3037,13 +3100,42 @@ fn a_fallback_only_picture_is_the_fallback() {
             .map(|item| item["text"].as_str().unwrap_or_default())
             .collect::<Vec<_>>()
             .join(" ");
-        for sentence in ["Before the picture.", "After the picture."] {
+        let before = format!("Before the {name} picture.");
+        let after = format!("After the {name} picture.");
+        for sentence in [
+            "Before the picture.",
+            "After the picture.",
+            before.as_str(),
+            after.as_str(),
+        ] {
             assert_eq!(
                 words.matches(sentence).count(),
                 1,
                 "{fixture}: {sentence} is not the page's once: {words}"
             );
         }
+
+        // The container's picture is read where the container stands: between
+        // the two sentences that frame it, not somewhere else in the document.
+        let order = reading_order(&doc);
+        let position = |reference: String| {
+            order
+                .iter()
+                .position(|item| *item == reference)
+                .unwrap_or_else(|| panic!("{fixture}: {reference} is not in the document"))
+        };
+        let text_at = |sentence: &str| {
+            let index = texts
+                .iter()
+                .position(|item| item["text"].as_str() == Some(sentence))
+                .unwrap_or_else(|| panic!("{fixture}: the document does not state {sentence}"));
+            position(format!("#/texts/{index}"))
+        };
+        let second_picture = position("#/pictures/1".to_string());
+        assert!(
+            text_at(&before) < second_picture && second_picture < text_at(&after),
+            "{fixture}: the {name}'s picture is not read between the sentences around it"
+        );
     }
 }
 
@@ -3476,6 +3568,33 @@ fn assert_picture_parts_are_declared_and_related(parts: &[(String, Vec<u8>)], la
     );
 }
 
+/// The references a document states, in the order a reader reads them: the
+/// body's children, with each chapter group opened where it stands — a slide is
+/// one — so a picture inside a group is placed against the words around the
+/// group rather than missing from the order.
+fn reading_order(doc: &serde_json::Value) -> Vec<String> {
+    fn walk(doc: &serde_json::Value, node: &serde_json::Value, order: &mut Vec<String>) {
+        let Some(children) = node["children"].as_array() else {
+            return;
+        };
+        for child in children {
+            let Some(reference) = child["$ref"].as_str() else {
+                continue;
+            };
+            order.push(reference.to_string());
+            if let Some(index) = reference
+                .strip_prefix("#/groups/")
+                .and_then(|index| index.parse::<usize>().ok())
+            {
+                walk(doc, &doc["groups"][index], order);
+            }
+        }
+    }
+    let mut order = Vec::new();
+    walk(doc, &doc["body"], &mut order);
+    order
+}
+
 /// The hand-written SVG part in the two fixtures is one an office application
 /// accepts, not just a file this project happens to read.
 ///
@@ -3791,21 +3910,25 @@ fn libreoffice_opens_and_resaves_the_mc_svg_fixture_packages() {
 /// picture has no `mc:Choice` at all: only the `mc:Fallback` an older reader
 /// shows. The fallback is therefore the only branch that can supply the 60 × 36
 /// orange raster, and an application that reads it proves the fallback-only
-/// form rather than this reader proving it to itself.
+/// form rather than this reader proving it to itself. Each package states two
+/// that way, one in the body and one inside a container — a table's cell in the
+/// DOCX, a group on the slide — so the container is read by the application too.
 ///
 /// It opens each fixture and writes it back, and what it writes is held to
 ///
-/// * the sentences around the picture: still there, so the package was read
+/// * the sentences around both pictures: still there, so the package was read
 ///   rather than refused;
-/// * the fallback: the application kept it. Its DOCX export writes the derived
-///   `mc:Choice` beside the original `mc:Fallback`, whose `v:imagedata` still
-///   names the picture; its PPTX export writes the fallback as the slide's own
-///   `p:pic`, because Impress has no fallback branch to keep once it has
-///   imported the picture;
+/// * both pictures: the application kept the body's and the container's. Its
+///   DOCX export writes a derived `mc:Choice` beside each original
+///   `mc:Fallback`, whose `v:imagedata` still names the picture, and the second
+///   is still written inside the cell the picture stood in; its PPTX export
+///   writes each fallback as a `p:pic` — the container's inside its `p:grpSp` —
+///   because Impress has no fallback branch to keep once it has imported the
+///   picture;
 /// * the raster: one 60 × 36 `image/png`, declared `image/png` and reached by a
 ///   relationship, with the orange box's pixels — a picture nothing but the
-///   fallback could have supplied; and
-/// * this reader, on what the application wrote: the same one 60 × 36 picture
+///   fallback could have supplied, and one part both pictures are stored as; and
+/// * this reader, on what the application wrote: the same two 60 × 36 pictures
 ///   with the same pixels the fixture gave.
 #[test]
 fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
@@ -3827,9 +3950,19 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
             .find(|(name, _)| name == body_part)
             .map(|(_, data)| String::from_utf8_lossy(data).to_string())
             .unwrap_or_else(|| panic!("{file}: no {body_part} in the re-saved package"));
-        for sentence in ["Before the picture.", "After the picture."] {
+        let framed = if file.ends_with(".docx") {
+            "table"
+        } else {
+            "group"
+        };
+        for sentence in [
+            "Before the picture.".to_string(),
+            "After the picture.".to_string(),
+            format!("Before the {framed} picture."),
+            format!("After the {framed} picture."),
+        ] {
             assert!(
-                body.contains(sentence),
+                body.contains(sentence.as_str()),
                 "{file}: {sentence} did not survive the re-save"
             );
         }
@@ -3837,18 +3970,50 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
         if keeps_a_fallback_branch {
             assert_eq!(
                 body.matches("<mc:Fallback>").count(),
-                1,
-                "{file}: the application did not keep the fallback branch"
+                2,
+                "{file}: the application did not keep both fallback branches"
             );
+            assert_eq!(
+                body.matches("<v:imagedata").count(),
+                2,
+                "{file}: a fallback it kept does not name its picture"
+            );
+            // The picture that stood in a cell is still the cell's rather than
+            // one the application moved out into the body.
+            let cell_start = body
+                .find("<w:tc>")
+                .unwrap_or_else(|| panic!("{file}: the table's cell did not survive the re-save"));
+            let cell = &body[cell_start..];
+            let cell_end = cell
+                .find("</w:tc>")
+                .unwrap_or_else(|| panic!("{file}: the table's cell is never closed"));
             assert!(
-                body.contains("<v:imagedata"),
-                "{file}: the fallback it kept does not name its picture"
+                cell[..cell_end].contains("<v:imagedata"),
+                "{file}: the cell's fallback is not inside the cell the picture stood in"
             );
         } else {
             assert_eq!(
                 body.matches("<p:pic>").count(),
+                2,
+                "{file}: the two fallbacks are not the slide's two pictures"
+            );
+            // The group the second picture stood in was kept, with the picture
+            // still inside it.
+            assert_eq!(
+                body.matches("<p:grpSp>").count(),
                 1,
-                "{file}: the fallback's picture is not the slide's picture"
+                "{file}: the group did not survive the re-save"
+            );
+            let (_, group) = body
+                .split_once("<p:grpSp>")
+                .unwrap_or_else(|| panic!("{file}: no group in the re-saved slide"));
+            let group = group
+                .split_once("</p:grpSp>")
+                .map(|(group, _)| group)
+                .unwrap_or_else(|| panic!("{file}: the group is never closed"));
+            assert!(
+                group.contains("<p:pic>"),
+                "{file}: the group's picture is not inside the group"
             );
         }
 
@@ -4016,6 +4181,783 @@ fn libreoffice_opens_and_resaves_the_svg_embed_fixture_packages() {
         );
         assert_the_reader_agrees(fixture, &before, &after);
     }
+}
+
+/// LibreOffice accepts the `svg_blip_pictures` fixture packages, where Word's
+/// own spelling of an SVG picture is used: a PNG fallback on the picture's
+/// `a:blip`, the drawing in an `asvg:svgBlip` extension beside it. The embedded
+/// SVG fixture proves the other spelling — the drawing as the picture's own
+/// media part — so this asks the application the question that form cannot:
+/// whether a package written the way Word writes one is read as a picture rather
+/// than as its fallback.
+///
+/// It opens each fixture and writes it back, and what it writes is held to
+///
+/// * the fixture itself: both spellings were present before the re-save — the
+///   `svgBlip` extension and the 40 × 24 grey fallback beside it — so a fixture
+///   that lost the extension would not pass by proving the fallback alone;
+/// * the drawing: still a part of its own, byte for byte the fixture's, declared
+///   an `image/svg…` part with a relationship reaching it;
+/// * the raster the application drew from that markup, beside the drawing as the
+///   fallback Word's scheme carries: at least the picture's 40 × 24, with the
+///   diagram's pale panel and blue stroke on it, declared `image/png` and reached
+///   by a relationship; and
+/// * this reader, on what the application wrote: the same one picture, at the
+///   same 144 × 86 frame with the same pixels, so the fallback is a part beside
+///   the drawing rather than a second picture.
+#[test]
+fn libreoffice_opens_and_resaves_the_svg_blip_fixture_packages() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the svgBlip re-save test");
+        return;
+    };
+    let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
+        .expect("the SVG fixture");
+
+    for file in ["svg_blip_pictures.docx", "svg_blip_pictures.pptx"] {
+        let bytes = fixture(file);
+        let ws = Workspace::new(&format!("svg-blip-resave-{file}"));
+
+        // The fixture is Word's form, not the embedded form the other re-save
+        // proves: both the extension and the fallback it sits beside are there
+        // before the application is asked anything.
+        let original = package_parts(&bytes, file);
+        let original_body = original
+            .iter()
+            .find(|(name, _)| name.ends_with("document.xml") || name.ends_with("slide1.xml"))
+            .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+            .unwrap_or_else(|| panic!("{file}: no document body in the fixture"));
+        assert_eq!(
+            original_body.matches("<asvg:svgBlip").count(),
+            1,
+            "{file}: the fixture does not state the drawing as an svgBlip"
+        );
+        let original_rasters = original
+            .iter()
+            .filter(|(name, _)| name.ends_with(".png"))
+            .count();
+        assert_eq!(
+            original_rasters, 1,
+            "{file}: the fixture does not carry the fallback the extension sits beside"
+        );
+
+        let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+
+        let body = parts
+            .iter()
+            .find(|(name, _)| name.ends_with("document.xml") || name.ends_with("slide1.xml"))
+            .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+            .unwrap_or_else(|| panic!("{file}: no document body in the re-saved package"));
+        for sentence in ["Before the picture.", "After the picture."] {
+            assert!(
+                body.contains(sentence),
+                "{file}: {sentence} did not survive the re-save"
+            );
+        }
+
+        let named = |extension: &str| -> Vec<(String, Vec<u8>)> {
+            parts
+                .iter()
+                .filter(|(name, _)| name.ends_with(extension))
+                .cloned()
+                .collect()
+        };
+
+        let svg_parts = named(".svg");
+        assert_eq!(
+            svg_parts.len(),
+            1,
+            "{file}: the re-saved package holds {} SVG parts: {:#?}",
+            svg_parts.len(),
+            parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
+        let (svg_name, svg_bytes) = &svg_parts[0];
+        assert_eq!(
+            svg_bytes.as_slice(),
+            svg.as_slice(),
+            "{file}: {svg_name} is not the drawing the fixture carries"
+        );
+        assert!(
+            declared_as(&parts, svg_name, "image/svg"),
+            "{file}: {svg_name} is not declared as an SVG part"
+        );
+        assert!(
+            reached_by_a_relationship(&parts, svg_name),
+            "{file}: no relationship reaches {svg_name}"
+        );
+
+        let png_parts = named(".png");
+        assert_eq!(
+            png_parts.len(),
+            1,
+            "{file}: expected one raster drawn from the drawing, found {png_parts:#?}"
+        );
+        let (png_name, png_data) = &png_parts[0];
+        let (width, height) =
+            assert_rendered_from_the_diagram(&format!("{file}: {png_name}"), png_data);
+        assert!(
+            width >= 40 && height >= 24,
+            "{file}: {png_name} ({width}x{height}) is smaller than the picture it stands for"
+        );
+        assert!(
+            declared_as(&parts, png_name, "image/png"),
+            "{file}: {png_name} is not declared as an image/png part"
+        );
+        assert!(
+            reached_by_a_relationship(&parts, png_name),
+            "{file}: no relationship reaches {png_name}"
+        );
+
+        let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+        let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+        assert_eq!(
+            before.len(),
+            1,
+            "{file}: the fixture is not the single drawing this expects: {before:#?}"
+        );
+        assert_eq!(
+            after.len(),
+            1,
+            "{file}: the re-saved package gives {} picture(s): {after:#?}",
+            after.len()
+        );
+        assert_eq!(
+            before[0].size,
+            (144.0, 86.0),
+            "{file}: the fixture is not the picture this expects"
+        );
+        assert_the_reader_agrees(file, &before, &after);
+    }
+}
+
+/// LibreOffice keeps an oriented picture's pixels and its EXIF tag, so the
+/// picture this reader turns upright is still the picture the application shows.
+///
+/// The fixture embeds `photos/06_rotated.jpg`, whose stored pixels are 90°
+/// clockwise from the page and whose orientation tag says to turn them back.
+/// Both office applications display it upright without rewriting the pixels;
+/// the question a re-save raises is whether the application preserves that tag
+/// or turns the bytes itself. It opens each fixture and writes it back, and what
+/// it writes is held to
+///
+/// * the picture: one media part with the fixture's own bytes, under the `.jpeg`
+///   name LibreOffice gives it (`image1.jpg` comes back as `image1.jpeg`), so
+///   the tag and the stored pixels are both still there — a re-encode that
+///   rotated the pixels and dropped the tag would fail here;
+/// * that part: declared `image/jpeg` and reached by a relationship, so it is a
+///   picture the document holds rather than a file left beside it; and
+/// * this reader, on what the application wrote: one picture at the 1240 × 1754
+///   upright frame the fixture gives, with the same pixels.
+#[test]
+fn libreoffice_opens_and_resaves_the_oriented_fixture_packages() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the oriented-picture re-save test");
+        return;
+    };
+    let jpeg = std::fs::read(repository_root().join("test-data/photos/06_rotated.jpg"))
+        .expect("the oriented JPEG fixture");
+
+    for file in ["oriented_picture.docx", "oriented_picture.pptx"] {
+        let bytes = fixture(file);
+        let ws = Workspace::new(&format!("oriented-resave-{file}"));
+        let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+        assert_eq!(
+            before.len(),
+            1,
+            "{file}: the fixture is not the single oriented picture this expects: {before:#?}"
+        );
+        assert_eq!(
+            before[0].size,
+            (1240.0, 1754.0),
+            "{file}: the fixture's picture is not upright"
+        );
+
+        let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+        let kept: Vec<&String> = parts
+            .iter()
+            .filter(|(_, data)| data.as_slice() == jpeg.as_slice())
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            kept.len(),
+            1,
+            "{file}: the JPEG picture came back {kept:?} times; the parts are {:#?}",
+            parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
+        let name = kept[0];
+        assert!(
+            declared_as(&parts, name, "image/jpeg"),
+            "{file}: {name} is not declared as an image/jpeg part"
+        );
+        assert!(
+            reached_by_a_relationship(&parts, name),
+            "{file}: no relationship reaches {name}"
+        );
+
+        let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+        assert_the_reader_agrees(file, &before, &after);
+    }
+}
+
+/// LibreOffice accepts the `picture_bullets` fixture packages, where a list
+/// item's marker is a picture rather than a character: `w:numPicBullet` named by
+/// a level in Word, `a:buBlip` on a paragraph in PowerPoint. Each fixture holds
+/// two such bullets — one the drawing behind a grey raster fallback, one a plain
+/// raster — so the re-save asks whether an application keeps a picture that is
+/// not a picture of its own but the ink at the start of a line.
+///
+/// It opens each fixture and writes it back. The two formats answer differently:
+///
+/// * the DOCX keeps the painted bullet: one `w:numPicBullet`, now a VML
+///   `v:imagedata`, at its 24 × 16 raster and red pixels, declared `image/png`
+///   and reached by a relationship. The drawn bullet is gone — the numbering part
+///   still has a bullet level, but no picture for it and no `svgBlip` — which is
+///   stated rather than smoothed over; this reader takes the one picture that is
+///   left, and it is the fixture's painted raster;
+/// * the PPTX keeps both: two `a:buBlip`s and two PNG parts, the drawn one
+///   rasterised by the application at 41 × 25 with the diagram's panel and stroke
+///   on it, and the painted one at its 24 × 16 red pixels, each declared and
+///   reached. This reader takes both, the painted one unchanged and the drawn one
+///   as the application drew it.
+#[test]
+fn libreoffice_opens_and_resaves_the_picture_bullet_fixture_packages() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the picture-bullet re-save test");
+        return;
+    };
+
+    for file in ["picture_bullets.docx", "picture_bullets.pptx"] {
+        let bytes = fixture(file);
+        let ws = Workspace::new(&format!("picture-bullets-resave-{file}"));
+        let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+        assert_eq!(
+            before.len(),
+            2,
+            "{file}: the fixture is not the two picture bullets this expects: {before:#?}"
+        );
+        assert_eq!(
+            before[0].size,
+            if file.ends_with(".docx") {
+                (36.0, 36.0)
+            } else {
+                (48.0, 48.0)
+            },
+            "{file}: the fixture's drawn bullet is not the size its format states"
+        );
+        assert_eq!(
+            before[1].size,
+            (24.0, 16.0),
+            "{file}: the fixture's painted bullet is not its raster's grid"
+        );
+
+        let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+        let body = parts
+            .iter()
+            .find(|(name, _)| name.ends_with("document.xml") || name.ends_with("slide1.xml"))
+            .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+            .unwrap_or_else(|| panic!("{file}: no document body in the re-saved package"));
+        for item in ["Drawn bullet item", "Painted bullet item"] {
+            assert!(
+                body.contains(item),
+                "{file}: {item} did not survive the re-save"
+            );
+        }
+
+        if file.ends_with(".docx") {
+            let numbering = parts
+                .iter()
+                .find(|(name, _)| name == "word/numbering.xml")
+                .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+                .unwrap_or_else(|| panic!("{file}: no numbering part in the re-saved package"));
+            assert_eq!(
+                numbering.matches("<w:numPicBullet ").count(),
+                1,
+                "{file}: expected the one picture bullet the application kept"
+            );
+            assert_eq!(
+                numbering.matches("<w:lvlPicBulletId").count(),
+                1,
+                "{file}: the kept picture bullet is not named by a list level"
+            );
+            assert!(
+                numbering.contains("<v:imagedata"),
+                "{file}: the kept bullet does not name its raster"
+            );
+            assert!(
+                !numbering.contains("<asvg:svgBlip"),
+                "{file}: the application kept the drawn bullet; this note is out of date"
+            );
+
+            let rasters: Vec<(&String, image::RgbaImage)> = parts
+                .iter()
+                .filter(|(name, _)| name.ends_with(".png"))
+                .map(|(name, data)| {
+                    let drawn = image::load_from_memory(data)
+                        .unwrap_or_else(|e| panic!("{file}: {name} does not decode: {e}"))
+                        .to_rgba8();
+                    (name, drawn)
+                })
+                .collect();
+            assert_eq!(
+                rasters.len(),
+                1,
+                "{file}: expected the painted bullet's one raster, found {:?}",
+                rasters.iter().map(|(name, _)| name).collect::<Vec<_>>()
+            );
+            let (name, raster) = &rasters[0];
+            assert_eq!(
+                raster.dimensions(),
+                (24, 16),
+                "{file}: {name} is not its grid"
+            );
+            assert_eq!(
+                raster.get_pixel(12, 8).0,
+                [192, 32, 32, 255],
+                "{file}: {name} is not the painted bullet's red block"
+            );
+            assert!(
+                declared_as(&parts, name, "image/png"),
+                "{file}: {name} is not declared as an image/png part"
+            );
+            assert!(
+                reached_by_a_relationship(&parts, name),
+                "{file}: no relationship reaches {name}"
+            );
+
+            let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+            assert_eq!(
+                after.len(),
+                1,
+                "{file}: the re-saved package gives {} picture(s): {after:#?}",
+                after.len()
+            );
+            assert!(
+                the_same_picture(&before[1], &after[0]),
+                "{file}: the picture the application kept is not the fixture's painted bullet:\n\
+                 re-saved: {:#?}\nfixture: {:#?}",
+                after[0],
+                before[1]
+            );
+        } else {
+            assert_eq!(
+                body.matches("<a:buBlip>").count(),
+                2,
+                "{file}: the application did not keep both picture bullets"
+            );
+
+            let mut drawn = 0;
+            let mut painted = 0;
+            for (name, data) in parts.iter().filter(|(name, _)| name.ends_with(".png")) {
+                let raster = image::load_from_memory(data)
+                    .unwrap_or_else(|e| panic!("{file}: {name} does not decode: {e}"))
+                    .to_rgba8();
+                if raster.dimensions() == (24, 16) {
+                    assert_eq!(
+                        raster.get_pixel(12, 8).0,
+                        [192, 32, 32, 255],
+                        "{file}: {name} is not the painted bullet's red block"
+                    );
+                    painted += 1;
+                } else {
+                    assert_eq!(
+                        raster.dimensions(),
+                        (41, 25),
+                        "{file}: {name} is not the application's drawing of the bullet"
+                    );
+                    assert_rendered_from_the_diagram(&format!("{file}: {name}"), data);
+                    drawn += 1;
+                }
+                assert!(
+                    declared_as(&parts, name, "image/png"),
+                    "{file}: {name} is not declared as an image/png part"
+                );
+                assert!(
+                    reached_by_a_relationship(&parts, name),
+                    "{file}: no relationship reaches {name}"
+                );
+            }
+            assert_eq!(
+                (drawn, painted),
+                (1, 1),
+                "{file}: expected one drawn and one painted bullet, found {drawn} and {painted}"
+            );
+
+            let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+            assert_eq!(
+                after.len(),
+                2,
+                "{file}: the re-saved package gives {} picture(s): {after:#?}",
+                after.len()
+            );
+            assert_eq!(
+                after[0].size,
+                (41.0, 25.0),
+                "{file}: the drawn bullet is not the raster the application wrote"
+            );
+            assert_rendered_from_the_diagram(
+                &format!("{file}: re-saved drawn bullet"),
+                &after[0].bytes,
+            );
+            assert!(
+                the_same_picture(&before[1], &after[1]),
+                "{file}: the painted bullet is not the fixture's:\n\
+                 re-saved: {:#?}\nfixture: {:#?}",
+                after[1],
+                before[1]
+            );
+        }
+    }
+}
+
+/// LibreOffice accepts the PowerPoint half of `blip_fill_shapes`, where a shape
+/// is filled with a picture rather than a colour: the raster on the shape's
+/// `a:blip`, and the drawing in an `asvg:svgBlip` extension beside it. The DOCX
+/// half is not in this test because LibreOffice 24.2 refuses to load it (its log
+/// says `source file could not be loaded` and writes no re-saved package), so the
+/// PPTX is the one that can answer whether an office application keeps a picture
+/// that is part of a shape rather than a picture of its own.
+///
+/// It opens the deck and writes it back, and what it writes is held to
+///
+/// * the sentences around the filled shapes: still there, so the deck was read
+///   rather than refused;
+/// * the drawing: still a part of its own, byte for byte the fixture's, declared
+///   an `image/svg…` part with a relationship reaching it;
+/// * the raster the application drew from that markup beside the drawing, with
+///   the diagram's pale panel and stroke on it, declared `image/png` and reached
+///   by a relationship;
+/// * the orange 60 × 36 raster that fills the second shape, byte for byte the
+///   fixture's, declared and reached; and
+/// * this reader, on what the application wrote: two pictures, one painted from
+///   the drawing and one from the orange raster. The application adds explicit
+///   line and shadow properties to the shapes on export, so this reader paints
+///   them into canvases about 13 pixels larger than the fixture's (301 × 185 and
+///   133 × 85 rather than 288 × 173 and 120 × 72); the fills themselves are what
+///   the re-save asks about, and both are still there.
+#[test]
+fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the picture-fill re-save test");
+        return;
+    };
+    let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
+        .expect("the SVG fixture");
+    let file = "blip_fill_shapes.pptx";
+    let bytes = fixture(file);
+    let ws = Workspace::new("blip-fill-resave");
+
+    // The orange fill is the fixture's own part; read it from the package so the
+    // application's copy can be held to the bytes that went in.
+    let original = package_parts(&bytes, file);
+    let orange = original
+        .iter()
+        .find(|(name, data)| {
+            name.ends_with(".png")
+                && image::load_from_memory(data)
+                    .map(|drawn| drawn.to_rgba8().dimensions() == (60, 36))
+                    .unwrap_or(false)
+        })
+        .map(|(_, data)| data.clone())
+        .unwrap_or_else(|| panic!("{file}: no 60 x 36 raster to fill the second shape"));
+
+    let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+    let body = parts
+        .iter()
+        .find(|(name, _)| name == "ppt/slides/slide1.xml")
+        .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+        .unwrap_or_else(|| panic!("{file}: no slide body in the re-saved package"));
+    for sentence in [
+        "Before the filled shapes.",
+        "Inside the fill.",
+        "After the filled shapes.",
+    ] {
+        assert!(
+            body.contains(sentence),
+            "{file}: {sentence} did not survive the re-save"
+        );
+    }
+
+    let svg_parts: Vec<&String> = parts
+        .iter()
+        .filter(|(name, _)| name.ends_with(".svg"))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        svg_parts.len(),
+        1,
+        "{file}: the re-saved package holds {} SVG parts: {:#?}",
+        svg_parts.len(),
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    let svg_name = svg_parts[0];
+    let svg_bytes = &parts
+        .iter()
+        .find(|(name, _)| name == svg_name)
+        .expect("the SVG part")
+        .1;
+    assert_eq!(
+        svg_bytes.as_slice(),
+        svg.as_slice(),
+        "{file}: {svg_name} is not the drawing the fixture carries"
+    );
+    assert!(
+        declared_as(&parts, svg_name, "image/svg"),
+        "{file}: {svg_name} is not declared as an SVG part"
+    );
+    assert!(
+        reached_by_a_relationship(&parts, svg_name),
+        "{file}: no relationship reaches {svg_name}"
+    );
+
+    let orange_parts: Vec<&String> = parts
+        .iter()
+        .filter(|(_, data)| data.as_slice() == orange.as_slice())
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        orange_parts.len(),
+        1,
+        "{file}: the orange fill came back {orange_parts:?} times; the parts are {:#?}",
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    let orange_name = orange_parts[0];
+    assert!(
+        declared_as(&parts, orange_name, "image/png"),
+        "{file}: {orange_name} is not declared as an image/png part"
+    );
+    assert!(
+        reached_by_a_relationship(&parts, orange_name),
+        "{file}: no relationship reaches {orange_name}"
+    );
+
+    let mut fallbacks = 0;
+    for (name, data) in parts.iter().filter(|(name, _)| name.ends_with(".png")) {
+        if data.as_slice() == orange.as_slice() {
+            continue;
+        }
+        assert_rendered_from_the_diagram(&format!("{file}: {name}"), data);
+        assert!(
+            declared_as(&parts, name, "image/png"),
+            "{file}: {name} is not declared as an image/png part"
+        );
+        assert!(
+            reached_by_a_relationship(&parts, name),
+            "{file}: no relationship reaches {name}"
+        );
+        fallbacks += 1;
+    }
+    assert_eq!(
+        fallbacks, 1,
+        "{file}: expected one raster drawn from the SVG, found {fallbacks}"
+    );
+
+    let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+    let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+    assert_eq!(
+        before.len(),
+        2,
+        "{file}: the fixture is not the two filled shapes this expects: {before:#?}"
+    );
+    assert_eq!(
+        after.len(),
+        2,
+        "{file}: the re-saved package gives {} picture(s): {after:#?}",
+        after.len()
+    );
+    assert_rendered_from_the_diagram(&format!("{file}: re-saved drawn fill"), &after[0].bytes);
+    let painted = after[1].decoded().expect("the painted fill is a raster");
+    assert_eq!(
+        painted
+            .get_pixel(painted.width() / 2, painted.height() / 2)
+            .0,
+        [224, 140, 40, 255],
+        "{file}: the second shape is not filled with the orange raster"
+    );
+}
+
+/// LibreOffice accepts the `worksheet_pictures` workbook, where each sheet's
+/// drawing names its own media. The workbook is the fixture of a second package
+/// format, and of four encodings in one package: a BMP, a GIF, a PNG and a JPEG,
+/// with the BMP drawn on a second sheet as well.
+///
+/// It opens the workbook and writes it back, and what it writes is held to
+///
+/// * each picture: still a media part with the fixture's own bytes — the BMP and
+///   GIF carried through, the PNG and JPEG likewise — so the application read
+///   all four encodings rather than dropping the ones it cannot draw;
+/// * each part declared its `image/…` type and reached by a relationship, so the
+///   sheets hold them as pictures rather than leaving files in the package;
+/// * both sheets' drawings: `drawing1.xml` and `drawing2.xml` are still there, so
+///   the second sheet's picture was not lost with the first one; and
+/// * this reader, on what the application wrote: the same five pictures — four on
+///   the first sheet in their order, and the BMP again on the second — at the
+///   same sizes and with the same pixels.
+#[test]
+fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the worksheet-picture re-save test");
+        return;
+    };
+    let file = "worksheet_pictures.xlsx";
+    let bytes = fixture(file);
+    let ws = Workspace::new("worksheet-pictures-resave");
+    let source = [
+        (fixture("images/chart.bmp"), "image/bmp"),
+        (fixture("images/chart.gif"), "image/gif"),
+        (fixture("invoice_scan.png"), "image/png"),
+        (fixture("images/scan.jpg"), "image/jpeg"),
+    ];
+
+    let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+    assert_eq!(
+        before.len(),
+        5,
+        "{file}: the fixture is not the five pictures this expects: {before:#?}"
+    );
+
+    let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+    for (data, mime) in &source {
+        let kept: Vec<&String> = parts
+            .iter()
+            .filter(|(_, part)| part.as_slice() == data.as_slice())
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            kept.len(),
+            1,
+            "{file}: the {mime} picture came back {kept:?} times; the parts are {:#?}",
+            parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
+        let name = kept[0];
+        assert!(
+            declared_as(&parts, name, mime),
+            "{file}: {name} is not declared as {mime}"
+        );
+        assert!(
+            reached_by_a_relationship(&parts, name),
+            "{file}: no relationship reaches {name}"
+        );
+    }
+
+    let media = parts
+        .iter()
+        .filter(|(name, _)| name.starts_with("xl/media/"))
+        .count();
+    assert_eq!(
+        media,
+        4,
+        "{file}: expected the four media parts, found {media}: {:#?}",
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for drawing in ["xl/drawings/drawing1.xml", "xl/drawings/drawing2.xml"] {
+        assert!(
+            parts.iter().any(|(name, _)| name == drawing),
+            "{file}: the re-saved workbook has no {drawing}"
+        );
+    }
+
+    let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+    assert_the_reader_agrees(file, &before, &after);
+}
+
+/// LibreOffice keeps `headerPic.docx`'s only picture, which lives in the
+/// document's header rather than in its body — and writes it into a second
+/// header as well. The real-world fixture is the one place a picture is reached
+/// through a separate header part instead of the document part, so the re-save
+/// asks whether an application keeps that part and its relationship.
+///
+/// It opens the document and writes it back, and what it writes is held to
+///
+/// * the picture: one media part with the fixture's own JPEG bytes, declared
+///   `image/jpeg` and reached by a relationship from a header part — the body
+///   never names it;
+/// * the header parts: more than one, which is the application writing the
+///   header it read beside another; and
+/// * this reader, on what the application wrote: two pictures at the fixture's
+///   80 × 80 frame and with its pixels, the original and the copy. The
+///   duplication is stated rather than smoothed over: an application that writes
+///   only the one header would fail here, which is the moment to say the note is
+///   out of date.
+#[test]
+fn libreoffice_opens_and_resaves_the_header_picture_fixture() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the header-picture re-save test");
+        return;
+    };
+    let file = "headerPic.docx";
+    let bytes = std::fs::read(repository_root().join("test-data/real/headerPic.docx"))
+        .expect("the header-picture fixture");
+    let ws = Workspace::new("header-picture-resave");
+
+    let original = package_parts(&bytes, file);
+    let source = original
+        .iter()
+        .find(|(name, _)| name.starts_with("word/media/"))
+        .map(|(_, data)| data.clone())
+        .unwrap_or_else(|| panic!("{file}: the fixture carries no media part"));
+    let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
+    assert_eq!(
+        before.len(),
+        1,
+        "{file}: the fixture is not the single header picture this expects: {before:#?}"
+    );
+    assert_eq!(
+        before[0].size,
+        (80.0, 80.0),
+        "{file}: the header picture is not its fixture's frame"
+    );
+
+    let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+    let kept: Vec<&String> = parts
+        .iter()
+        .filter(|(_, data)| data.as_slice() == source.as_slice())
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        kept.len(),
+        1,
+        "{file}: the header picture came back {kept:?} times; the parts are {:#?}",
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    let name = kept[0];
+    assert!(
+        declared_as(&parts, name, "image/jpeg"),
+        "{file}: {name} is not declared as an image/jpeg part"
+    );
+    assert!(
+        reached_by_a_relationship(&parts, name),
+        "{file}: no relationship reaches {name}"
+    );
+    let headers = parts
+        .iter()
+        .filter(|(name, _)| name.starts_with("word/header") && name.ends_with(".xml"))
+        .count();
+    assert!(
+        headers > 1,
+        "{file}: the application wrote {headers} header part(s), not the copy this test states"
+    );
+
+    let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
+    assert_eq!(
+        after.len(),
+        2,
+        "{file}: the re-saved package gives {} picture(s), not the original and its copy: {after:#?}",
+        after.len()
+    );
+    assert!(
+        the_same_picture(&before[0], &after[0]),
+        "{file}: the header picture is not the fixture's:\n\
+         re-saved: {:#?}\nfixture: {:#?}",
+        after[0],
+        before[0]
+    );
+    assert!(
+        the_same_picture(&before[0], &after[1]),
+        "{file}: the duplicated header picture is not the fixture's:\n\
+         re-saved: {:#?}\nfixture: {:#?}",
+        after[1],
+        before[0]
+    );
 }
 
 /// LibreOffice accepts the BMP and TIFF fixture packages as packages that carry

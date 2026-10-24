@@ -947,7 +947,8 @@ test-data/
 │                                            #   own part, LibreOffice's way (same script)
 ├── mc_svg_pictures.docx, .pptx              # an SVG in an mc:Choice, VML/raster copy in
 │                                            #   mc:Fallback (make_mc_svg_pictures.py)
-├── mc_fallback_pictures.docx, .pptx         # a picture stated only in mc:Fallback
+├── mc_fallback_pictures.docx, .pptx         # pictures stated only in mc:Fallback, one in
+│                                            #   the body and one in a cell or group
 │                                            #   (make_mc_fallback_pictures.py)
 ├── blip_fill_shapes.docx, .pptx             # shapes filled with a picture, SVG in the
 │                                            #   blip (make_blip_fill_shapes.py)
@@ -1133,12 +1134,14 @@ for byte, the `asvg:svgBlip` extension naming it, and a raster it drew from the 
 beside it — both reached and declared. Its second picture, whose choice names a drawing
 the package does not hold, is dropped rather than shown from its orange fallback, so this
 re-save says nothing about the case a fallback exists for; the test states that, and
-fails if a later LibreOffice keeps it. The `mc_fallback_pictures` pair states the
-picture only in an `mc:Fallback`, with no `mc:Choice` at all, and the application reads
-it: its DOCX export keeps an `mc:Fallback` branch (now with a choice beside it) whose
-`v:imagedata` still names the picture, while its PPTX export writes the fallback as the
-slide's own `p:pic`. Either way the 60 × 36 orange raster is in the re-saved package,
-declared and reached. The `svg_embed_pictures` pair says the same thing
+fails if a later LibreOffice keeps it. The `mc_fallback_pictures` pair states two
+pictures only in an `mc:Fallback`, with no `mc:Choice` at all — one in the body, and one
+inside a container a reader has to walk into, a table's cell in the DOCX and a group on
+the slide — and the application reads both: its DOCX export keeps an `mc:Fallback` branch
+for each (now with a choice beside it) whose `v:imagedata` still names the picture, the
+cell's still written inside the cell, while its PPTX export writes each fallback as a
+`p:pic`, the group's inside its own `p:grpSp`. Either way both 60 × 36 orange rasters are
+in the re-saved package, declared and reached. The `svg_embed_pictures` pair says the same thing
 in the application's own spelling — the drawing is the picture's media part, its
 `r:embed`, with no raster beside it — and it comes back the same way: that drawing copied
 through byte for byte and a raster drawn from it beside it, both reached and declared.
@@ -1149,6 +1152,24 @@ and each declaration is read from the name the application gave the part. `matht
 is not in that check: its only drawing is a MathType OLE object's preview, which
 LibreOffice's export drops whole, so a re-save can say nothing about that part — the
 conversion test is where the preview is proven.
+
+The pair Word writes is asked the same question: `svg_blip_pictures.docx` and
+`svg_blip_pictures.pptx` put the PNG fallback on the picture's `a:blip` and the drawing
+in `asvg:svgBlip`; LibreOffice reads the extension, copies the drawing through and writes
+a raster of it as the blip's fallback, and this reader still takes the drawing alone. The
+oriented pair — `oriented_picture.docx` and `oriented_picture.pptx`, holding a JPEG whose
+stored pixels are sideways and whose EXIF tag turns them — comes back with the JPEG's
+bytes, tag included, under the `.jpeg` name the application gives it. A Word picture
+bullet is only half kept: the painted raster survives as the numbering part's
+`v:imagedata`, while the drawn bullet is dropped; PowerPoint keeps both and rasterises
+the drawing at 41 × 25. The PowerPoint half of the picture-fill pair keeps both fills —
+the SVG copied through and the orange raster unchanged — though its export adds explicit
+line and shadow to the shapes, so this reader paints them into canvases about 13 pixels
+larger; LibreOffice refuses the DOCX half outright. The `worksheet_pictures` workbook
+keeps all four media parts — BMP, GIF, PNG and JPEG — byte for byte, with both sheets'
+drawings still pointing at them. The real-world `headerPic.docx` has its only picture in
+a header part, and LibreOffice keeps it there — under a second header as well, so this
+reader takes the original 80 × 80 picture and its copy.
 
 Each re-saved package is converted by this tool as well, so the bridge covers our own
 reading of what the application wrote and not only the application's acceptance of the
@@ -1163,12 +1184,22 @@ under the PNG that replaces the WebP. The `mc_svg_pictures` pair comes back one 
 short too, for the application's own reason: the drawing is the picture before and after
 the re-save, the raster beside it a part rather than a second picture, and the picture
 whose choice named a missing part is gone with it. The `mc_fallback_pictures` pair comes
-back one picture before and one after: the fallback's orange raster, at its 60 × 36 grid
-and with its pixels, whether the application kept it as a fallback branch (DOCX) or as
-the slide's picture (PPTX). The `svg_embed_pictures` pair comes
+back two pictures before and two after: the fallbacks' orange rasters, at their 60 × 36
+grid and with their pixels, whether the application kept them as fallback branches
+(DOCX, the cell's still in its cell) or as the slide's pictures (PPTX, the group's still
+in its group) — the picture inside the container is read by both, and the reader places
+it where the container stands, between the sentences that frame it. The `svg_embed_pictures` pair comes
 back picture for picture: one drawing before and one after, at the same 144 × 86 frame
 with byte-identical pixels, the fallback the application adds beside it again a part
-rather than a second picture. And `drawing.docx` comes back with the four
+rather than a second picture. The Word-spelled SVG pair comes back as the same one
+drawing at 144 × 86, and the oriented pair as the same one upright 1240 × 1754 picture.
+The picture bullets come back as one painted bullet in the DOCX and two in the PPTX, the
+drawn one at the 41 × 25 the application rasterised it to. The picture fills come back as
+two pictures — the drawing and the orange raster — in the larger canvases the
+application's added line and shadow produce, and the worksheet's five pictures (four on
+the first sheet, the BMP again on the second) at their fixture sizes and pixels. The
+header picture comes back twice at 80 × 80 with the fixture's pixels, the copy stated
+rather than counted as the same picture once. And `drawing.docx` comes back with the four
 drawings the application copied through, the one it re-drew (its 137 × 77 logo, written
 back at 136 × 76) and four rasters it makes of rules that the fixture states as `o:hr`
 shapes and this reader reports as no picture at all — so the one picture that stops
@@ -1215,11 +1246,14 @@ fallback's pixels as a PNG at 60 × 36, with the sentences around them read once
 A converter can also state the picture only for an older reader: `mc:AlternateContent`
 with no `mc:Choice`, only `mc:Fallback`. The fallback is then the picture, not a copy
 beside one. `test-data/mc_fallback_pictures.docx` and `mc_fallback_pictures.pptx` carry
-one 60 × 36 orange raster that way, with a sentence before and after it. One end-to-end
-test holds each package to that shape — one alternate content, one fallback, no choice,
-and the picture inside the fallback — then converts it to the orange raster at 60 × 36;
-the re-save test asks LibreOffice to open it and records that the fallback survives,
-as a branch in the DOCX and as the slide's picture in the PPTX.
+two 60 × 36 orange rasters that way, each with a sentence before and after it — one in the
+body, and one inside a container the reader has to walk into, a table's cell in the DOCX
+and a group on the slide. One end-to-end test holds each package to that shape — two
+alternate contents, two fallbacks, no choice, one of them in the body and one in the
+container — then converts it to the two orange rasters at 60 × 36, with the container's
+picture read where the container stands; the re-save test asks LibreOffice to open it and
+records that both fallbacks survive, as branches in the DOCX (the cell's still in its
+cell) and as the slide's pictures in the PPTX (the group's still in its group).
 
 A picture can also be a shape's fill rather than a picture of its own: an `a:blipFill` in
 a `p:sp`'s or a `wps:wsp`'s properties names its media with an `a:blip`, and an SVG in
