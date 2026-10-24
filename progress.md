@@ -893,6 +893,7 @@ Most differing rows (both readings have the block and disagree about it)
   Part of its 4.4% residual is the finer-split and repeated-text effect the golden README
   documents; the rows are the syntax.
 
+
 ### Box overlay preview (`--preview`) — new
 - `crates/cli/src/preview.rs` writes a self-contained `.preview.html` beside the JSON.
   Every extracted box is drawn at its true coordinates, colour-coded by source
@@ -10488,6 +10489,91 @@ with it.
 with the installed LibreOffice 24.2, including the two new tests and all seven
 `libreoffice_opens_and_resaves` tests. `cargo fmt --all --check` clean.
 
+## The remaining picture fixtures are held to a LibreOffice re-save
+
+**What was asked.** Check the picture-bearing fixtures under `test-data` against
+the seven existing LibreOffice re-save tests and add the ones whose re-save asks
+a question the suite does not already answer.
+
+**What the audit found.** The seven tests covered the SVG in the two forms already
+proved (`gif_svg_pictures`, `svg_embed_pictures`), the alternate-content forms
+(`mc_svg_pictures`, `mc_fallback_pictures`), the BMP/TIFF, WebP/JPEG 2000 and
+metafile pairs. Six picture fixtures had no re-save coverage, and each asks
+something the existing seven do not:
+
+* `svg_blip_pictures.docx` and `svg_blip_pictures.pptx` state the drawing the way
+  Word 2016 and later do — a PNG fallback on the picture's `a:blip`, the drawing
+  in `asvg:svgBlip` — rather than the way LibreOffice states one. The existing
+  SVG re-saves start from the embedded form, so this is the first re-save of an
+  ordinary picture stored the way Word stores one.
+* `oriented_picture.docx` and `oriented_picture.pptx` embed a JPEG whose stored
+  pixels are sideways and whose EXIF orientation tag turns them. No other
+  re-save fixture carries orientation metadata, so the re-save is the external
+  check that the tag survives the application's export.
+* `picture_bullets.docx` and `picture_bullets.pptx` make a list item's marker the
+  picture, one of them an SVG behind a raster fallback. A bullet is a picture in
+  a role no other fixture has, and the two formats keep it differently.
+* `blip_fill_shapes.pptx` fills a shape with a picture rather than placing a
+  picture of its own; again the role is different, and the drawing is stated on
+  the fill's `a:blip` with `asvg:svgBlip` beside it.
+* `worksheet_pictures.xlsx` is the only workbook in the re-save set, with four
+  encodings in one package and a second sheet drawing the BMP again.
+* `test-data/real/headerPic.docx` has its only picture in a header part reached
+  by that part's own relationships; the body never names it.
+
+**What LibreOffice did.**
+
+* `svg_blip_pictures`: each package comes back with the drawing byte for byte,
+  declared `image/svg…` and reached, and one 41 × 25 raster the application drew
+  from it, declared and reached. This reader takes the drawing alone at 144 × 86,
+  so the Word fallback is a part beside the drawing rather than a second picture.
+* `oriented_picture`: the JPEG comes back under the `.jpeg` name LibreOffice gives
+  it, with the fixture's own bytes — EXIF tag included — declared `image/jpeg` and
+  reached. This reader takes the same 1240 × 1754 upright picture before and after.
+* `picture_bullets`: the two formats are uneven. The DOCX keeps the painted bullet
+  as a VML `v:imagedata` at 24 × 16 with its red pixels, but drops the drawn
+  bullet — the numbering part keeps a bullet level with no picture and no
+  `svgBlip`, so this reader takes one picture. The PPTX keeps both `a:buBlip`s and
+  rasterises the drawn one at 41 × 25 with the diagram's panel and stroke, while
+  the painted one stays 24 × 16; this reader takes both.
+* `blip_fill_shapes.pptx`: both fills survive — the drawing byte for byte,
+  declared and reached, the orange 60 × 36 raster byte for byte, declared and
+  reached, and one 41 × 25 raster drawn from the drawing. LibreOffice adds
+  explicit line and shadow properties to the shapes, so this reader paints them
+  into 301 × 185 and 133 × 85 canvases rather than the fixture's 288 × 173 and
+  120 × 72; the fills themselves are still the two pictures. LibreOffice 24.2
+  refuses `blip_fill_shapes.docx` (`source file could not be loaded`) and writes
+  no re-saved package, so the PPTX is the half that can be asked. The test says so
+  in its docstring rather than leaving the pair's missing half unexplained.
+* `worksheet_pictures.xlsx`: all four media parts — BMP, GIF, PNG and JPEG — come
+  back byte for byte, each declared and reached, with both `drawing1.xml` and
+  `drawing2.xml` still in the workbook. This reader takes the same five pictures
+  in the same order: four on the first sheet and the BMP again on the second.
+* `headerPic.docx`: the JPEG comes back byte for byte, declared `image/jpeg` and
+  reached from a header part. LibreOffice writes three header parts and this
+  reader takes two 80 × 80 pictures — the original and a copy — which the test
+  states rather than counting as one picture.
+
+**What was left out, and why.** `brief.docx` (JPEG), `q3_review.pptx` (PNG) and
+`shape_deck.pptx` (PNG) place plain pictures whose encodings and roles the new
+and existing fixtures already cover; the first two are also bridge targets held
+to whole-document comparisons. `calibre_demo.docx`'s pictures are a GIF bullet and
+PNGs, both now covered by `picture_bullets` and the GIF re-saves; `chartex.docx`
+draws charts rather than pictures. `mathtype.docx` is left out for the reason the
+metafile re-save already states: LibreOffice drops its OLE preview whole.
+`rtf_bitmap.rtf` and `word_bitmap.rtf` are RTF rather than OPC packages, and the
+first is LibreOffice's own export, so the package re-save route does not apply;
+their pixels are held by the RTF reader test. The legacy `.doc` and `.ppt` files
+are already LibreOffice bridge outputs, not fixtures for a second bridge.
+
+**Docs.** The re-save sections and the picture-fill, bullet, SVG and header
+paragraphs of [README.md](README.md) now say what each new fixture asks and what
+LibreOffice does with it.
+
+**Verification.** `cargo test -p pdfextractor-cli --test cli_test` **112 passed**,
+including all thirteen `libreoffice_opens_and_resaves` tests against the installed
+LibreOffice 24.2. `cargo fmt --all --check` clean.
+
 ## A slide's picture background is the page's image
 
 **What was asked.** Read a slide's picture background — `p:cSld/p:bg/p:bgPr` with
@@ -10880,3 +10966,53 @@ baseline rather than hidden.
 model, which carries cell text only: it travels in the body immediately before its
 table. A reader that needs to know which cell held a picture cannot ask this
 model yet.
+
+## A fallback-only picture inside a table cell or a group is read too
+
+**What was asked.** Add a fallback-only picture inside a table cell or a group, and
+check LibreOffice and the reader agree about it.
+
+**The fixture.** [make_mc_fallback_pictures.py](test-data/make_mc_fallback_pictures.py)
+now states the 60 × 36 orange raster twice in each package: once in the body, as
+before, and once inside a container a reader has to walk into rather than meet in
+the body — a one-cell table holding the picture in its paragraph
+(`mc_fallback_pictures.docx`), and a `p:grpSp` whose transform places the picture
+(`mc_fallback_pictures.pptx`). Both copies are wrapped in the same
+`mc:AlternateContent`/`mc:Fallback` with no `mc:Choice` at all, and both name the
+same media part, so the packages stay fallback-only.
+
+**What the fixture found.** With the two copies stated, the packages showed the
+loss the reader section above describes: `mc_fallback_pictures.docx` gave one
+picture where the file states two, while the PPTX reader already took the one in
+its group. Both packages are now held to what they state.
+
+**The tests.** `a_fallback_only_picture_is_the_fallback` holds each package to two
+alternate-content statements with no choice — one in the body, one inside the
+container (`<w:tc>` for the DOCX, `<p:grpSp>` for the PPTX), each fallback carrying
+its picture — and then to the conversion: two 60 × 36 orange rasters with their own
+pixels, two `<img>`s in the render, each of the four sentences once, and the
+container's picture placed between the two sentences that frame the container (the
+body's groups are opened on the way, since a slide is a `chapter` group).
+`libreoffice_opens_and_resaves_the_fallback_only_fixture_packages` now requires the
+application to keep both: the DOCX export writes two `mc:Fallback` branches with a
+choice beside each, the cell's `v:imagedata` still inside the cell it stood in; the
+PPTX export writes two `p:pic`s, the group's still inside its `p:grpSp`. Either way
+the one orange raster is declared `image/png` and reached by a relationship, and
+this reader takes the same two pictures from what the application wrote as it took
+from the fixture.
+
+**Proof the gate bites.** Making the reader drop a cell's pictures again —
+`self.items.push(item)` replaced by `let _ = item;` — fails
+`a_fallback_only_picture_is_the_fallback` with `left: 1, right: 2` on the picture
+count, and restoring the line passes it again.
+
+**Verification.** `cargo test -p pdfextractor-cli --test cli_test` **117 passed**,
+including the two above and the metafile bridge test, whose `drawing.docx` now
+reads twelve more pictures from its cells on both sides of the re-save;
+`--test docling_golden_test` **28 passed**; `--test md_golden_test`,
+`--test formats_golden_test` and `--test compare_mode_test` **8, 11, 17 passed**;
+`cargo test -p pdfextractor-docx-parser` **56 + 16 passed** (one new unit test);
+`cargo fmt --all --check` clean. Clippy reports nothing in the two files this
+changed; the workspace's remaining `-D warnings` findings are the newer clippy's
+lints in files this change did not touch (`metafile`, `md-exporter`, `doc-parser`,
+`pdf-parser`, `text-parser`, `cli/src/main.rs`).
