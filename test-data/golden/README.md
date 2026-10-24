@@ -223,12 +223,13 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
 
 Beside Docling's *references* — one file per document holding the other tool's
 reading, compared for content — four directories pin what **our own writers
-produce**, byte for byte, for sixteen documents they all share: a one-line PDF
+produce**, byte for byte, for seventeen documents they all share: a one-line PDF
 (`hello.pdf`), a one-paragraph PDF (`dummy.pdf`), a long form with tables and
 furniture (`irs_f1040.pdf`), a DOCX with lists/tables/pictures
 (`calibre_demo.docx`), a DOCX of Office Math (`math-accents.docx`), an HTML file
 (`flow.html`), an HTML file whose table declares its header row below a caption
-(`late_header.html`), an HTML page whose picture's file name carries a space and
+(`late_header.html`), the same late header with merged header cells
+(`late_merged_header.html`), an HTML page whose picture's file name carries a space and
 an ampersand (`picture_names.html`), a Markdown file read back (`fenced.md`), a
 Markdown file whose picture is a real JPEG beside it (`pictures.md`), a purpose-built DOCX whose one
 table merges cells (`merged_cells.docx`), the same merged table as a word
@@ -249,7 +250,13 @@ caption row above `<th>Month</th><th>Total</th>`, while its Markdown puts the
 names above the separator and its HTML puts them in `<thead>` with the caption
 as the first body row. Its text and YAML goldens keep the same reading, and the
 fixed-point gates read both renders back, so moving the header is pinned rather
-than only asserted in a unit table.
+than only asserted in a unit table. `late_merged_header.html` asks the second
+question of the same hoist: its header row is also written after a `colspan="3"`
+caption, but the row itself merges — `<th>Region</th><th colspan="2">Totals</th>`
+— so the Markdown header has to keep the covered slot as an empty cell
+(`| Region | Totals | |`) while the HTML keeps `colspan="2"` on the `<th>`. Both
+renders put that row first and the caption beneath it, and the fixed-point gates
+read each back into the same page.
 
 `pictures.md` is pinned in all four: Markdown writes
 `![Image](pictures_images/img1.jpg)` — the picture path a reader can follow —

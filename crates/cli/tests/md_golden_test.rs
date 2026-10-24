@@ -24,24 +24,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Documents whose Markdown is pinned, byte for byte. Each has a full text
 /// layer, so `--ocr never` costs none of their content.
 const CASES: &[&str] = &[
-    "hello.pdf",            // the smallest fixture: one heading-sized line
-    "dummy.pdf",            // a one-paragraph PDF
-    "calibre_demo.docx",    // prose, lists, tables and pictures in one document
-    "math-accents.docx",    // Office Math, which becomes `$$` display blocks
-    "irs_f1040.pdf",        // a long form: many tables, columns and furniture
-    "flow.html",            // a flow format: headings, lists, code and a table
-    "late_header.html",     // a table whose header row is declared below a caption
-    "social_cards.html",    // a page's head facts, carried as YAML front matter
-    "picture_names.html",   // a picture named with a space and an ampersand
-    "fenced.md",            // Markdown in, Markdown out: a fence survives the trip
-    "pictures.md",          // Markdown in with a picture: its file is copied and referenced
-    "merged_cells.docx",    // a DOCX whose table merges cells: spans kept in HTML, flattened here
-    "merged_table.rtf",     // the same merged table as a word processor's own RTF export
+    "hello.pdf",               // the smallest fixture: one heading-sized line
+    "dummy.pdf",               // a one-paragraph PDF
+    "calibre_demo.docx",       // prose, lists, tables and pictures in one document
+    "math-accents.docx",       // Office Math, which becomes `$$` display blocks
+    "irs_f1040.pdf",           // a long form: many tables, columns and furniture
+    "flow.html",               // a flow format: headings, lists, code and a table
+    "late_header.html",        // a table whose header row is declared below a caption
+    "late_merged_header.html", // a late header row whose own cells merge
+    "social_cards.html",       // a page's head facts, carried as YAML front matter
+    "picture_names.html",      // a picture named with a space and an ampersand
+    "fenced.md",               // Markdown in, Markdown out: a fence survives the trip
+    "pictures.md",             // Markdown in with a picture: its file is copied and referenced
+    "merged_cells.docx", // a DOCX whose table merges cells: spans kept in HTML, flattened here
+    "merged_table.rtf",  // the same merged table as a word processor's own RTF export
     "link_annotations.pdf", // a PDF whose link is rendered as `[text](url)`
-    "q3_review.pptx",       // a deck: its slide and comment groups are marked
-    "chart_deck.pptx",      // a deck whose only picture is a chart, so nothing is written for it
-    "inventory.xlsx",       // a workbook: a `sheet` group per worksheet, a merge, a hidden sheet
-    "rtf_bitmap.rtf",       // a word processor's own RTF export: a heading, paragraphs, a picture
+    "q3_review.pptx",    // a deck: its slide and comment groups are marked
+    "chart_deck.pptx",   // a deck whose only picture is a chart, so nothing is written for it
+    "inventory.xlsx",    // a workbook: a `sheet` group per worksheet, a merge, a hidden sheet
+    "rtf_bitmap.rtf",    // a word processor's own RTF export: a heading, paragraphs, a picture
 ];
 
 fn repository_root() -> PathBuf {
@@ -56,6 +57,7 @@ fn input_of(name: &str) -> PathBuf {
         "hello.pdf"
         | "flow.html"
         | "late_header.html"
+        | "late_merged_header.html"
         | "social_cards.html"
         | "picture_names.html"
         | "fenced.md"

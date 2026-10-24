@@ -533,7 +533,7 @@ stem, and `-o -` with a single format writes that one document to stdout.
   byte-identical.
 
 Each format is pinned byte for byte under `test-data/golden/{html,text,yaml}/` for
-the sixteen documents they cover, including `social_cards.html`: its committed HTML
+the seventeen documents they cover, including `social_cards.html`: its committed HTML
 golden pins the description, canonical URL and every Open Graph and Twitter card
 line, escaped and in the head's order, while its text and YAML goldens pin that none
 of those statements becomes body content. A deliberate change regenerates the
