@@ -1166,10 +1166,13 @@ the drawing at 41 × 25. The PowerPoint half of the picture-fill pair keeps both
 the SVG copied through and the orange raster unchanged — though its export adds explicit
 line and shadow to the shapes, so this reader paints them into canvases about 13 pixels
 larger; LibreOffice refuses the DOCX half outright. The `worksheet_pictures` workbook
-keeps all four media parts — BMP, GIF, PNG and JPEG — byte for byte, with both sheets'
-drawings still pointing at them. The real-world `headerPic.docx` has its only picture in
-a header part, and LibreOffice keeps it there — under a second header as well, so this
-reader takes the original 80 × 80 picture and its copy.
+keeps the four media parts it has filters for — BMP, GIF, PNG and JPEG — byte for byte,
+with both sheets' drawings still pointing at them, and drops the fifth, the bare JPEG
+2000 codestream named `.jpc`: there is no JPEG 2000 import filter, so a workbook a
+spreadsheet application re-saves loses that picture whole. The real-world
+`headerPic.docx` has its only picture in a header part, and LibreOffice keeps it there —
+under a second header as well, so this reader takes the original 80 × 80 picture and its
+copy.
 
 Each re-saved package is converted by this tool as well, so the bridge covers our own
 reading of what the application wrote and not only the application's acceptance of the
@@ -1522,11 +1525,12 @@ can name in an `image` travel — **PNG, JPEG, GIF, BMP, TIFF and SVG** each sur
 conversion and an HTML round trip with their bytes unchanged, where before the two that
 are not decoded here lost their `image` and with it the page's `<img>`. A format Docling
 cannot name is no longer a box with no `image` either: a **WebP or a JPEG 2000** picture —
-from a flow file, a `data:` URI, a Word or PowerPoint package — is decoded and
-written out as a PNG before it reaches the model, the same choice a Word metafile already
-forces, so the document names a file a reader and Docling can both open. A format whose
-pixels this cannot decode keeps its own type and bytes, and a metafile outside a Word
-package is still carried as a picture with its box and no `image`. A source that answers to neither — a remote
+from a flow file, a `data:` URI, a Word or PowerPoint package, or a workbook — is
+decoded and written out as a PNG before it reaches the model, the same choice a Word
+metafile already forces, so the document names a file a reader and Docling can both open.
+A format whose pixels this cannot decode keeps its own type and bytes, and a metafile
+outside a Word package is still carried as a picture with its box and no `image`. A
+source that answers to neither — a remote
 URL, a `data:` URI whose declared type is not a carried picture or whose payload does
 not decode, a path that is not there — stays the literal `![alt](source)` words the file
 contains: a converter must not fetch the network, and a picture with nothing behind it

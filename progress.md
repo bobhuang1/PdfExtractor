@@ -7769,23 +7769,28 @@ fixture that quietly stopped being what its generator says is a test of nothing.
 
 **The fixture.** [worksheet_pictures.xlsx](test-data/worksheet_pictures.xlsx): a title,
 a note and a small table above the pictures, then `chart.bmp`, `chart.gif`,
-`invoice_scan.png` and `scan.jpg` across the sheet, and a second worksheet with a
-picture of its own — two drawings, so a reader that only followed the first would
-lose the rest of the file. The JPEG is stored under `.jpeg`, the alias the carried
-formats already read.
+`invoice_scan.png`, `scan.jpg` and `scan.jpc` across the sheet, and a second
+worksheet with a picture of its own — two drawings, so a reader that only followed
+the first would lose the rest of the file. The JPEG is stored under `.jpeg`, the
+alias the carried formats already read. The `.jpc` is a bare JPEG 2000 codestream —
+the picture a scanner writes without the `jp2` container — so its `SIZ` marker is
+the only place its grid is stated and its pixels have to be decoded rather than
+carried through; `xlsxwriter` cannot place a format it has no size for, so that
+fifth anchor, its relationship, its media part and its content type are written
+into the saved package the way a spreadsheet application writes them.
 
 **The tests.** Three in the parser (the three anchor kinds placed in cells, including
 the offsets; a chart frame and a media part named `.bin` passed over; a relationship
 target resolved against the part that names it, with `../`, `/` and a climb above the
-package root), one fixture test (the five pictures, their types and boxes, the BMP's
+package root), one fixture test (the six pictures, their types and boxes, the BMP's
 bytes identical on both sheets, the cells still read as tables), and one end-to-end
 test in [cli_test.rs](crates/cli/tests/cli_test.rs): convert the workbook and hold
-every written file to the part it came from — the BMP and the GIF **decoded and
-compared pixel for pixel** with the source (a channel swap, a palette read wrong or a
-reversed row order passes a size check and fails this), the PNG **byte for byte**
-(a PNG is not re-encoded), the JPEG as itself, each `image/png` or `image/jpeg` and
-named `sheet1_N` beside the JSON, the page sized to the furthest picture and the
-render naming all five.
+every written file to the part it came from — the BMP, the GIF and the JPEG 2000
+**decoded and compared pixel for pixel** with the source (a channel swap, a palette
+read wrong, a reversed row order or a codestream read as an empty box passes a size
+check and fails this), the PNG **byte for byte** (a PNG is not re-encoded), the JPEG
+as itself, each `image/png` or `image/jpeg` and named `sheet1_N` beside the JSON, the
+page sized to the furthest picture and the render naming all six.
 
 **Docs.** [README.md](README.md)'s XLSX row and its picture passage say what a
 workbook's picture is and how it is found; the limitation row now reads *charts and
@@ -10516,8 +10521,9 @@ something the existing seven do not:
 * `blip_fill_shapes.pptx` fills a shape with a picture rather than placing a
   picture of its own; again the role is different, and the drawing is stated on
   the fill's `a:blip` with `asvg:svgBlip` beside it.
-* `worksheet_pictures.xlsx` is the only workbook in the re-save set, with four
-  encodings in one package and a second sheet drawing the BMP again.
+* `worksheet_pictures.xlsx` is the only workbook in the re-save set, with five
+  encodings in one package — a JPEG 2000 among them — and a second sheet drawing
+  the BMP again.
 * `test-data/real/headerPic.docx` has its only picture in a header part reached
   by that part's own relationships; the body never names it.
 
@@ -10545,10 +10551,14 @@ something the existing seven do not:
   refuses `blip_fill_shapes.docx` (`source file could not be loaded`) and writes
   no re-saved package, so the PPTX is the half that can be asked. The test says so
   in its docstring rather than leaving the pair's missing half unexplained.
-* `worksheet_pictures.xlsx`: all four media parts — BMP, GIF, PNG and JPEG — come
-  back byte for byte, each declared and reached, with both `drawing1.xml` and
-  `drawing2.xml` still in the workbook. This reader takes the same five pictures
-  in the same order: four on the first sheet and the BMP again on the second.
+* `worksheet_pictures.xlsx`: the four media parts the application has filters for
+  — BMP, GIF, PNG and JPEG — come back byte for byte, each declared and reached,
+  with both `drawing1.xml` and `drawing2.xml` still in the workbook. The fifth,
+  the bare JPEG 2000 codestream, is gone: LibreOffice has no JPEG 2000 import
+  filter, so the picture is dropped whole rather than kept as a part. This reader
+  takes the five kept pictures in the fixture's order — four on the first sheet
+  and the BMP again on the second — which the test states as the fixture's reading
+  one picture short rather than counting as a match.
 * `headerPic.docx`: the JPEG comes back byte for byte, declared `image/jpeg` and
   reached from a header part. LibreOffice writes three header parts and this
   reader takes two 80 × 80 pictures — the original and a copy — which the test
@@ -11016,3 +11026,61 @@ reads twelve more pictures from its cells on both sides of the re-save;
 changed; the workspace's remaining `-D warnings` findings are the newer clippy's
 lints in files this change did not touch (`metafile`, `md-exporter`, `doc-parser`,
 `pdf-parser`, `text-parser`, `cli/src/main.rs`).
+
+## A workbook's picture can be a bare JPEG 2000 codestream
+
+**What was asked.** Add a `.jpc` JPEG 2000 picture to the XLSX picture fixture
+and check its pixels are read as a picture.
+
+**Why that picture.** The worksheet fixture's four encodings are all ones a
+reader either carries through or decodes with `image`: PNG and JPEG travel as
+themselves, and BMP and GIF are decoded and written back as PNGs. A bare JPEG
+2000 codestream is the case none of them covers — the bytes are neither carried
+nor readable by a format the model can name, so the only way the picture reaches
+the document as a picture is if it is decoded. A reader that merely found the
+part would place a box with no ink in it, and a size check would not notice.
+
+**The fixture.** `scan.jpc` is the 620 × 350 bare codestream the office fixtures
+already use,placed at F37 — fourteen rows below the JPEG it is the lossless twin of, in the
+same 620 × 350 box. `xlsxwriter` cannot place a
+format it has no size for, so
+[make_pictures_xlsx.py](test-data/make_pictures_xlsx.py) writes the fifth anchor,
+its relationship (`rId5` → `../media/image5.jpc`), the media part and the
+`jpc`/`image/jp2` content type into the saved package the way a spreadsheet
+application writes them, and asserts the part names rather than guessing at the
+writer's order. The package now holds five media parts and draws six pictures:
+five on `Pictures` and the BMP again on `Summary`.
+
+**The tests.** The parser's fixture test
+`each_sheet_draws_the_pictures_its_own_drawing_part_anchors` now expects five
+pictures on the first sheet, the fifth `image/jp2` in its own cell box. The
+end-to-end test in [cli_test.rs](crates/cli/tests/cli_test.rs)
+(`a_workbook_that_draws_pictures_writes_them_beside_the_json`) holds the file
+written for it to the codestream's **pixels**, decoded by the same image parser
+the CLI uses — `image` reads a bare codestream only through that registration, so
+the expected grid is the one `scan.jpc` states rather than one the test assumes —
+together with the 620 × 350 image record, the page grown to row 47.2 and the
+render naming all six files. The LibreOffice re-save
+(`libreoffice_opens_and_resaves_the_worksheet_picture_fixture`) now starts from
+six pictures, identifies the fifth as the codestream by holding the reader's
+file for it to `scan.jpc`'s own pixels, and then states the application's limit:
+no part of the re-saved package is the codestream — LibreOffice has no JPEG 2000
+import filter — and this reader takes the five kept pictures, in the fixture's
+order, as the fixture's reading one picture short.
+
+**Proof the gate bites.** Replacing the package's `image5.jpc` part with another
+codestream (`diagram.jpc`, 36 × 22) fails the end-to-end test with
+`worksheet_pictures_images/sheet1_5.png is not the picture's grid: left: (36, 22),
+right: (620, 350)`; replacing it with a 620 × 350 PNG of different pixels keeps
+the grid and still fails, with `does not hold the picture's own pixels`.
+Restored byte for byte, both pass again.
+
+**Docs.** [README.md](README.md)'s re-save passage says the workbook keeps the
+four parts the application has filters for and drops the codestream; its
+WebP/JPEG 2000 sentence now names a workbook among the places such a picture can
+come from.
+
+**Verification.** `each_sheet_draws_the_pictures_its_own_drawing_part_anchors`,
+`a_workbook_that_draws_pictures_writes_them_beside_the_json` and
+`libreoffice_opens_and_resaves_the_worksheet_picture_fixture` pass;
+`cargo fmt --all --check` and `git diff --check` clean.

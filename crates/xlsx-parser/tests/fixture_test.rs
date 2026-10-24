@@ -102,11 +102,11 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
                 .collect()
         })
         .collect();
-    // `Pictures` draws four, in the order its drawing part anchors them; each
+    // `Pictures` draws five, in the order its drawing part anchors them; each
     // box is the rectangle the anchor names, in cells, offsets inside a cell
     // included: the BMP spans one column less than the GIF starts at, and the
-    // scan runs into the column after its last one by 0.1995 of a cell.
-    assert_eq!(kinds[0].len(), 4, "{:#?}", kinds[0]);
+    // scans run into the column after their last one by 0.1995 of a cell.
+    assert_eq!(kinds[0].len(), 5, "{:#?}", kinds[0]);
     let expected = [
         (
             "image/bmp",
@@ -137,6 +137,17 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
                 22.0,
                 11.0 + 121_920.0 / 609_600.0,
                 33.0 + 38_100.0 / 190_500.0,
+            ],
+        ),
+        // A bare codestream: the part's extension is the only name the package
+        // gives it, so the reader takes it as the JPEG 2000 it is.
+        (
+            "image/jp2",
+            [
+                5.0,
+                36.0,
+                11.0 + 121_920.0 / 609_600.0,
+                47.0 + 38_100.0 / 190_500.0,
             ],
         ),
     ];

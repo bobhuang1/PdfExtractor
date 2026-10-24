@@ -4777,21 +4777,25 @@ fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
 
 /// LibreOffice accepts the `worksheet_pictures` workbook, where each sheet's
 /// drawing names its own media. The workbook is the fixture of a second package
-/// format, and of four encodings in one package: a BMP, a GIF, a PNG and a JPEG,
-/// with the BMP drawn on a second sheet as well.
+/// format, and of five encodings in one package: a BMP, a GIF, a PNG, a JPEG and
+/// a bare JPEG 2000 codestream, with the BMP drawn on a second sheet as well.
 ///
 /// It opens the workbook and writes it back, and what it writes is held to
 ///
 /// * each picture: still a media part with the fixture's own bytes — the BMP and
 ///   GIF carried through, the PNG and JPEG likewise — so the application read
-///   all four encodings rather than dropping the ones it cannot draw;
+///   the four encodings it has filters for rather than dropping the ones it
+///   cannot draw;
+/// * the fifth: the `.jpc` is nowhere in the re-saved package, which is the
+///   application's own limit rather than a failure of the workbook — LibreOffice
+///   has no JPEG 2000 import filter, so the picture is dropped whole;
 /// * each part declared its `image/…` type and reached by a relationship, so the
 ///   sheets hold them as pictures rather than leaving files in the package;
 /// * both sheets' drawings: `drawing1.xml` and `drawing2.xml` are still there, so
 ///   the second sheet's picture was not lost with the first one; and
-/// * this reader, on what the application wrote: the same five pictures — four on
-///   the first sheet in their order, and the BMP again on the second — at the
-///   same sizes and with the same pixels.
+/// * this reader, on what the application wrote: the five pictures it kept, at
+///   the same sizes and with the same pixels as the fixture's, in the fixture's
+///   order.
 #[test]
 fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
     let Some(soffice) = soffice_binary() else {
@@ -4811,11 +4815,18 @@ fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
     let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
     assert_eq!(
         before.len(),
-        5,
-        "{file}: the fixture is not the five pictures this expects: {before:#?}"
+        6,
+        "{file}: the fixture is not the six pictures this expects: {before:#?}"
     );
 
     let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+    let codestream = fixture("images/scan.jpc");
+    assert!(
+        parts
+            .iter()
+            .all(|(_, part)| part.as_slice() != codestream.as_slice()),
+        "{file}: a JPEG 2000 part survived, so this note is out of date"
+    );
     for (data, mime) in &source {
         let kept: Vec<&String> = parts
             .iter()
@@ -4856,8 +4867,33 @@ fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
         );
     }
 
+    // The fifth picture of the fixture's reading is the codestream, identified
+    // by what the reader made of it rather than by its place in the list: the
+    // file written for it is the codestream's own pixels, at its own grid.
+    let codestream_read = pdfextractor_image_parser::transcode_to_png(&codestream)
+        .expect("the JPEG 2000 codestream decodes");
+    let as_read = ReadPicture {
+        mimetype: "image/png".to_string(),
+        size: (codestream_read.width as f64, codestream_read.height as f64),
+        bytes: codestream_read.data,
+    };
+    assert!(
+        the_same_picture(&before[4], &as_read),
+        "{file}: the fifth picture is not the JPEG 2000 this test drops: {:#?}",
+        before[4]
+    );
+
+    // The re-saved workbook is the fixture's reading one picture short — the one
+    // the application has no filter for — and the five it kept are the fixture's
+    // own, at the same sizes and with the same pixels.
+    let kept: Vec<ReadPicture> = before
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 4)
+        .map(|(_, picture)| picture)
+        .collect();
     let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
-    assert_the_reader_agrees(file, &before, &after);
+    assert_the_reader_agrees(file, &kept, &after);
 }
 
 /// LibreOffice keeps `headerPic.docx`'s only picture, which lives in the
@@ -6661,14 +6697,17 @@ fn a_workbook_becomes_pages_groups_and_tables() {
 }
 
 /// A workbook's pictures are handed on the way a Word or PowerPoint package's
-/// are: a PNG and a JPEG travel untouched, and a BMP and a GIF — encodings
-/// Docling's own readers never keep — are decoded and written back as PNGs
-/// beside the JSON. Every picture is placed in cells on the sheet that draws
-/// it, and the render names each file.
+/// are: a PNG and a JPEG travel untouched, and a BMP, a GIF and a bare JPEG 2000
+/// codestream — encodings Docling's own readers never keep — are decoded and
+/// written back as PNGs beside the JSON. Every picture is placed in cells on the
+/// sheet that draws it, and the render names each file.
 ///
 /// The written PNGs are held to the pixels of the parts they came from, not to
 /// their headers: a channel swap, a palette read wrong or a row order reversed
-/// would pass a size check and fails this one.
+/// would pass a size check and fails this one. The `.jpc` is the one whose bytes
+/// no picture crate reads unaided — a bare codestream has no container to hold
+/// its size — so a reader that merely named the part would place a box with no
+/// ink in it, and its pixels are what say the codestream was decoded.
 #[test]
 fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
     let ws = Workspace::new("xlsx-pictures");
@@ -6692,7 +6731,7 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
 
     let doc = json_of(&output);
     let pictures = doc["pictures"].as_array().expect("a pictures list");
-    assert_eq!(pictures.len(), 5, "a picture was lost: {pictures:#?}");
+    assert_eq!(pictures.len(), 6, "a picture was lost: {pictures:#?}");
 
     // In the order the workbook draws them, each on its own sheet's page and in
     // the cells its anchor names — the BMP in the first column of row 9, the
@@ -6745,32 +6784,53 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
             ],
         ),
     );
-    close(placed[4], (2, [0.0, 2.0, 571_500.0 / 609_600.0, 3.8]));
+    close(
+        placed[4],
+        (
+            1,
+            [
+                5.0,
+                36.0,
+                11.0 + 121_920.0 / 609_600.0,
+                47.0 + 38_100.0 / 190_500.0,
+            ],
+        ),
+    );
+    close(placed[5], (2, [0.0, 2.0, 571_500.0 / 609_600.0, 3.8]));
 
     // The sheet's page is its own extent in cells, pictures included: the
-    // lowest drawing is the second scan, which ends at row 33.2.
+    // lowest drawing is the JPEG 2000, which ends at row 47.2.
     let size = &doc["pages"]["1"]["size"];
     assert!(
         (size["width"].as_f64().unwrap() - 11.2).abs() < 1e-9,
         "{size:#?}"
     );
     assert!(
-        (size["height"].as_f64().unwrap() - 33.2).abs() < 1e-9,
+        (size["height"].as_f64().unwrap() - 47.2).abs() < 1e-9,
         "{size:#?}"
     );
 
     // Each picture in turn: what it was handed on as, and the file beside the
-    // JSON held to the bytes the workbook carried.
+    // JSON held to the pixels the workbook's part decodes to. A JPEG is carried
+    // through, so its file is the part itself; the rest are written back as
+    // PNGs. The `.jpc` is a bare codestream, which `image` decodes only through
+    // the image parser's registration, so its pixels are taken the way the CLI
+    // takes them.
     let bmp = fixture("images/chart.bmp");
     let gif = fixture("images/chart.gif");
     let png = fixture("invoice_scan.png");
     let jpeg = fixture("images/scan.jpg");
-    for (picture, (source, mime, written_as)) in pictures.iter().zip([
-        (bmp.as_slice(), "image/png", "png"),
-        (gif.as_slice(), "image/png", "png"),
-        (png.as_slice(), "image/png", "png"),
-        (jpeg.as_slice(), "image/jpeg", "jpg"),
-        (bmp.as_slice(), "image/png", "png"),
+    let jpc = fixture("images/scan.jpc");
+    let jpc_png = pdfextractor_image_parser::transcode_to_png(&jpc)
+        .expect("the JPEG 2000 codestream decodes")
+        .data;
+    for (picture, (source, pixels_from, mime, written_as)) in pictures.iter().zip([
+        (bmp.as_slice(), bmp.as_slice(), "image/png", "png"),
+        (gif.as_slice(), gif.as_slice(), "image/png", "png"),
+        (png.as_slice(), png.as_slice(), "image/png", "png"),
+        (jpeg.as_slice(), jpeg.as_slice(), "image/jpeg", "jpg"),
+        (jpc.as_slice(), jpc_png.as_slice(), "image/png", "png"),
+        (bmp.as_slice(), bmp.as_slice(), "image/png", "png"),
     ]) {
         let image = &picture["image"];
         assert_eq!(image["mimetype"], mime, "{image:#?}");
@@ -6788,7 +6848,7 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
         let drawn = image::load_from_memory(&written)
             .unwrap_or_else(|e| panic!("{uri} does not decode: {e}"))
             .to_rgb8();
-        let expected = image::load_from_memory(source)
+        let expected = image::load_from_memory(pixels_from)
             .unwrap_or_else(|e| panic!("the fixture's picture does not decode: {e}"))
             .to_rgb8();
         assert_eq!(
@@ -6820,12 +6880,12 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
         "a PNG was decoded and re-encoded rather than carried through"
     );
 
-    // The render names all five files, so a picture the model holds is one a
+    // The render names all six files, so a picture the model holds is one a
     // reader can see.
     let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
     assert_eq!(
         html.matches("<img src=\"").count(),
-        5,
+        6,
         "a picture is missing from the render:\n{html}"
     );
 }
