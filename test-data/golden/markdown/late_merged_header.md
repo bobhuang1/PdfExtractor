@@ -1,0 +1,9 @@
+# Sales report
+
+The header row is stated after the caption, and its last cells merge.
+
+| Region           | Totals |    |
+|------------------|--------|----|
+| Sales by quarter |        |    |
+| North            | 22     | 18 |
+| South            | 19     | 24 |

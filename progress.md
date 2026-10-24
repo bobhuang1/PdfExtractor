@@ -11084,3 +11084,61 @@ come from.
 `a_workbook_that_draws_pictures_writes_them_beside_the_json` and
 `libreoffice_opens_and_resaves_the_worksheet_picture_fixture` pass;
 `cargo fmt --all --check` and `git diff --check` clean.
+## A late header row whose own cells merge is pinned in the render goldens
+
+**What was asked.** Add a late-header table with merged header cells and pin its
+Markdown and HTML renders.
+
+**The fixture.** [late_merged_header.html](test-data/late_merged_header.html) is
+a small flow page whose table writes a `colspan="3"` caption row first and
+`<th>Region</th><th colspan="2">Totals</th>` on row 1, with two data rows beneath.
+The existing [late_header.html](test-data/late_header.html) covers the hoist on a
+plain header row; this one asks the same question of a header row that merges, so
+the writers have to move the row **and** keep the cells it covers out of the grid.
+The page title, the paragraph and the caption carry words a header-only reading
+could otherwise lose.
+
+**The pin.** The fixture joins both shared golden case lists, which commits its
+four renders:
+
+* [markdown/late_merged_header.md](test-data/golden/markdown/late_merged_header.md)
+  starts `| Region           | Totals |    |` above the separator — the hoisted
+  header with the cell `Totals` covers left empty — then the caption row with
+  both of its covered slots empty, then the two data rows;
+* [html/late_merged_header.html](test-data/golden/html/late_merged_header.html)
+  puts `<th>Region</th><th colspan="2">Totals</th>` inside `<thead>` and the
+  caption, still `colspan="3"`, as the first `<tbody>` row, so the span is stated
+  in the header rather than only flattened away;
+* [text/late_merged_header.txt](test-data/golden/text/late_merged_header.txt)
+  pins the same table in the pipe form the text writer shares with Markdown; and
+* [yaml/late_merged_header.yaml](test-data/golden/yaml/late_merged_header.yaml)
+  keeps the model as it is: the caption at row 0 with `col_span: 3`, `Region` and
+  `Totals` at row 1 with `column_header: true` and `Totals` carrying
+  `col_span: 2`, the data rows after them.
+
+The Markdown fixed point reads the hoisted pipe table back as a row-0 header with
+an empty trailing cell and re-renders it unchanged, and the HTML fixed point reads
+the `<thead>` — `colspan` included — and writes the same page. The HTML
+round-trip gate compares the Markdown written from the source with the Markdown
+written from that page, so the hoist stays stable when the header is read back
+rather than only when the source is read once.
+
+**Proof the pin bites.** Changing the header's word (`Totals` → `Sum`) fails both
+gates in their own words — `late_merged_header.html's Markdown changed` and
+`late_merged_header.html as html changed` — and restoring the fixture passes both
+again. Dropping the header's `colspan` fails only the HTML gate: in Markdown the
+covered slot is an empty cell either way, so that render is the one the span can
+only be read from, which is why both are pinned.
+
+**Docs.** [test-data/golden/README.md](test-data/golden/README.md) counts the
+seventeen shared documents, names the new fixture in the list and says what it
+adds to the hoist paragraph; [README.md](README.md)'s format-golden passage
+carries the same count.
+
+**Verification.** `cargo test -p pdfextractor-cli --test md_golden_test --test
+formats_golden_test` **17 + 11 passed**, including
+`markdown_matches_the_golden_files`, `every_markdown_golden_is_a_fixed_point`,
+`every_golden_round_trips_through_html_with_notes`,
+`html_text_and_yaml_match_the_golden_files`, `every_html_golden_is_a_fixed_point`
+and `every_text_golden_is_a_fixed_point`. No other golden changed — the two
+regenerations produced only the four new files.
