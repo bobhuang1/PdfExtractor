@@ -136,6 +136,21 @@ fn infers_word_spaces_from_positioning() {
     );
 }
 
+/// `dummy.pdf` draws every run as its own `Td` — and each jump lands within
+/// half a point of where the glyph advances already stopped, so the moves are
+/// repositioning, not gaps. Reading every same-line `Td` as a word break split
+/// the words apart (`Dumm y  PDF  fi le`): the page carries its own space
+/// characters, and they are the spaces a reader sees.
+#[test]
+fn a_td_that_lands_on_the_advance_does_not_split_the_word() {
+    let text = all_text(&real("dummy.pdf"));
+    assert_eq!(
+        text.trim(),
+        "Dummy PDF file",
+        "run repositioning was read as a word gap: {text:?}"
+    );
+}
+
 /// Figures in these papers are drawn with vector paths: there is no image
 /// XObject anywhere, so detection has to come from painted paths.
 #[test]

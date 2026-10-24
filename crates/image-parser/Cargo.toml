@@ -1,0 +1,20 @@
+[package]
+name = "pdfextractor-image-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# Turning a picture upright means decoding and re-encoding it, which is the
+# one thing this crate does with pixels: the page facts are read from headers
+# alone, and the pixels are only touched when a tag says they are not upright.
+image.workspace = true
+# The same pixels for JPEG 2000, which `image` has no decoder for: a JP2 is
+# transcoded to PNG before it becomes a picture in the document.
+hayro-jpeg2000.workspace = true
+# A TIFF's later directories, which `image`'s decoder does not reach: the pages
+# after the first are read here so a scanned batch is a page each.
+tiff.workspace = true

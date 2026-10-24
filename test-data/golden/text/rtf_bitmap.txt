@@ -1,0 +1,5 @@
+A word processor's bitmap
+
+The picture below is embedded as a bitmap.
+
+And a paragraph after it.

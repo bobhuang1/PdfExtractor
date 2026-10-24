@@ -1,0 +1,237 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/2'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+furniture:
+  children: []
+  content_layer: furniture
+  label: unspecified
+  name: _root_
+  self_ref: '#/furniture'
+groups: []
+key_value_items: []
+name: merged_cells.docx
+origin:
+  binary_hash: 14276338338882639313
+  filename: merged_cells.docx
+  mimetype: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+pages: {}
+pictures: []
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 4
+    num_rows: 5
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Class
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Student
+    - col_span: 2
+      column_header: true
+      end_col_offset_idx: 4
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 0
+      text: Results
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 2
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: A
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Alice
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: '71'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 1
+      text: '84'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: Bob
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 2
+      text: '65'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 2
+      text: '79'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 5
+      row_header: true
+      row_section: false
+      row_span: 2
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: B
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: Carol
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 3
+      text: '90'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 3
+      text: '88'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 5
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 4
+      text: Dave
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 5
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 4
+      text: '77'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 5
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 4
+      text: '82'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/tables/0'
+texts:
+- children: []
+  content_layer: body
+  label: section_header
+  orig: Scores by class
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Scores by class
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: The header spans two columns, and each class letter runs down two rows.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: The header spans two columns, and each class letter runs down two rows.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Rows without a class letter continue the one above.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: Rows without a class letter continue the one above.
+version: 1.10.0

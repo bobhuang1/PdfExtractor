@@ -1,0 +1,2688 @@
+body:
+  children:
+  - $ref: '#/texts/73'
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/texts/2'
+  - $ref: '#/texts/3'
+  - $ref: '#/texts/4'
+  - $ref: '#/texts/5'
+  - $ref: '#/texts/6'
+  - $ref: '#/texts/7'
+  - $ref: '#/texts/8'
+  - $ref: '#/texts/9'
+  - $ref: '#/texts/10'
+  - $ref: '#/texts/11'
+  - $ref: '#/texts/12'
+  - $ref: '#/texts/13'
+  - $ref: '#/texts/14'
+  - $ref: '#/texts/15'
+  - $ref: '#/texts/16'
+  - $ref: '#/texts/17'
+  - $ref: '#/texts/18'
+  - $ref: '#/texts/19'
+  - $ref: '#/texts/20'
+  - $ref: '#/texts/21'
+  - $ref: '#/texts/22'
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/23'
+  - $ref: '#/texts/24'
+  - $ref: '#/texts/25'
+  - $ref: '#/tables/1'
+  - $ref: '#/texts/26'
+  - $ref: '#/texts/27'
+  - $ref: '#/tables/2'
+  - $ref: '#/texts/28'
+  - $ref: '#/texts/29'
+  - $ref: '#/texts/30'
+  - $ref: '#/texts/31'
+  - $ref: '#/texts/32'
+  - $ref: '#/texts/33'
+  - $ref: '#/tables/3'
+  - $ref: '#/texts/34'
+  - $ref: '#/tables/4'
+  - $ref: '#/texts/35'
+  - $ref: '#/tables/5'
+  - $ref: '#/texts/36'
+  - $ref: '#/tables/6'
+  - $ref: '#/texts/37'
+  - $ref: '#/tables/7'
+  - $ref: '#/texts/38'
+  - $ref: '#/texts/39'
+  - $ref: '#/texts/40'
+  - $ref: '#/texts/41'
+  - $ref: '#/tables/8'
+  - $ref: '#/tables/9'
+  - $ref: '#/texts/42'
+  - $ref: '#/texts/43'
+  - $ref: '#/texts/44'
+  - $ref: '#/texts/45'
+  - $ref: '#/texts/46'
+  - $ref: '#/texts/47'
+  - $ref: '#/texts/48'
+  - $ref: '#/texts/49'
+  - $ref: '#/texts/50'
+  - $ref: '#/texts/51'
+  - $ref: '#/texts/52'
+  - $ref: '#/texts/53'
+  - $ref: '#/texts/54'
+  - $ref: '#/texts/55'
+  - $ref: '#/texts/56'
+  - $ref: '#/texts/57'
+  - $ref: '#/texts/58'
+  - $ref: '#/texts/59'
+  - $ref: '#/texts/60'
+  - $ref: '#/texts/61'
+  - $ref: '#/texts/62'
+  - $ref: '#/texts/63'
+  - $ref: '#/texts/64'
+  - $ref: '#/texts/65'
+  - $ref: '#/texts/66'
+  - $ref: '#/texts/67'
+  - $ref: '#/texts/68'
+  - $ref: '#/texts/69'
+  - $ref: '#/texts/70'
+  - $ref: '#/texts/71'
+  - $ref: '#/texts/72'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: irs_f1040.pdf
+origin:
+  binary_hash: 6539585983039478395
+  filename: irs_f1040.pdf
+  mimetype: application/pdf
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 792.0
+      width: 612.0
+  '2':
+    page_no: 2
+    size:
+      height: 792.0
+      width: 612.0
+pictures: []
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 21
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: (6) Check if
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Full-time
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 0
+      text: student
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 4
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 0
+      text: Permanently
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 5
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 4
+      start_row_offset_idx: 0
+      text: and totally
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 6
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 5
+      start_row_offset_idx: 0
+      text: disabled
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 7
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 6
+      start_row_offset_idx: 0
+      text: Full-time
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 8
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 7
+      start_row_offset_idx: 0
+      text: student
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 9
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 8
+      start_row_offset_idx: 0
+      text: Permanently
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 10
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 9
+      start_row_offset_idx: 0
+      text: and totally
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 11
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 10
+      start_row_offset_idx: 0
+      text: disabled
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 12
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 11
+      start_row_offset_idx: 0
+      text: Full-time
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 13
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 12
+      start_row_offset_idx: 0
+      text: student
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 14
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 13
+      start_row_offset_idx: 0
+      text: Permanently
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 15
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 14
+      start_row_offset_idx: 0
+      text: and totally
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 16
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 15
+      start_row_offset_idx: 0
+      text: disabled
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 17
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 16
+      start_row_offset_idx: 0
+      text: Full-time
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 18
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 17
+      start_row_offset_idx: 0
+      text: student
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 19
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 18
+      start_row_offset_idx: 0
+      text: Permanently
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 20
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 19
+      start_row_offset_idx: 0
+      text: and totally
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 21
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 20
+      start_row_offset_idx: 0
+      text: disabled
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: (7) Credits
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Child tax
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: credit
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 1
+      text: Credit for
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 5
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 4
+      start_row_offset_idx: 1
+      text: other
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 6
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 5
+      start_row_offset_idx: 1
+      text: dependents
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 7
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 6
+      start_row_offset_idx: 1
+      text: Child tax
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 8
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 7
+      start_row_offset_idx: 1
+      text: credit
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 9
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 8
+      start_row_offset_idx: 1
+      text: Credit for
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 10
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 9
+      start_row_offset_idx: 1
+      text: other
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 11
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 10
+      start_row_offset_idx: 1
+      text: dependents
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 12
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 11
+      start_row_offset_idx: 1
+      text: Child tax
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 13
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 12
+      start_row_offset_idx: 1
+      text: credit
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 14
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 13
+      start_row_offset_idx: 1
+      text: Credit for
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 15
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 14
+      start_row_offset_idx: 1
+      text: other
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 16
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 15
+      start_row_offset_idx: 1
+      text: dependents
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 17
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 16
+      start_row_offset_idx: 1
+      text: Child tax
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 18
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 17
+      start_row_offset_idx: 1
+      text: credit
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 19
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 18
+      start_row_offset_idx: 1
+      text: Credit for
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 20
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 19
+      start_row_offset_idx: 1
+      text: other
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 21
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 20
+      start_row_offset_idx: 1
+      text: dependents
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 410.71000000000004
+      coord_origin: TOPLEFT
+      l: 93.6
+      r: 575.104
+      t: 380.997
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/0'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: d Medicaid waiver payments not reported on Form(s) W-2 (see instructions)  . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: 1d
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: e Taxable dependent care benefits from Form 2441, line 26  . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: 1e
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: f Employer-provided adoption benefits from Form 8839, line 31  . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: 1f
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: g Wages from Form 8919, line 6  . . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: 1g
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 531.711
+      coord_origin: TOPLEFT
+      l: 100.8
+      r: 612.0
+      t: 487.711
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/1'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 8 Additional income from Schedule 1, line 10 . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '8'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 9 Add lines 1z, 2b, 3b, 4b, 5b, 6b, 7a, and 8. This is your total income . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '9'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: 10 Adjustments to income from Schedule 1, line 26 . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '10'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: 11a Subtract line 10 from line 9. This is your adjusted gross income . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: 11a
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 759.71
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 715.71
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/2'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 14 Add lines 12e, 13a, and 13b . . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '14'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 15Subtract line 14 from line 11b. If zero or less, enter -0-. This is your  taxable income . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '15'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 153.711
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 133.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/3'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 17 Amount from Schedule 2, line 3 . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '17'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 18 Add lines 16 and 17 . . . . . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '18'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: 19 Child tax credit or credit for other dependents from Schedule 8812 . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '19'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: 20 Amount from Schedule 3, line 8 . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: '20'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 213.712
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 169.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/4'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 21 Add lines 19 and 20 . . . . . . . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '21'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 22 Subtract line 21 from line 18. If zero or less, enter -0- . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '22'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 237.71000000000004
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 217.711
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/5'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 23 Other taxes, including self-employment tax, from Schedule 2, line 21 . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '23'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 24 Add lines 22 and 23. This is your total tax . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '24'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 261.711
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 241.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/6'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: a Form(s) W-2 . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: 25a
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: b Form(s) 1099 . . . . . . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: 25b
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: c Other forms (see instructions) . . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: 25c
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 309.71
+      coord_origin: TOPLEFT
+      l: 100.8
+      r: 521.4879999999998
+      t: 277.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/7'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 29 American opportunity credit from Form 8863, line 8 . . . . . . .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '29'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 30 Refundable adoption credit from Form 8839, line 13 . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '30'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: 31 Amount from Schedule 3, line 15 . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '31'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 453.71
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 592.5759999999999
+      t: 421.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/8'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: 32 Add lines 27a, 28, 29, 30, and 31. These are your total other payments and refundable credits .
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: '32'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: 33 Add lines 25d, 26, and 32. These are your total payments . . . . . . . . . . . .
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '33'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 477.711
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 457.712
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/9'
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Department of the Treasury—Internal Revenue ServiceU.S. Individual Income Tax Return 2025 OMB No. 1545-0074IRS Use Only—Do not write or staple in this space.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 44.23199999999997
+      coord_origin: TOPLEFT
+      l: 97.6
+      r: 582.438
+      t: 23.28099999999995
+    charspan:
+    - 0
+    - 157
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: Department of the Treasury—Internal Revenue ServiceU.S. Individual Income Tax Return 2025 OMB No. 1545-0074IRS Use Only—Do not write or staple in this space.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: For the year Jan. 1–Dec. 31, 2025, or other tax year beginning, 2025, ending , 20 See separate instructions.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 56.49599999999998
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 575.017
+      t: 49.49599999999998
+    charspan:
+    - 0
+    - 108
+    page_no: 1
+  self_ref: '#/texts/1'
+  text: For the year Jan. 1–Dec. 31, 2025, or other tax year beginning, 2025, ending , 20 See separate instructions.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Filed pursuant to section 301.9100-2Combat zone Deceased MM      DD      YYYY/ / Spouse MM      DD      YYYY/ /
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 68.99800000000005
+      coord_origin: TOPLEFT
+      l: 46.4
+      r: 575.7460000000001
+      t: 61.898000000000025
+    charspan:
+    - 0
+    - 111
+    page_no: 1
+  self_ref: '#/texts/2'
+  text: Filed pursuant to section 301.9100-2Combat zone Deceased MM      DD      YYYY/ / Spouse MM      DD      YYYY/ /
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Other Your first name and middle initial Last name Your social security number
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 91.99699999999996
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 567.522
+      t: 73.89700000000005
+    charspan:
+    - 0
+    - 78
+    page_no: 1
+  self_ref: '#/texts/3'
+  text: Other Your first name and middle initial Last name Your social security number
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: If joint return, spouse’s first name and middle initial
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 115.99800000000005
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 195.35500000000008
+      t: 108.99800000000005
+    charspan:
+    - 0
+    - 55
+    page_no: 1
+  self_ref: '#/texts/4'
+  text: If joint return, spouse’s first name and middle initial
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Last name
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 115.99800000000005
+      coord_origin: TOPLEFT
+      l: 256.0
+      r: 290.629
+      t: 108.99800000000005
+    charspan:
+    - 0
+    - 9
+    page_no: 1
+  self_ref: '#/texts/5'
+  text: Last name
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Spouse’s social security number
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 115.99800000000005
+      coord_origin: TOPLEFT
+      l: 472.0
+      r: 612.0
+      t: 108.99800000000005
+    charspan:
+    - 0
+    - 31
+    page_no: 1
+  self_ref: '#/texts/6'
+  text: Spouse’s social security number
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Home address (number and street). If you have a P.O. box, see instructions.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 141.04200000000003
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 275.09899999999993
+      t: 131.89999999999998
+    charspan:
+    - 0
+    - 75
+    page_no: 1
+  self_ref: '#/texts/7'
+  text: Home address (number and street). If you have a P.O. box, see instructions.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Apt. no.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 141.04200000000003
+      coord_origin: TOPLEFT
+      l: 421.6
+      r: 448.18600000000004
+      t: 131.89999999999998
+    charspan:
+    - 0
+    - 8
+    page_no: 1
+  self_ref: '#/texts/8'
+  text: Apt. no.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Check here if your main home, and yourspouse’s if filing a joint return, was inthe U.S. for more than half of 2025.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 141.04200000000003
+      coord_origin: TOPLEFT
+      l: 470.0
+      r: 575.4200000000001
+      t: 131.89999999999998
+    charspan:
+    - 0
+    - 115
+    page_no: 1
+  self_ref: '#/texts/9'
+  text: Check here if your main home, and yourspouse’s if filing a joint return, was inthe U.S. for more than half of 2025.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: City, town, or post office. If you have a foreign address, also complete spaces below.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 163.99699999999996
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 304.093
+      t: 155.81100000000004
+    charspan:
+    - 0
+    - 86
+    page_no: 1
+  self_ref: '#/texts/10'
+  text: City, town, or post office. If you have a foreign address, also complete spaces below.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: State
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 163.99699999999996
+      coord_origin: TOPLEFT
+      l: 335.2
+      r: 351.664
+      t: 155.81100000000004
+    charspan:
+    - 0
+    - 5
+    page_no: 1
+  self_ref: '#/texts/11'
+  text: State
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: ZIP code
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 163.99699999999996
+      coord_origin: TOPLEFT
+      l: 400.0
+      r: 428.259
+      t: 155.81100000000004
+    charspan:
+    - 0
+    - 8
+    page_no: 1
+  self_ref: '#/texts/12'
+  text: ZIP code
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Presidential Election Campaign
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 163.99699999999996
+      coord_origin: TOPLEFT
+      l: 472.565
+      r: 571.437
+      t: 155.81100000000004
+    charspan:
+    - 0
+    - 30
+    page_no: 1
+  self_ref: '#/texts/13'
+  text: Presidential Election Campaign
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: will not change your tax or refund.if filing jointly, want $3 to go tothis fund. Checking a box belowCheck here if you, or your spouse
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 174.39599999999996
+      coord_origin: TOPLEFT
+      l: 469.99999999999983
+      r: 612.0
+      t: 164.39599999999996
+    charspan:
+    - 0
+    - 134
+    page_no: 1
+  self_ref: '#/texts/14'
+  text: will not change your tax or refund.if filing jointly, want $3 to go tothis fund. Checking a box belowCheck here if you, or your spouse
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Foreign country name Foreign province/state/county Foreign postal code You Spouse
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 200.99599999999998
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 563.371
+      t: 180.99800000000005
+    charspan:
+    - 0
+    - 81
+    page_no: 1
+  self_ref: '#/texts/15'
+  text: Foreign country name Foreign province/state/county Foreign postal code You Spouse
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Filing Status Single Head of household (HOH)
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 215.28099999999995
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 453.86400000000003
+      t: 205.28099999999995
+    charspan:
+    - 0
+    - 44
+    page_no: 1
+  self_ref: '#/texts/16'
+  text: Filing Status Single Head of household (HOH)
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 'Check onlyone box. Married filing jointly (even if only one had income) Qualifying surviving spouse (QSS)If you checked the HOH or QSS box, enter the child’s nameif the qualifying person is a child but not your dependent: Married filing separately (MFS). Enter spouse’s SSN aboveand full name here:'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 239.087
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 577.616
+      t: 217.711
+    charspan:
+    - 0
+    - 298
+    page_no: 1
+  self_ref: '#/texts/17'
+  text: 'Check onlyone box. Married filing jointly (even if only one had income) Qualifying surviving spouse (QSS)If you checked the HOH or QSS box, enter the child’s nameif the qualifying person is a child but not your dependent: Married filing separately (MFS). Enter spouse’s SSN aboveand full name here:'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 'If treating a nonresident alien or dual-status alien spouse as a U.S. resident for the entire tax year, check the box and enter theirname (see instructions and attach statement if required):'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 266.74299999999994
+      coord_origin: TOPLEFT
+      l: 110.0
+      r: 567.8559999999993
+      t: 257.462
+    charspan:
+    - 0
+    - 190
+    page_no: 1
+  self_ref: '#/texts/18'
+  text: 'If treating a nonresident alien or dual-status alien spouse as a U.S. resident for the entire tax year, check the box and enter theirname (see instructions and attach statement if required):'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 'Digital Assets At any time during 2025, did you: (a) receive (as a reward, award, or payment for property or services); or (b) sell,exchange, or otherwise dispose of a digital asset (or a financial interest in a digital asset)? (See instructions.) . .'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 290.14
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 278.51199999999994
+    charspan:
+    - 0
+    - 251
+    page_no: 1
+  self_ref: '#/texts/19'
+  text: 'Digital Assets At any time during 2025, did you: (a) receive (as a reward, award, or payment for property or services); or (b) sell,exchange, or otherwise dispose of a digital asset (or a financial interest in a digital asset)? (See instructions.) . .'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Yes No
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 294.212
+      coord_origin: TOPLEFT
+      l: 529.2
+      r: 576.0160000000001
+      t: 286.212
+    charspan:
+    - 0
+    - 6
+    page_no: 1
+  self_ref: '#/texts/20'
+  text: Yes No
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Dependents Dependent 1 Dependent 2 Dependent 3 Dependent 4
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 308.14
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 543.1999999999999
+      t: 298.14
+    charspan:
+    - 0
+    - 58
+    page_no: 1
+  self_ref: '#/texts/21'
+  text: Dependents Dependent 1 Dependent 2 Dependent 3 Dependent 4
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: (see instructions) (1) First name (2) Last name If morethan fourdependents,see instructionsand checkhere . .(3) SSN (4) Relationship (5) C heck if livedwith you more(a) Yes (a) Yes (a) Yes (a) Yes than half of 2025(b) And in the U.S. (b) And in the U.S. (b) And in the U.S. (b) And in the U.S.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 378.647
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 552.201
+      t: 310.116
+    charspan:
+    - 0
+    - 293
+    page_no: 1
+  self_ref: '#/texts/22'
+  text: (see instructions) (1) First name (2) Last name If morethan fourdependents,see instructionsand checkhere . .(3) SSN (4) Relationship (5) C heck if livedwith you more(a) Yes (a) Yes (a) Yes (a) Yes than half of 2025(b) And in the U.S. (b) And in the U.S. (b) And in the U.S. (b) And in the U.S.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Check if your filing status is MFS or HOH and you lived apart from your spouse for the last 6 months of 2025, or you are legallyseparated according to your state law under a written separation agreement or a decree of separate maintenance and you did notlive in the same household as your spouse at the end of 2025.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 433.199
+      coord_origin: TOPLEFT
+      l: 108.0
+      r: 573.4079999999994
+      t: 423.137
+    charspan:
+    - 0
+    - 315
+    page_no: 1
+  self_ref: '#/texts/23'
+  text: Check if your filing status is MFS or HOH and you lived apart from your spouse for the last 6 months of 2025, or you are legallyseparated according to your state law under a written separation agreement or a decree of separate maintenance and you did notlive in the same household as your spouse at the end of 2025.
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Income 1a Total amount from Form(s) W-2, box 1 (see instructions) . . . . . . . . . . . . .1a
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 461.854
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 450.854
+    charspan:
+    - 0
+    - 93
+    page_no: 1
+  self_ref: '#/texts/24'
+  text: Income 1a Total amount from Form(s) W-2, box 1 (see instructions) . . . . . . . . . . . . .1a
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Attach Form(s)W-2 here. Alsoattach FormsW-2G and1099-R if taxwas withheld.If you did notget a FormW-2, seeinstructions. b Household employee wages not reported on Form(s) W-2 . . . . . . . . . . . . .c Tip income not reported on line 1a (see instructions) . . . . . . . . . . . . . .1b1c
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 485.2470000000002
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 463.71
+    charspan:
+    - 0
+    - 287
+    page_no: 1
+  self_ref: '#/texts/25'
+  text: Attach Form(s)W-2 here. Alsoattach FormsW-2G and1099-R if taxwas withheld.If you did notget a FormW-2, seeinstructions. b Household employee wages not reported on Form(s) W-2 . . . . . . . . . . . . .c Tip income not reported on line 1a (see instructions) . . . . . . . . . . . . . .1b1c
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 'h Other earned income (see instructions). Enter type and amount: 1h i Nontaxable combat pay election (see instructions)  . . . . . . .1i z Add lines 1a through 1h  . . . . . . . . . . . . . . . . . . . . . .1z Attach Sch. Bif required. 2a Tax-exempt interest . . .2a b  Taxable interest  . . . . .2b 3a Qualified dividends . . .3a b  Ordinary dividends . . . . .3b cC heck if your child’s dividends are included in1Line 3a 2Line 3b 4a IRA distributions . . . .4a b  Taxable amount . . . . . .4b c Check if (see instructions) . . . . . 1Rollover 2QCD 3 5a Pensions and annuities . .5a b  Taxable amount . . . . . .5b c Check if (see instructions) . . . . . 1Rollover 2PSO 3 6a Social security benefits . .6a b  Taxable amount . . . . . .6b c If you elect to use the lump-sum election method, check here (see instructions)  . . . . .'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 675.711
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 535.71
+    charspan:
+    - 0
+    - 831
+    page_no: 1
+  self_ref: '#/texts/26'
+  text: 'h Other earned income (see instructions). Enter type and amount: 1h i Nontaxable combat pay election (see instructions)  . . . . . . .1i z Add lines 1a through 1h  . . . . . . . . . . . . . . . . . . . . . .1z Attach Sch. Bif required. 2a Tax-exempt interest . . .2a b  Taxable interest  . . . . .2b 3a Qualified dividends . . .3a b  Ordinary dividends . . . . .3b cC heck if your child’s dividends are included in1Line 3a 2Line 3b 4a IRA distributions . . . .4a b  Taxable amount . . . . . .4b c Check if (see instructions) . . . . . 1Rollover 2QCD 3 5a Pensions and annuities . .5a b  Taxable amount . . . . . .5b c Check if (see instructions) . . . . . 1Rollover 2PSO 3 6a Social security benefits . .6a b  Taxable amount . . . . . .6b c If you elect to use the lump-sum election method, check here (see instructions)  . . . . .'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 'dI f you are married filing separately and lived apart from your spouse the entire year (see inst.), check here 7a Capital gain or (loss). Attach Schedule D if required  . . . . . . . . . . . . . .7a b Check if: Schedule D not requiredIncludes child’s capital gain or (loss)'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 711.711
+      coord_origin: TOPLEFT
+      l: 96.352
+      r: 612.0
+      t: 679.71
+    charspan:
+    - 0
+    - 274
+    page_no: 1
+  self_ref: '#/texts/27'
+  text: 'dI f you are married filing separately and lived apart from your spouse the entire year (see inst.), check here 7a Capital gain or (loss). Attach Schedule D if required  . . . . . . . . . . . . . .7a b Check if: Schedule D not requiredIncludes child’s capital gain or (loss)'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: For Disclosure, Privacy Act, and Paperwork Reduction Act Notice, see separate instructions. Cat. No. 11320B Form 1040 (2025) Created 9/5/25
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 772.14
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 569.329
+      t: 764.355
+    charspan:
+    - 0
+    - 139
+    page_no: 1
+  self_ref: '#/texts/28'
+  text: For Disclosure, Privacy Act, and Paperwork Reduction Act Notice, see separate instructions. Cat. No. 11320B Form 1040 (2025) Created 9/5/25
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Form 1040 (2025) Tax andCredits Page 2
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 34.539999999999964
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 574.332
+      t: 23.539999999999964
+    charspan:
+    - 0
+    - 38
+    page_no: 2
+  self_ref: '#/texts/29'
+  text: Form 1040 (2025) Tax andCredits Page 2
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 11b Amount from line 11a (adjusted gross income) . . . . . . . . . . . . . . . .11b 12a Someone can claim You as a dependent Your spouse as a dependent b Spouse itemizes on a separate return cd You:You were a dual-status alien Were born before January 2, 1961 Spouse:Are blind Was born before January 2, 1961 Is blind
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 93.71000000000004
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 37.71100000000001
+    charspan:
+    - 0
+    - 317
+    page_no: 2
+  self_ref: '#/texts/30'
+  text: 11b Amount from line 11a (adjusted gross income) . . . . . . . . . . . . . . . .11b 12a Someone can claim You as a dependent Your spouse as a dependent b Spouse itemizes on a separate return cd You:You were a dual-status alien Were born before January 2, 1961 Spouse:Are blind Was born before January 2, 1961 Is blind
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Standarddeduction for—
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 99.30499999999995
+      coord_origin: TOPLEFT
+      l: 31.8
+      r: 83.516
+      t: 91.19799999999998
+    charspan:
+    - 0
+    - 22
+    page_no: 2
+  self_ref: '#/texts/31'
+  text: Standarddeduction for—
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: e Standard deduction or itemized deductions (from Schedule A) . . . . . . . . . . .12e
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 105.71199999999999
+      coord_origin: TOPLEFT
+      l: 100.8
+      r: 612.0
+      t: 97.71199999999999
+    charspan:
+    - 0
+    - 86
+    page_no: 2
+  self_ref: '#/texts/32'
+  text: e Standard deduction or itemized deductions (from Schedule A) . . . . . . . . . . .12e
+- children: []
+  content_layer: body
+  enumerated: false
+  label: list_item
+  marker: •
+  orig: Single or• Married filing• Head ofMarried filingseparately,$15,750jointly orQualifyingsurvivingspouse,$31,500household,$23,625 13a Qualified business income deduction from Form 8995 or Form 8995-A . . . . . . . . .b Additional deductions from Schedule 1-A, line 38 . . . . . . . . . . . . . . .13b13a
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 129.71000000000004
+      coord_origin: TOPLEFT
+      l: 31.3
+      r: 612.0
+      t: 107.99800000000005
+    charspan:
+    - 0
+    - 300
+    page_no: 2
+  self_ref: '#/texts/33'
+  text: Single or• Married filing• Head ofMarried filingseparately,$15,750jointly orQualifyingsurvivingspouse,$31,500household,$23,625 13a Qualified business income deduction from Form 8995 or Form 8995-A . . . . . . . . .b Additional deductions from Schedule 1-A, line 38 . . . . . . . . . . . . . . .13b13a
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: '16 Tax (see instructions). Check if any from Form(s): 18814 24972 3 16'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 165.71000000000004
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 504.75199999999995
+      t: 157.71000000000004
+    charspan:
+    - 0
+    - 70
+    page_no: 2
+  self_ref: '#/texts/34'
+  text: '16 Tax (see instructions). Check if any from Form(s): 18814 24972 3 16'
+- children: []
+  content_layer: body
+  enumerated: false
+  label: list_item
+  marker: •
+  orig: If you checkeda box on line12a, 12b, 12c,
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 221.26199999999994
+      coord_origin: TOPLEFT
+      l: 31.3
+      r: 129.74065
+      t: 212.048
+    charspan:
+    - 0
+    - 41
+    page_no: 2
+  self_ref: '#/texts/35'
+  text: If you checkeda box on line12a, 12b, 12c,
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: or 12d, see inst.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 242.298
+      coord_origin: TOPLEFT
+      l: 36.3
+      r: 131.10520000000002
+      t: 235.298
+    charspan:
+    - 0
+    - 17
+    page_no: 2
+  self_ref: '#/texts/36'
+  text: or 12d, see inst.
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: 'PaymentsandRefundableCredits 25 Federal income tax withheld from:'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 278.139
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 253.96800000000005
+      t: 265.139
+    charspan:
+    - 0
+    - 65
+    page_no: 2
+  self_ref: '#/texts/37'
+  text: 'PaymentsandRefundableCredits 25 Federal income tax withheld from:'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: d Add lines 25a through 25c . . . . . . . . . . . . . . . . . . . . . .25d
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 321.712
+      coord_origin: TOPLEFT
+      l: 100.8
+      r: 612.0
+      t: 313.712
+    charspan:
+    - 0
+    - 74
+    page_no: 2
+  self_ref: '#/texts/38'
+  text: d Add lines 25a through 25c . . . . . . . . . . . . . . . . . . . . . .25d
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: '26 2025 estimated tax payments and amount applied from 2024 return . . . . . . . . . .26 If you made estimated tax payments with your former spouse in 2025,enter their SSN (see instructions):'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 347.087
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 612.0
+      t: 325.211
+    charspan:
+    - 0
+    - 191
+    page_no: 2
+  self_ref: '#/texts/39'
+  text: '26 2025 estimated tax payments and amount applied from 2024 return . . . . . . . . . .26 If you made estimated tax payments with your former spouse in 2025,enter their SSN (see instructions):'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: If you have aqualifying child,
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 357.80600000000004
+      coord_origin: TOPLEFT
+      l: 33.8
+      r: 84.494
+      t: 349.699
+    charspan:
+    - 0
+    - 30
+    page_no: 2
+  self_ref: '#/texts/40'
+  text: If you have aqualifying child,
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: attach Sch. EIC.you may need to27a Earned income credit (EIC) . . . . . . . . . . . . . .27a b Clergy filing Schedule SE (see instructions)   . . . . . . . . . . . . . . . . c If you do not want to claim the EIC, check here  . . . . . . . . . . . . . . . 28 Additional child tax credit (ACTC) from Schedule 8812. If you do not wantto claim the ACTC, check here . . . . . . . . . . . . 28
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 417.71
+      coord_origin: TOPLEFT
+      l: 33.799999999999976
+      r: 612.0
+      t: 361.711
+    charspan:
+    - 0
+    - 387
+    page_no: 2
+  self_ref: '#/texts/41'
+  text: attach Sch. EIC.you may need to27a Earned income credit (EIC) . . . . . . . . . . . . . .27a b Clergy filing Schedule SE (see instructions)   . . . . . . . . . . . . . . . . c If you do not want to claim the EIC, check here  . . . . . . . . . . . . . . . 28 Additional child tax credit (ACTC) from Schedule 8812. If you do not wantto claim the ACTC, check here . . . . . . . . . . . . 28
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Refund 34 If line 33 is more than line 24, subtract line 24 from line 33. This is the amount you overpaid . .34
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 491.279
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 481.279
+    charspan:
+    - 0
+    - 111
+    page_no: 2
+  self_ref: '#/texts/42'
+  text: Refund 34 If line 33 is more than line 24, subtract line 24 from line 33. This is the amount you overpaid . .34
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: '35a Amount of line 34 you want refunded to you. If Form 8888 is attached, check here . . . .35a Direct deposit?See instructions.b Routing number c  Type: Checking Savings d Account number 36Amount of line 34 you want applied to your 2026 estimated tax . . . 36'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 537.712
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 493.712
+    charspan:
+    - 0
+    - 260
+    page_no: 2
+  self_ref: '#/texts/43'
+  text: '35a Amount of line 34 you want refunded to you. If Form 8888 is attached, check here . . . .35a Direct deposit?See instructions.b Routing number c  Type: Checking Savings d Account number 36Amount of line 34 you want applied to your 2026 estimated tax . . . 36'
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: AmountYou Owe 37 Subtract line 33 from line 24. This is the amount you owe.For details on how to pay, go to www.irs.gov/Payments or see instructions . . . . . . . .
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 552.313
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 612.0
+      t: 541.14
+    charspan:
+    - 0
+    - 164
+    page_no: 2
+  self_ref: '#/texts/44'
+  text: AmountYou Owe 37 Subtract line 33 from line 24. This is the amount you owe.For details on how to pay, go to www.irs.gov/Payments or see instructions . . . . . . . .
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: 37 38 Estimated tax penalty (see instructions) . . . . . . . . . .38
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 573.712
+      coord_origin: TOPLEFT
+      l: 91.904
+      r: 555.6959999999999
+      t: 553.713
+    charspan:
+    - 0
+    - 68
+    page_no: 2
+  self_ref: '#/texts/45'
+  text: 37 38 Estimated tax penalty (see instructions) . . . . . . . . . .38
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Third PartyDesignee Do you want to allow another person to discuss this return with the IRS? See instructions. Yes. Complete below. No
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 588.14
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 561.616
+      t: 576.711
+    charspan:
+    - 0
+    - 134
+    page_no: 2
+  self_ref: '#/texts/46'
+  text: Third PartyDesignee Do you want to allow another person to discuss this return with the IRS? See instructions. Yes. Complete below. No
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Designee’sname
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 602.969
+      coord_origin: TOPLEFT
+      l: 93.6
+      r: 130.161
+      t: 594.898
+    charspan:
+    - 0
+    - 14
+    page_no: 2
+  self_ref: '#/texts/47'
+  text: Designee’sname
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Phoneno.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 602.969
+      coord_origin: TOPLEFT
+      l: 302.4
+      r: 324.443
+      t: 594.898
+    charspan:
+    - 0
+    - 8
+    page_no: 2
+  self_ref: '#/texts/48'
+  text: Phoneno.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Personal identificationnumber (PIN)
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 602.969
+      coord_origin: TOPLEFT
+      l: 432.0
+      r: 503.169
+      t: 594.898
+    charspan:
+    - 0
+    - 35
+    page_no: 2
+  self_ref: '#/texts/49'
+  text: Personal identificationnumber (PIN)
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: SignHere
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 625.568
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 62.867999999999995
+      t: 612.568
+    charspan:
+    - 0
+    - 8
+    page_no: 2
+  self_ref: '#/texts/50'
+  text: SignHere
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Under penalties of perjury, I declare that I have examined this return and accompanying schedules and statements, and to the best of my knowledge andbelief, they are true, correct, and complete. Declaration of preparer (other than taxpayer) is based on all information of which preparer has any knowledge.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 625.568
+      coord_origin: TOPLEFT
+      l: 93.6
+      r: 568.1845999999995
+      t: 612.568
+    charspan:
+    - 0
+    - 305
+    page_no: 2
+  self_ref: '#/texts/51'
+  text: Under penalties of perjury, I declare that I have examined this return and accompanying schedules and statements, and to the best of my knowledge andbelief, they are true, correct, and complete. Declaration of preparer (other than taxpayer) is based on all information of which preparer has any knowledge.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Your signature
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 645.9259999999999
+      coord_origin: TOPLEFT
+      l: 91.599
+      r: 139.178
+      t: 636.498
+    charspan:
+    - 0
+    - 14
+    page_no: 2
+  self_ref: '#/texts/52'
+  text: Your signature
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Date
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 645.9259999999999
+      coord_origin: TOPLEFT
+      l: 277.6
+      r: 294.197
+      t: 636.498
+    charspan:
+    - 0
+    - 4
+    page_no: 2
+  self_ref: '#/texts/53'
+  text: Date
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Your occupation
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 645.9259999999999
+      coord_origin: TOPLEFT
+      l: 328.0
+      r: 381.676
+      t: 636.498
+    charspan:
+    - 0
+    - 15
+    page_no: 2
+  self_ref: '#/texts/54'
+  text: Your occupation
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: If the IRS sent you an IdentityProtection PIN, enter it here(see inst.)
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 645.9259999999999
+      coord_origin: TOPLEFT
+      l: 464.8
+      r: 558.803
+      t: 636.498
+    charspan:
+    - 0
+    - 71
+    page_no: 2
+  self_ref: '#/texts/55'
+  text: If the IRS sent you an IdentityProtection PIN, enter it here(see inst.)
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Joint return?See instructions.Keep a copy foryour records. Spouse’s signature. If a joint return, both must sign.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 676.175
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 255.238
+      t: 664.198
+    charspan:
+    - 0
+    - 113
+    page_no: 2
+  self_ref: '#/texts/56'
+  text: Joint return?See instructions.Keep a copy foryour records. Spouse’s signature. If a joint return, both must sign.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Date
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 676.175
+      coord_origin: TOPLEFT
+      l: 277.6
+      r: 294.197
+      t: 664.198
+    charspan:
+    - 0
+    - 4
+    page_no: 2
+  self_ref: '#/texts/57'
+  text: Date
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Spouse’s occupation
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 676.175
+      coord_origin: TOPLEFT
+      l: 328.0
+      r: 394.255
+      t: 664.198
+    charspan:
+    - 0
+    - 19
+    page_no: 2
+  self_ref: '#/texts/58'
+  text: Spouse’s occupation
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: If the IRS sent your spouse anIdentity Protection PIN, enter it here(see inst.)
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 676.175
+      coord_origin: TOPLEFT
+      l: 464.8
+      r: 577.48873
+      t: 664.198
+    charspan:
+    - 0
+    - 79
+    page_no: 2
+  self_ref: '#/texts/59'
+  text: If the IRS sent your spouse anIdentity Protection PIN, enter it here(see inst.)
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: PaidPreparerUse Only
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 75.05000000000001
+      t: 708.999
+    charspan:
+    - 0
+    - 20
+    page_no: 2
+  self_ref: '#/texts/60'
+  text: PaidPreparerUse Only
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Phone no.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 704.996
+      coord_origin: TOPLEFT
+      l: 91.599
+      r: 125.44400000000002
+      t: 697.996
+    charspan:
+    - 0
+    - 9
+    page_no: 2
+  self_ref: '#/texts/61'
+  text: Phone no.
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Preparer’s name
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 91.599
+      r: 145.275
+      t: 708.999
+    charspan:
+    - 0
+    - 15
+    page_no: 2
+  self_ref: '#/texts/62'
+  text: Preparer’s name
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Email address
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 704.996
+      coord_origin: TOPLEFT
+      l: 277.6
+      r: 321.91168000000005
+      t: 697.996
+    charspan:
+    - 0
+    - 13
+    page_no: 2
+  self_ref: '#/texts/63'
+  text: Email address
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Preparer’s signature
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 227.2
+      r: 292.40500000000003
+      t: 708.999
+    charspan:
+    - 0
+    - 20
+    page_no: 2
+  self_ref: '#/texts/64'
+  text: Preparer’s signature
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Firm’s name Firm’s address
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 752.998
+      coord_origin: TOPLEFT
+      l: 91.599
+      r: 141.90800000000002
+      t: 733.996
+    charspan:
+    - 0
+    - 26
+    page_no: 2
+  self_ref: '#/texts/65'
+  text: Firm’s name Firm’s address
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Go to www.irs.gov/Form1040 for instructions and the latest information.
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 766.139
+      coord_origin: TOPLEFT
+      l: 36.0
+      r: 292.76000000000005
+      t: 757.711
+    charspan:
+    - 0
+    - 71
+    page_no: 2
+  self_ref: '#/texts/66'
+  text: Go to www.irs.gov/Form1040 for instructions and the latest information.
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Date
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 400.0
+      r: 416.597
+      t: 708.999
+    charspan:
+    - 0
+    - 4
+    page_no: 2
+  self_ref: '#/texts/67'
+  text: Date
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: PTIN
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 457.6
+      r: 473.021
+      t: 708.999
+    charspan:
+    - 0
+    - 4
+    page_no: 2
+  self_ref: '#/texts/68'
+  text: PTIN
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: 'Check if:'
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 721.141
+      coord_origin: TOPLEFT
+      l: 515.2
+      r: 542.815
+      t: 708.999
+    charspan:
+    - 0
+    - 9
+    page_no: 2
+  self_ref: '#/texts/69'
+  text: 'Check if:'
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Self-employed
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 726.997
+      coord_origin: TOPLEFT
+      l: 529.2
+      r: 574.7070000000001
+      t: 719.997
+    charspan:
+    - 0
+    - 13
+    page_no: 2
+  self_ref: '#/texts/70'
+  text: Self-employed
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Phone no. Firm’s EIN
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 752.998
+      coord_origin: TOPLEFT
+      l: 457.6
+      r: 493.90200000000004
+      t: 733.996
+    charspan:
+    - 0
+    - 20
+    page_no: 2
+  self_ref: '#/texts/71'
+  text: Phone no. Firm’s EIN
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Form 1040 (2025)
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 766.139
+      coord_origin: TOPLEFT
+      l: 508.704
+      r: 573.7760000000001
+      t: 757.711
+    charspan:
+    - 0
+    - 16
+    page_no: 2
+  self_ref: '#/texts/72'
+  text: Form 1040 (2025)
+- children: []
+  content_layer: furniture
+  label: page_header
+  orig: Form1 040
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 43.999000000000024
+      coord_origin: TOPLEFT
+      l: 34.5981
+      r: 41.598
+      t: 0.0
+    charspan:
+    - 0
+    - 9
+    page_no: 1
+  self_ref: '#/texts/73'
+  text: Form1 040
+version: 1.10.0

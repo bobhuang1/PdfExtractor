@@ -25,6 +25,45 @@ pub struct DoclingDocument {
     pub body: Body,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub furniture: Option<Group>,
+    /// What an HTML page's head said about the page itself, when it was read
+    /// from HTML: its description, the URL it says it lives at, and the Open
+    /// Graph and Twitter card statements a link preview is built from.
+    ///
+    /// Kept beside the model rather than in it, the way [`TextItem::quote`] is:
+    /// Docling has nowhere to put either fact and rejects a field it does not
+    /// know (`extra_forbidden`), so the field is skipped when a document is
+    /// written. A page read as HTML and written as HTML keeps both in its head,
+    /// Markdown writes them as YAML front matter, and either reads to a Docling
+    /// consumer as the document Docling itself would make.
+    #[serde(skip)]
+    pub html_head: HtmlHead,
+}
+
+/// What an HTML page's head says about the page, rather than on it.
+///
+/// `<meta name="description">` is the summary a search engine shows, and
+/// `<link rel="canonical">` is the URL the page says it lives at. Neither is
+/// rendered, so neither is an item, and Docling's schema has no field for
+/// either — see [`DoclingDocument::html_head`] for where they wait instead.
+///
+/// The Open Graph and Twitter card statements are here for the same reason: a
+/// social embed reads them to build a link preview, a browser renders none of
+/// them, and Docling has nowhere to keep them. They are carried so a page read
+/// as HTML and written as HTML is the page it was, head and all; a Markdown
+/// rendering states the same facts as YAML front matter and reads them back.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HtmlHead {
+    pub description: Option<String>,
+    pub canonical: Option<String>,
+    /// The social cards' `<meta>` statements, as the key the page wrote and the
+    /// content it gave, in the order the head stated them: `og:title`, then
+    /// `og:image`, then the `og:image:width` that belongs to that image.
+    ///
+    /// One list holds both vocabularies because they are one kind of statement
+    /// and each key names its own — `og:` for Open Graph, `twitter:` for the
+    /// card Twitter reads — and the order is part of what a card says, since a
+    /// width can only belong to the image before it.
+    pub social: Vec<(String, String)>,
 }
 
 /// Document origin metadata
@@ -98,6 +137,12 @@ pub struct BoundingBox {
 /// cannot be read. (Real Docling never meets this case because it rasterises
 /// such drawings to PNG first, which is what `crates/metafile` now does for a
 /// DOCX drawing — see `progress.md`, bug 50.)
+///
+/// A GIF, a BMP and a TIFF are accepted here, but no office reader hands one on:
+/// Docling's own Word and PowerPoint readers open every picture with Pillow and
+/// write it back as PNG, so the CLI normalises an office picture the same way —
+/// `office_media` in `crates/cli` — and these three are met only in a flow page,
+/// where the bytes travel as the file stores them.
 const REPRESENTABLE_MEDIA_TYPES: [&str; 6] = [
     "image/png",
     "image/jpeg",
@@ -194,9 +239,25 @@ pub struct TextItem {
     pub enumerated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<String>,
+    /// Where this text points, when it points anywhere: a PDF `/Link`
+    /// annotation over it, a DOCX `w:hyperlink` around it, or an HTML
+    /// `a` with an `href`. Left out entirely when there is no link, which
+    /// is how Docling writes it — the field never appears for text that
+    /// goes nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<String>,
+    /// Whether the document set these words apart as a quotation.
+    ///
+    /// Docling has no block quote: its own readers flatten a `<blockquote>` or
+    /// a `>` line into a paragraph, and no label in its schema says otherwise.
+    /// The fact is therefore kept here, beside the model rather than in it —
+    /// the field is skipped when the document is written, because Docling
+    /// rejects a field it does not know (`extra_forbidden`) — so a quotation
+    /// survives a Markdown or an HTML round trip as the quotation it was, and
+    /// reads to a Docling consumer as the paragraph Docling itself would make.
+    #[serde(skip)]
+    pub quote: bool,
 }
-
-/// Table item
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TableItem {
@@ -254,11 +315,57 @@ pub struct PictureItem {
     #[serde(default)]
     pub children: Vec<Ref>,
     pub content_layer: String,
+    /// What the picture *is*, when the source said more than "a picture": a
+    /// chart's type, and the numbers it plots. A photograph or a drawing has
+    /// nothing to add, and says so by leaving the field out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<PictureMeta>,
     pub label: String,
     #[serde(default)]
     pub prov: Vec<Provenance>,
+    /// The text items that caption this picture. Only a source that states the
+    /// link can fill it — a chart's title is its own caption — so a picture
+    /// with no stated caption leaves the field out rather than claiming none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captions: Vec<Ref>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageRef>,
+}
+
+/// Docling's `PictureMeta`: the extras a picture can carry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PictureMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<PictureClassificationMetaField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tabular_chart: Option<TabularChartMetaField>,
+}
+
+/// A picture's classification: what kind of picture a reader thinks it is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PictureClassificationMetaField {
+    /// Docling requires at least one prediction, so a picture that is
+    /// classified at all names its class.
+    pub predictions: Vec<PictureClassificationPrediction>,
+}
+
+/// One classification, by Docling's own class names — `bar_chart`,
+/// `line_chart`, `pie_chart`, `scatter_chart`, `other_chart`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PictureClassificationPrediction {
+    pub class_name: String,
+}
+
+/// A chart's plotted numbers, held as a table beside the picture rather than in
+/// the document's table list: the chart is one picture, and the table is what
+/// the picture says.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TabularChartMetaField {
+    pub chart_data: TableData,
 }
 
 /// Key-value item

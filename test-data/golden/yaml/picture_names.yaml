@@ -1,0 +1,63 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/pictures/0'
+  - $ref: '#/texts/2'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: picture_names.html
+origin:
+  binary_hash: 14433596665260287147
+  filename: picture_names.html
+  mimetype: text/html
+pages: {}
+pictures:
+- children: []
+  content_layer: body
+  image:
+    mimetype: image/gif
+    size:
+      height: 36.0
+      width: 60.0
+    uri: images/Q3 chart & graph.gif
+  label: picture
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/pictures/0'
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Names a picture keeps
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Names a picture keeps
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: A file name may carry a space and an ampersand.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: A file name may carry a space and an ampersand.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: And the page keeps the name it came with.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: And the page keeps the name it came with.
+version: 1.10.0

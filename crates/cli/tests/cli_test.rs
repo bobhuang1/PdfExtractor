@@ -2309,6 +2309,66 @@ fn an_animated_gif_is_a_page_per_frame() {
     }
 }
 
+/// An animated WebP is the same strip as an animated GIF: its frames are pages,
+/// not one picture, and each is drawn on the canvas the `ANIM` chunk states.
+/// Stopping at the first frame would lose two pages of three, so the fixture
+/// says its own words on every frame and each page is held to its own words —
+/// and to no other frame's. The pages are the canvas's size, at the 72 dpi a
+/// WebP's missing resolution means.
+#[test]
+fn an_animated_webp_is_a_page_per_frame() {
+    let ws = Workspace::new("animated-webp");
+    let bytes = std::fs::read(repository_root().join("test-data/images/turning.webp"))
+        .expect("the animation fixture");
+    let input = ws.write("turning.webp", &bytes);
+    let output = ws.join("turning.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "always",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(doc["origin"]["mimetype"], "image/webp");
+    let pages = doc["pages"].as_object().expect("a page list");
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    for page in 1..=3 {
+        let size = &doc["pages"][page.to_string()]["size"];
+        assert_eq!(size["width"], 480.0, "page {page}");
+        assert_eq!(size["height"], 160.0, "page {page}");
+    }
+
+    let words_on = |page: i64| -> String {
+        doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .filter(|item| item["prov"][0]["page_no"].as_i64() == Some(page))
+            .map(|item| item["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let frames = [(1, "WEBP ONE"), (2, "WEBP TWO"), (3, "WEBP THREE")];
+    for (page, own) in frames {
+        let words = words_on(page);
+        assert!(
+            words.contains(own),
+            "page {page} should show {own}, and shows {words:?}"
+        );
+        for (other_page, other) in frames {
+            if other_page != page {
+                assert!(
+                    !words.contains(other),
+                    "page {page} also shows frame {other_page}'s words: {words:?}"
+                );
+            }
+        }
+    }
+}
+
 /// A TIFF is a stack too: `pages.tiff` is a three-sheet batch — the shape a
 /// scanner's feeder writes, one image file directory per sheet — and each
 /// directory is a page a reader turns, at its own size. A reader that stopped at
@@ -2403,6 +2463,64 @@ fn a_multiframe_tiff_is_a_page_per_frame() {
     assert_eq!(doc["pages"]["1"]["size"]["height"], 168.0);
 }
 
+/// Each directory of a TIFF states how its own sheet is stored. A batch whose
+/// first sheet is a quarter turn must not turn the rest with it: here the first
+/// sheet's stored 6 × 4 grid is tagged 6 (a 4 × 6 page), the second is stored
+/// upright at 5 × 3 and tagged 1, and the third is stored 6 × 4 and tagged 8
+/// (another 4 × 6 page). Pages are their own upright grids, not the first
+/// sheet's shape applied to every directory.
+#[test]
+fn a_tiffs_sheets_are_turned_by_their_own_orientation_tags() {
+    use tiff::encoder::colortype::RGB8;
+    use tiff::encoder::Rational;
+    use tiff::tags::{ResolutionUnit, Tag};
+
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    {
+        let mut tiff = tiff::encoder::TiffEncoder::new(&mut encoded).expect("a TIFF encoder");
+        for (width, height, orientation) in [(6u32, 4u32, 6u16), (5, 3, 1), (6, 4, 8)] {
+            let mut page = tiff
+                .new_image::<RGB8>(width, height)
+                .expect("a directory per sheet");
+            page.resolution(ResolutionUnit::Inch, Rational { n: 72, d: 1 });
+            page.encoder()
+                .write_tag(Tag::Orientation, orientation)
+                .expect("the sheet's own orientation");
+            page.write_data(&vec![0x80; (width * height * 3) as usize])
+                .expect("the sheet's pixels");
+        }
+    }
+
+    let ws = Workspace::new("oriented-tiff");
+    let input = ws.write("oriented.tiff", &encoded.into_inner());
+    let output = ws.join("oriented.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pages = doc["pages"].as_object().expect("a page list");
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    let sizes: Vec<(f64, f64)> = (1..=3)
+        .map(|page| {
+            let size = &doc["pages"][page.to_string()]["size"];
+            (
+                size["width"].as_f64().expect("a width"),
+                size["height"].as_f64().expect("a height"),
+            )
+        })
+        .collect();
+    // 72 dpi, so one pixel is one point. The first and third sheets are on
+    // their side and become 4 × 6; the second is already upright at 5 × 3 and
+    // must not be turned by the first sheet's tag.
+    assert_eq!(sizes, vec![(4.0, 6.0), (5.0, 3.0), (4.0, 6.0)], "{pages:?}");
+}
+
 /// Word and PowerPoint 2016 and later state an SVG picture twice: the `a:blip`'s
 /// own `r:embed` names a PNG fallback, for readers that cannot draw SVG, and the
 /// drawing itself is an `asvg:svgBlip` extension beside it. The fallback is what
@@ -2436,6 +2554,7 @@ fn an_svg_picture_stated_in_an_svg_blip_is_the_drawing_not_its_png_fallback() {
     ] {
         let input = repository_root().join("test-data").join(fixture);
         let bytes = std::fs::read(&input).expect("the office fixture");
+        assert_picture_parts_are_declared_and_related(&package_parts(&bytes, fixture), fixture);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
             .unwrap_or_else(|e| panic!("{fixture}: not a ZIP: {e}"));
         let mut read_part = |name: &str| {
@@ -2552,6 +2671,7 @@ fn the_same_svg_converts_the_same_however_it_is_stored() {
         // equality could hold by both files being the same package twice.
         let spelling = |label: &str| {
             let bytes = fixture(label);
+            assert_picture_parts_are_declared_and_related(&package_parts(&bytes, label), label);
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
                 .unwrap_or_else(|e| panic!("{label}: not a ZIP: {e}"));
             let mut read = |part: &str| {
@@ -2667,6 +2787,7 @@ fn a_picture_in_an_alternate_content_choice_is_the_drawing_not_its_fallback() {
     ] {
         let input = repository_root().join("test-data").join(fixture);
         let bytes = std::fs::read(&input).expect("the office fixture");
+        assert_picture_parts_are_declared_and_related(&package_parts(&bytes, fixture), fixture);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
             .unwrap_or_else(|e| panic!("{fixture}: not a ZIP: {e}"));
         let mut drawing_xml = String::new();
@@ -2957,6 +3078,7 @@ fn a_shape_filled_with_a_picture_is_painted_into_the_shape() {
     ] {
         let input = repository_root().join("test-data").join(fixture);
         let bytes = std::fs::read(&input).expect("the office fixture");
+        assert_picture_parts_are_declared_and_related(&package_parts(&bytes, fixture), fixture);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
             .unwrap_or_else(|e| panic!("{fixture}: not a ZIP: {e}"));
         let mut drawing_xml = String::new();
@@ -3303,6 +3425,55 @@ fn declared_as(parts: &[(String, Vec<u8>)], name: &str, mime: &str) -> bool {
                 && declaration.contains(mime)
         })
     })
+}
+
+/// Every picture part a package holds, held to the package's own statements: a
+/// media part whose media type no `[Content_Types].xml` entry declares, or that
+/// no relationship reaches, is a file in a ZIP rather than a picture the
+/// document holds. A fixture whose parts a test opened by name would otherwise
+/// pass after the declaration or the relationship that makes them pictures went
+/// missing, because the test never asked the package whether they were.
+///
+/// The extensions are the ones these fixtures carry; an extension this does not
+/// know is not a picture part it can judge, and is left alone rather than
+/// guessed at.
+fn assert_picture_parts_are_declared_and_related(parts: &[(String, Vec<u8>)], label: &str) {
+    let mut seen = 0;
+    for (name, _) in parts {
+        let Some((_, extension)) = name.rsplit_once('.') else {
+            continue;
+        };
+        let mime = match extension.to_ascii_lowercase().as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "svg" => "image/svg",
+            "bmp" => "image/bmp",
+            "tif" | "tiff" => "image/tiff",
+            "emf" => "image/x-emf",
+            "wmf" => "image/x-wmf",
+            _ => continue,
+        };
+        if !["word/media/", "ppt/media/", "xl/media/"]
+            .iter()
+            .any(|directory| name.starts_with(directory))
+        {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            declared_as(parts, name, mime),
+            "{label}: {name} is in the package but declared as no {mime} part"
+        );
+        assert!(
+            reached_by_a_relationship(parts, name),
+            "{label}: {name} is in the package but no relationship reaches it"
+        );
+    }
+    assert!(
+        seen > 0,
+        "{label}: the package holds no picture part to hold to its statements"
+    );
 }
 
 /// The hand-written SVG part in the two fixtures is one an office application
@@ -3919,14 +4090,14 @@ fn libreoffice_opens_and_resaves_the_bmp_and_tiff_fixture_packages() {
 }
 
 /// LibreOffice opens the WebP and JPEG 2000 fixture packages, and draws one of
-/// the two encodings: the WebP, which it decodes, and not the JPEG 2000, for
-/// which it has no filter at all.
+/// the encodings: the WebP, which it decodes, and neither spelling of the JPEG
+/// 2000, for which it has no filter at all.
 ///
-/// The generator places both pictures by hand — python-docx and python-pptx can
-/// place neither — so whether an office application accepts the parts is a
-/// question this project's own reader cannot answer. LibreOffice is asked: it
-/// opens each fixture and writes it back, and what it writes is held to
-///
+/// The generator places all three pictures by hand — python-docx and python-pptx
+/// can place none of the encodings — so whether an office application accepts
+/// the parts is a question this project's own reader cannot answer. LibreOffice
+/// is asked: it opens each fixture and writes it back, and what it writes is
+/// held to
 /// * the document around the pictures: the sentences before and after them are
 ///   still there, so the package was read rather than refused;
 /// * the picture it understood: one raster of the chart's own 60 × 36 grid, with
@@ -3934,14 +4105,15 @@ fn libreoffice_opens_and_resaves_the_bmp_and_tiff_fixture_packages() {
 ///   a PNG drawn from the pixels, not the WebP under a `.png` name — declared as
 ///   an `image/png` part with a relationship reaching it, so the document holds
 ///   it as a picture rather than leaving a file in the package;
-/// * the encoding it did not: no part is the diagram's JPEG 2000, and no
-///   raster is its 40 × 24 grid. LibreOffice has no JPEG 2000 import filter — a
-///   standalone `diagram.jp2` does not load as a picture either — so the diagram
-///   is the half of the fixture only this project's reader reads; and
+/// * the encodings it did not: no part is either JPEG 2000 — the `diagram.jp2`
+///   container or the `diagram.jpc` codestream — and no raster is the 40 × 24 or
+///   36 × 22 grid they state. LibreOffice has no JPEG 2000 import filter — a
+///   standalone JPEG 2000 does not load as a picture either — so both spellings
+///   are the half of the fixture only this project's reader reads; and
 /// * this reader, on the re-saved package, takes exactly what the application
 ///   kept: one picture, the chart at its 60 × 36 grid with the fixture's own
 ///   pixels (the application re-encoded the WebP, so the bytes differ and the
-///   drawing does not), and no diagram at all.
+///   drawing does not), and no JPEG 2000 at all.
 ///
 /// That last assertion is deliberately a limitation stated: a LibreOffice that
 /// gains a JPEG 2000 filter fails here, which is the moment to say so instead.
@@ -3955,6 +4127,8 @@ fn libreoffice_opens_and_resaves_the_webp_and_jp2_fixture_packages() {
         .expect("the WebP fixture");
     let jp2 = std::fs::read(repository_root().join("test-data/images/diagram.jp2"))
         .expect("the JPEG 2000 fixture");
+    let jpc = std::fs::read(repository_root().join("test-data/images/diagram.jpc"))
+        .expect("the bare JPEG 2000 codestream fixture");
 
     for fixture in ["webp_jp2_pictures.docx", "webp_jp2_pictures.pptx"] {
         let bytes = std::fs::read(repository_root().join("test-data").join(fixture))
@@ -4021,30 +4195,33 @@ fn libreoffice_opens_and_resaves_the_webp_and_jp2_fixture_packages() {
             "{fixture}: the WebP's own bytes came back as a picture part"
         );
 
-        // The JPEG 2000: the half LibreOffice has no filter for.
-        assert!(
-            parts.iter().all(|(_, data)| data != &jp2),
-            "{fixture}: the JPEG 2000 part survived, so this note is out of date"
-        );
+        // The JPEG 2000: both spellings are the half LibreOffice has no filter
+        // for.
+        for source in [&jp2, &jpc] {
+            assert!(
+                parts.iter().all(|(_, data)| data != source),
+                "{fixture}: a JPEG 2000 part survived, so this note is out of date"
+            );
+        }
         assert!(
             rasters
                 .iter()
-                .all(|(_, drawn)| drawn.dimensions() != (40, 24)),
-            "{fixture}: a raster of the diagram's grid came back, so this note is out of date"
+                .all(|(_, drawn)| !matches!(drawn.dimensions(), (40, 24) | (36, 22))),
+            "{fixture}: a raster of a JPEG 2000's grid came back, so this note is out of date"
         );
 
         // This reader, on the same re-saved package, takes one picture out of it
-        // where the fixture gives two — the same reading the application's part
-        // list just showed. The one it takes is the chart, at its own grid with
-        // its own pixels: the application re-encoded the WebP as a PNG, so the
-        // bytes differ while the drawing does not. The diagram is not there,
-        // because no part of it is.
+        // where the fixture gives three — the same reading the application's
+        // part list just showed. The one it takes is the chart, at its own grid
+        // with its own pixels: the application re-encoded the WebP as a PNG, so
+        // the bytes differ while the drawing does not. The JPEG 2000s are not
+        // there, because no part of them is.
         let before = pictures_the_reader_takes(&ws, fixture, &bytes, "before");
         let after = pictures_the_reader_takes(&ws, fixture, &resaved, "after");
         assert_eq!(
             before.len(),
-            2,
-            "{fixture}: the fixture is not the pair this expects: {before:#?}"
+            3,
+            "{fixture}: the fixture is not the three pictures this expects: {before:#?}"
         );
         assert_eq!(
             after.len(),
@@ -4060,8 +4237,10 @@ fn libreoffice_opens_and_resaves_the_webp_and_jp2_fixture_packages() {
             before[0]
         );
         assert!(
-            after.iter().all(|picture| picture.size != (40.0, 24.0)),
-            "{fixture}: the reader found the diagram in a package that dropped it"
+            after
+                .iter()
+                .all(|picture| !matches!(picture.size, (40.0, 24.0) | (36.0, 22.0))),
+            "{fixture}: the reader found a JPEG 2000 in a package that dropped it"
         );
     }
 }
@@ -4268,20 +4447,27 @@ fn a_bmp_and_a_tiff_embedded_in_office_files_become_png_pictures() {
     }
 }
 
-/// A WebP and a JPEG 2000 are encodings the readers decode but Docling cannot
-/// name in an `image` reference, so a Word or PowerPoint package embedding one
-/// has to hand on a PNG. A package of each kind carrying both must give two
-/// pictures per conversion, each `image/png` at the size its own encoding
-/// states, with a real PNG written beside the JSON — the picture's own pixels,
-/// not a blank — and a render that names both files. An `image/webp` or
-/// `image/jp2` left in the model is the failure this guards.
+/// A WebP and both spellings of a JPEG 2000 are encodings the readers decode but
+/// Docling cannot name in an `image` reference, so a Word or PowerPoint package
+/// embedding one has to hand on a PNG. A package of each kind carrying all three
+/// must give three pictures per conversion, each `image/png` at the size its own
+/// encoding states, with a real PNG written beside the JSON — the picture's own
+/// pixels, not a blank — and a render that names all three files. An
+/// `image/webp` or `image/jp2` left in the model is the failure this guards.
+///
+/// The `.jpc` is a bare codestream rather than a JP2 under another name: it has
+/// no `ihdr`, so the 36 × 22 grid the test looks for can only have come from
+/// its `SIZ` marker. A reader that went by the extension and assumed a container
+/// would have no header to read.
 #[test]
-fn a_webp_and_a_jp2_embedded_in_office_files_become_png_pictures() {
+fn a_webp_and_both_jpeg_2000_spellings_embedded_in_office_files_become_png_pictures() {
     let ws = Workspace::new("webp-jp2-office");
     let webp = std::fs::read(repository_root().join("test-data/images/chart.webp"))
         .expect("the WebP fixture");
     let jp2 = std::fs::read(repository_root().join("test-data/images/diagram.jp2"))
         .expect("the JPEG 2000 fixture");
+    let jpc = std::fs::read(repository_root().join("test-data/images/diagram.jpc"))
+        .expect("the bare JPEG 2000 codestream fixture");
 
     for fixture in ["webp_jp2_pictures.docx", "webp_jp2_pictures.pptx"] {
         let input = repository_root().join("test-data").join(fixture);
@@ -4303,15 +4489,16 @@ fn a_webp_and_a_jp2_embedded_in_office_files_become_png_pictures() {
         let pictures = doc["pictures"].as_array().expect("a pictures list");
         assert_eq!(
             pictures.len(),
-            2,
+            3,
             "{fixture}: a picture was lost: {pictures:#?}"
         );
 
-        // Both are found by size, because both are now the same media type:
-        // that they are both PNG is the point.
+        // Each is found by its own grid, because all three are now the same
+        // media type: that they are all PNG is the point.
         for (source, (width, height)) in [
             (webp.as_slice(), (60.0, 36.0)),
             (jp2.as_slice(), (40.0, 24.0)),
+            (jpc.as_slice(), (36.0, 22.0)),
         ] {
             let picture = pictures
                 .iter()
@@ -4356,18 +4543,18 @@ fn a_webp_and_a_jp2_embedded_in_office_files_become_png_pictures() {
             );
         }
 
-        // The render names both: a picture the model holds is one a reader can
-        // see, not a box with no image.
+        // The render names all three: a picture the model holds is one a reader
+        // can see, not a box with no image.
         let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
         assert_eq!(
             html.matches("<img src=\"").count(),
-            2,
+            3,
             "{fixture}: a picture is missing from the render:\n{html}"
         );
         assert_eq!(
             html.matches(".png\"").count(),
-            2,
-            "{fixture}: the render does not name two PNGs:\n{html}"
+            3,
+            "{fixture}: the render does not name three PNGs:\n{html}"
         );
 
         let words = doc["texts"]
@@ -4603,6 +4790,107 @@ fn a_vml_shape_and_a_wordart_become_pictures() {
             "{sentence} did not survive: {words}"
         );
     }
+}
+
+/// A slide states each autoshape as markup too — a `p:spPr` naming a preset
+/// outline — so the pictures a conversion writes are the shapes the deck shows.
+/// The fixture holds one shape for every preset the painter covers, written by
+/// python-pptx (`test-data/make_preset_deck.py`), so a preset that stops being
+/// painted leaves a hole here as well as in the package reader's own test: all
+/// 68 have to reach the JSON, each with its own PNG written beside it, at the
+/// size of its frame and with ink on it.
+#[test]
+fn every_preset_shape_of_a_deck_is_exported() {
+    let ws = Workspace::new("preset-deck");
+    let input = repository_root().join("test-data/preset_deck.pptx");
+    let output = ws.join("preset_deck.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(
+        pictures.len(),
+        68,
+        "a preset shape was left unpainted: {pictures:#?}"
+    );
+
+    let mut uris: Vec<&str> = Vec::new();
+    for (index, picture) in pictures.iter().enumerate() {
+        let carried = &picture["image"];
+        assert_eq!(carried["mimetype"], "image/png", "picture {index}");
+        assert_eq!(
+            carried["dpi"], 144,
+            "picture {index} is not rasterised like a metafile"
+        );
+        // Each preset is a 90 × 50 pt cell at two device pixels per point; the
+        // elbow and the curve span two cells and are as tall as one.
+        let expected = if index >= 66 {
+            (360.0, 100.0)
+        } else {
+            (180.0, 100.0)
+        };
+        let size = &carried["size"];
+        assert_eq!(
+            (
+                size["width"].as_f64().expect("a width"),
+                size["height"].as_f64().expect("a height"),
+            ),
+            expected,
+            "picture {index} is not the size of its frame"
+        );
+
+        let uri = carried["uri"].as_str().expect("an image uri");
+        assert!(
+            uri.starts_with("preset_deck_images/"),
+            "picture {index} names {uri}, not a file beside the JSON"
+        );
+        uris.push(uri);
+        let bytes = std::fs::read(ws.join(uri)).unwrap_or_else(|e| {
+            panic!("picture {index} was not written beside the JSON ({uri}): {e}")
+        });
+        let drawn = image::load_from_memory(&bytes)
+            .unwrap_or_else(|e| panic!("picture {index} does not decode: {e}"))
+            .to_rgba8();
+        assert_eq!(
+            (drawn.width(), drawn.height()),
+            (expected.0 as u32, expected.1 as u32),
+            "picture {index} is not the size its entry states"
+        );
+        assert!(
+            drawn.pixels().any(|pixel| pixel.0[..3] != [255, 255, 255]),
+            "picture {index} is a blank canvas"
+        );
+    }
+
+    // One file per shape: no two pictures share a file, and the directory holds
+    // nothing the model does not name.
+    uris.sort_unstable();
+    uris.dedup();
+    assert_eq!(uris.len(), 68, "two shapes were written to one file");
+    let written = std::fs::read_dir(ws.join("preset_deck_images"))
+        .expect("the picture directory")
+        .count();
+    assert_eq!(written, 68, "the directory holds files no picture names");
+
+    // The render names every one of them too, so the pictures are exported and
+    // not only counted in the model.
+    let html = std::fs::read_to_string(ws.join("preset_deck.html")).expect("the HTML written");
+    assert_eq!(
+        html.matches("<img src=\"preset_deck_images/").count(),
+        68,
+        "a picture is missing from the render"
+    );
 }
 
 /// A modern Word file states a shape in DrawingML, as a `wps:wsp` inside
@@ -5034,6 +5322,78 @@ fn a_slides_shapes_are_painted_even_with_no_image_part() {
         5,
         "a picture is missing from the render:\n{html}"
     );
+}
+
+/// A slide's picture background is the page's image, not a picture item.
+///
+/// `background_deck.pptx` states `images/scan.jpg` in its first slide's
+/// `p:cSld/p:bg/p:bgPr/a:blipFill`, outside the shape tree; the second slide has
+/// no `p:bg` at all. The extract writes the backdrop beside the JSON and names
+/// it in `pages["1"].image` at its own 620 × 350 grid, with the resolution its
+/// stretch across the 10-inch page implies. It is not in `pictures`: a backdrop
+/// is behind the page rather than a block on it. The second page has no image,
+/// and both slides' sentences are still their text.
+#[test]
+fn a_slides_picture_background_is_the_pages_image() {
+    let ws = Workspace::new("background-deck");
+    let input = repository_root().join("test-data/background_deck.pptx");
+    let output = ws.join("background.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pages = doc["pages"].as_object().expect("a pages map");
+    let image = &pages["1"]["image"];
+    assert_eq!(image["mimetype"], "image/jpeg");
+    assert_eq!(image["dpi"].as_u64(), Some(62), "620 px across 720 pt");
+    assert_eq!(image["size"]["width"].as_f64(), Some(620.0));
+    assert_eq!(image["size"]["height"].as_f64(), Some(350.0));
+    let uri = image["uri"].as_str().expect("the backdrop's file");
+    assert!(
+        uri.ends_with("slide1_background.jpg"),
+        "the page image is not named for the slide it backs: {uri}"
+    );
+    assert_eq!(
+        std::fs::read(ws.join(uri)).expect("the backdrop written beside the JSON"),
+        fixture("images/scan.jpg"),
+        "the page image is not the background's own JPEG bytes"
+    );
+
+    assert_eq!(
+        pages["2"].get("image"),
+        None,
+        "a slide with no background was given one"
+    );
+    assert_eq!(
+        doc["pictures"].as_array().expect("a pictures list").len(),
+        0,
+        "the backdrop was reported as a picture item as well as the page's image"
+    );
+
+    let words = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .map(|item| item["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for sentence in [
+        "A photograph behind the words.",
+        "No picture behind these words.",
+    ] {
+        assert!(
+            words.contains(sentence),
+            "{sentence} did not survive: {words}"
+        );
+    }
 }
 
 /// `--ocr-lang` and `--psm` are checked before work starts, and a real mode
@@ -6636,6 +6996,90 @@ fn a_pages_social_cards_survive_the_html_round_trip() {
     assert_eq!(
         again, written,
         "the cards changed on the way back through HTML"
+    );
+}
+
+/// Markdown has no head, so a page's head facts travel as YAML front matter: the
+/// writer states them there, the reader puts them back beside the model, and the
+/// page written from that Markdown has the same head as the original. A second
+/// Markdown rendering must be the first, so the front matter is a fixed point
+/// with the rest of the file.
+#[test]
+fn a_pages_social_cards_survive_the_markdown_round_trip() {
+    let ws = Workspace::new("markdown-cards-round-trip");
+    let page = ws.write("page.html", &fixture("social_cards.html"));
+    let markdown = ws.join("page.md");
+    run_ok(&[
+        "-i",
+        page.to_str().unwrap(),
+        "-o",
+        markdown.to_str().unwrap(),
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+        "--include-notes",
+    ]);
+    let written = std::fs::read_to_string(&markdown).expect("the Markdown written");
+    for line in [
+        "---\n",
+        "description: Quarterly results & outlook\n",
+        "canonical: https://example.com/reports/q3?quarter=3&region=eu\n",
+        "social:\n",
+        "- key: og:title\n  content: Q3 & costs\n",
+        "- key: og:image\n  content: https://example.com/cards/q3.png\n",
+        "- key: twitter:card\n  content: summary_large_image\n",
+    ] {
+        assert!(written.contains(line), "lost {line:?}: {written}");
+    }
+
+    // Writing the Markdown again is the same file: the front matter reads back
+    // into the document instead of becoming prose.
+    let again = ws.join("again.md");
+    run_ok(&[
+        "-i",
+        markdown.to_str().unwrap(),
+        "-o",
+        again.to_str().unwrap(),
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+        "--include-notes",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(&again).expect("the second Markdown"),
+        written,
+        "the head facts changed on the way back through Markdown"
+    );
+
+    // The page written from the Markdown has the head the original page had.
+    let from_markdown = ws.join("from-markdown.html");
+    run_ok(&[
+        "-i",
+        markdown.to_str().unwrap(),
+        "-o",
+        from_markdown.to_str().unwrap(),
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+    let direct = ws.join("direct.html");
+    run_ok(&[
+        "-i",
+        page.to_str().unwrap(),
+        "-o",
+        direct.to_str().unwrap(),
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(&from_markdown).expect("the HTML from Markdown"),
+        std::fs::read_to_string(&direct).expect("the HTML from the page"),
+        "the head changed on the way from HTML through Markdown"
     );
 }
 

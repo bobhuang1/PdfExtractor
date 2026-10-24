@@ -694,6 +694,14 @@ function renderedSummary() {
     `verdict="${el("verdict").textContent}"`,
     `command="${el("run-command").textContent}"`,
     `rows=[${rows.join(",")}]`,
+    // How many formats the CLI named, and the headings they were grouped under,
+    // as rendered: the ask round-tripped and the page used its families.
+    `formats=${el("formats").dataset.count || "?"}`,
+    `families="${[...document.querySelectorAll("#format-families dt")]
+      .map((heading) => heading.textContent)
+      .join("|")}"`,
+    // The binary named beside them, after the re-ask a self-test makes.
+    `cli="${el("cli-program").textContent}"`,
     diffSummary(),
     `logs=${el("log").childNodes.length}`,
   ].join(" ");
@@ -710,6 +718,10 @@ function handle(kind, payload) {
 function dispatch(kind, payload) {
   if (kind === "selftest-enabled") {
     selftest = true;
+    // The smoke test asks the CLI again on the path a person uses after replacing
+    // the binary: `formats=` in its report is then the refresh's answer, so the
+    // re-ask is checked end to end with the rest of the window.
+    reaskFormats();
     return;
   }
   if (!payload) return;
@@ -771,6 +783,101 @@ async function stop() {
   }
 }
 
+// The formats on offer are the CLI's, not this page's: `input_formats` runs
+// `pdfextractor-cli --list-input-formats`, so what is named under the input box
+// is the set a run will actually take. The native chooser is filtered by the same
+// answer on the Rust side; nothing here repeats it.
+//
+// The answer carries the families too, under the CLI's own names. Drawing them
+// here is what keeps the page's headings the chooser's headings rather than a
+// second grouping written on this side.
+function showFamilies(families) {
+  const rows = document.createDocumentFragment();
+  for (const family of families) {
+    const row = document.createElement("div");
+    row.className = "format-family";
+    const heading = document.createElement("dt");
+    heading.textContent = family.name;
+    const formats = document.createElement("dd");
+    formats.textContent = family.inputFormats.join(", ");
+    row.append(heading, formats);
+    rows.append(row);
+  }
+  el("format-families").replaceChildren(rows);
+}
+
+// One function draws the answer for both asks, so the list on load and the list
+// after "Ask again" cannot disagree about how they are written.
+function showFormats(answer) {
+  const hint = el("formats");
+  const families = answer.families.length;
+  const label = families === 1 ? "family" : "families";
+  hint.textContent = `Reads ${answer.names.length} format(s) in ${families} ${label}`;
+  hint.dataset.count = String(answer.names.length);
+  hint.classList.remove("bad");
+  showFamilies(answer.families);
+}
+
+function showFormatsProblem(error) {
+  // The same call a conversion would make first, so a missing or broken CLI is
+  // said here rather than only when a run is attempted. The old headings are
+  // cleared with it: they were the previous binary's, not this answer's.
+  const hint = el("formats");
+  hint.textContent = `Could not ask the CLI which formats it reads: ${error}`;
+  hint.dataset.count = "0";
+  hint.classList.add("bad");
+  el("format-families").replaceChildren();
+}
+
+// The binary the formats came from, named beside them. It is asked of the
+// backend separately because the environment can move between a refresh's
+// format ask and this call; the backend resolves it again, so the line names the
+// path a run would start now rather than the one the window opened with.
+async function loadCliProgram() {
+  const line = el("cli-line");
+  const program = el("cli-program");
+  try {
+    const path = await invoke("cli_program");
+    program.textContent = path;
+    program.title = path;
+    line.classList.remove("bad");
+  } catch (error) {
+    program.textContent = `could not resolve the binary: ${error}`;
+    program.removeAttribute("title");
+    line.classList.add("bad");
+  }
+}
+
+async function loadFormats() {
+  try {
+    showFormats(await invoke("input_formats"));
+  } catch (error) {
+    showFormatsProblem(error);
+  }
+  await loadCliProgram();
+}
+
+// Ask again rather than reopen the window: the binary a run starts can be
+// rebuilt, replaced or repaired while this window is open, and the answer was
+// asked once on load and kept. `refresh_input_formats` drops that answer and
+// asks the CLI that is there now; the chooser's filter is the same kept answer
+// on the Rust side, so it moves with the line.
+async function reaskFormats() {
+  const button = el("reask-formats");
+  button.disabled = true;
+  el("formats").textContent = "Asking the CLI again which formats it reads…";
+  el("formats").classList.remove("bad");
+  el("format-families").replaceChildren();
+  try {
+    showFormats(await invoke("refresh_input_formats"));
+  } catch (error) {
+    showFormatsProblem(error);
+  } finally {
+    button.disabled = false;
+    await loadCliProgram();
+  }
+}
+
 async function pick(kind, target) {
   const path = await invoke("pick_path", { kind });
   if (path) {
@@ -782,7 +889,9 @@ async function pick(kind, target) {
 // ---- boot ----------------------------------------------------------------
 
 function wire() {
-  el("pick-file").addEventListener("click", () => pick("file", "input"));
+  // "document" is the chooser filtered by the CLI's own formats; a reference is
+  // any file, so it is picked without a filter.
+  el("pick-file").addEventListener("click", () => pick("document", "input"));
   el("pick-folder").addEventListener("click", () => pick("folder", "input"));
   el("pick-output").addEventListener("click", () => pick("folder", "output"));
 
@@ -815,6 +924,7 @@ function wire() {
 
   el("convert").addEventListener("click", start);
   el("stop").addEventListener("click", stop);
+  el("reask-formats").addEventListener("click", reaskFormats);
 
   refreshSummary();
 }
@@ -826,6 +936,10 @@ async function boot() {
     await listen(kind, (event) => dispatch(kind, event.payload));
   }
   wire();
+  // Awaited so a self-test sees the list drawn, and so a CLI that cannot answer
+  // is said on the page before anything is attempted. The ask only prints and
+  // exits; this is not waiting on a conversion.
+  await loadFormats();
   // Tell the backend the page mounted and the IPC works. With `--selftest` the
   // app exits on this call, which is how the stack is smoke-tested.
   invoke("frontend_ready").catch((error) => console.error(error));

@@ -10,9 +10,23 @@ rust-version.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 pdfextractor-core = { path = "../core" }
+# An embedded picture's media type is named by the shared picture-format table,
+# the same list the CLI writes a picture under.
+pdfextractor-picture-formats = { path = "../picture-formats" }
 # Vector drawings (`image/emf`, `image/wmf`) are played into a PNG, so a drawing
 # is carried as pixels like every other picture.
 pdfextractor-metafile = { path = "../metafile" }
+# A shape Word paints itself — a `wps:wsp` with no image part behind it — is
+# drawn by the same painter a PowerPoint slide's shape is.
+pdfextractor-drawingml = { path = "../drawingml" }
+# A picture Word stored the way the camera wrote it is turned the way the EXIF
+# tag says Word displays it, before it leaves the parser.
+pdfextractor-image-parser = { path = "../image-parser" }
 zip.workspace = true
 quick-xml.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# The picture tests decode what the parser returns: upright pixels, not just
+# upright headers.
+image.workspace = true

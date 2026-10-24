@@ -1,0 +1,22 @@
+[package]
+name = "pdfextractor-svg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The drawing itself: paths, fills, strokes, gradients, clipping, text. An SVG
+# is a graphics language rather than an encoding, and drawing it is a renderer's
+# work; this crate owns the bridge to an office package — the size the package
+# asks the drawing to be shown at, the pixels that come out, and the PNG they
+# are written as.
+resvg = "0.48"
+# The drawing's own `preserveAspectRatio`: the same parser resvg uses, named
+# here so the frame's transform can be worked out before the drawing is shown.
+svgtypes = { version = "0.16", default-features = false }
+# PNG encoding of the raster, as `pdfextractor-metafile` does it: a commodity
+# codec for the bytes this crate produced.
+image.workspace = true
+tracing.workspace = true

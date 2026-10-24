@@ -1,0 +1,34 @@
+[package]
+name = "pdfextractor-pptx-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# PresentationML is XML in a ZIP, the same container DOCX and XLSX are read
+# from.
+quick-xml.workspace = true
+zip.workspace = true
+tracing.workspace = true
+# A picture the deck stored the way the camera wrote it is turned the way its
+# EXIF tag says PowerPoint displays it, before it leaves the parser.
+pdfextractor-image-parser = { path = "../image-parser" }
+# An embedded picture's media type is named by the shared picture-format table,
+# the same list the CLI writes a picture under.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# A shape the slide draws itself — an autoshape, a connector, a group — has no
+# image part behind it, so it is painted by the same DrawingML painter a Word
+# shape goes through.
+pdfextractor-drawingml = { path = "../drawingml" }
+# A chart is a drawing of data rather than a picture: the part is read by the
+# reader a workbook's charts go through too, since both writers write it the
+# same way.
+pdfextractor-chart = { path = "../chart" }
+
+[dev-dependencies]
+# The picture tests decode what the parser returns: upright pixels, not just
+# upright headers.
+image.workspace = true

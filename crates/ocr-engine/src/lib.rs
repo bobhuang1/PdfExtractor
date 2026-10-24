@@ -13,6 +13,8 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(feature = "tesseract")]
+use std::io::Cursor;
+#[cfg(feature = "tesseract")]
 use std::path::{Path, PathBuf};
 
 /// A recognised word with a pixel bounding box `[left, top, right, bottom]`.
@@ -40,6 +42,50 @@ pub struct OcrResult {
     pub words: Vec<OcrWord>,
 }
 
+/// A quarter turn that puts a page upright, applied clockwise.
+///
+/// A page can be on its side with nothing in the file saying so: a scanner may
+/// write the pixels sideways with no PDF `/Rotate`, and an image may carry no
+/// EXIF orientation tag at all. Tesseract reads the pixels as stored, so a
+/// sideways page comes back as noise unless it is turned first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuarterTurn {
+    /// The pixels are already upright.
+    #[default]
+    AsStored,
+    /// Stored on its left side: turn 90° clockwise.
+    Clockwise90,
+    /// Upside down: turn 180°.
+    Clockwise180,
+    /// Stored on its right side: turn 270° clockwise (90° anticlockwise).
+    Clockwise270,
+}
+
+impl QuarterTurn {
+    /// Every turn the detector considers, the stored one first.
+    pub const ALL: [QuarterTurn; 4] = [
+        QuarterTurn::AsStored,
+        QuarterTurn::Clockwise90,
+        QuarterTurn::Clockwise180,
+        QuarterTurn::Clockwise270,
+    ];
+
+    /// The turn clockwise, in degrees.
+    pub fn degrees(self) -> i32 {
+        match self {
+            QuarterTurn::AsStored => 0,
+            QuarterTurn::Clockwise90 => 90,
+            QuarterTurn::Clockwise180 => 180,
+            QuarterTurn::Clockwise270 => 270,
+        }
+    }
+
+    /// True when turning the page swaps its width and height.
+    pub fn swaps_axes(self) -> bool {
+        matches!(self, QuarterTurn::Clockwise90 | QuarterTurn::Clockwise270)
+    }
+}
+
 /// True when this build can actually perform OCR.
 pub const OCR_ENABLED: bool = cfg!(feature = "tesseract");
 
@@ -47,6 +93,40 @@ pub const OCR_ENABLED: bool = cfg!(feature = "tesseract");
 /// warns and assumes badly below ~70 dpi.
 #[cfg(feature = "tesseract")]
 const FALLBACK_DPI: i32 = 300;
+
+/// The longest edge, in pixels, of the copy the orientation detector reads.
+///
+/// A page is recognised in up to four orientations to find its upright one, so
+/// the detector works on a reduced copy: at 1000 px an A4 page is still around
+/// 120 dpi, which is plenty of detail for Tesseract to have an opinion about,
+/// at a fraction of the cost of full-size passes.
+#[cfg(feature = "tesseract")]
+const DETECT_LONG_EDGE: u32 = 1000;
+
+/// The confidence below which a word is noise rather than reading.
+#[cfg(feature = "tesseract")]
+const DETECT_WORD_CONFIDENCE: f32 = 55.0;
+
+/// The least a reading must contain, in confidence-weighted characters, before
+/// it can be a reason to turn the page at all: about a dozen characters at the
+/// confidence above.
+#[cfg(feature = "tesseract")]
+const DETECT_MIN_SCORE: f64 = 600.0;
+
+/// A reading this strong as stored is a page whose lines are the way text
+/// reads, so the two *quarter* turns need not be tried — a sideways page can
+/// only produce fragments. This is what keeps an upright scan, nearly every
+/// page OCR sees, to two recognitions in the detector rather than four: the
+/// stored turn and the half turn, which is always read because an upside-down
+/// page still has horizontal baselines (see [`OcrEngine::detect_upright`]).
+#[cfg(feature = "tesseract")]
+const DETECT_SETTLED_SCORE: f64 = 1500.0;
+
+/// How much better another turn must read than the stored pixels before the
+/// page is turned. A page that reads a little worse upright than sideways —
+/// sparse text, a noisy scan — is not evidence that it was captured sideways.
+#[cfg(feature = "tesseract")]
+const DETECT_MARGIN: f64 = 1.35;
 
 /// An OCR engine bound to one language.
 ///
@@ -76,10 +156,15 @@ fn shipped_datapath(lang: &str) -> Option<String> {
 #[cfg(feature = "tesseract")]
 fn tessdata_beside(beside: &Path, lang: &str) -> Option<PathBuf> {
     let tessdata = beside.join("tessdata");
-    tessdata
-        .join(format!("{lang}.traineddata"))
-        .is_file()
-        .then_some(tessdata)
+    // A package's own tessdata becomes Tesseract's whole world once it is
+    // pointed at, so it is pointed at only when it carries *every* requested
+    // language: a package with just English must not claim `eng+deu`, or the
+    // system's German data would be hidden behind an empty lookup.
+    let complete = !lang.is_empty()
+        && lang
+            .split('+')
+            .all(|l| tessdata.join(format!("{l}.traineddata")).is_file());
+    complete.then_some(tessdata)
 }
 
 impl OcrEngine {
@@ -102,6 +187,91 @@ impl OcrEngine {
             let _ = lang;
             anyhow::bail!("OCR support was not compiled in; rebuild with the `tesseract` feature")
         }
+    }
+
+    /// Choose Tesseract's page segmentation mode, 0–13 — the `PageSegMode` of
+    /// `publictypes.h` (3 is the engine's own default; 6 is one block, 7 one
+    /// line, 11 sparse text). `leptess` has no typed setter for the mode, but
+    /// Tesseract exposes it as a variable and the bindings do.
+    pub fn set_psm(&mut self, psm: u8) -> Result<()> {
+        #[cfg(feature = "tesseract")]
+        {
+            if psm > 13 {
+                anyhow::bail!("page segmentation mode must be 0–13, got {psm}");
+            }
+            self.tess
+                .set_variable(leptess::Variable::TesseditPagesegMode, &psm.to_string())
+                .map_err(|_| anyhow::anyhow!("Tesseract refused the page segmentation mode {psm}"))
+        }
+        #[cfg(not(feature = "tesseract"))]
+        {
+            let _ = psm;
+            anyhow::bail!("OCR support was not compiled in")
+        }
+    }
+
+    /// Which way a page has to be turned to be read upright, judged by
+    /// Tesseract itself.
+    ///
+    /// The page is recognised in up to four turns on a reduced copy, and the
+    /// turn whose reading holds the most confident text wins.
+    /// No extra data is needed: whatever language the engine was built for is
+    /// the language the page is judged in.
+    ///
+    /// The stored pixels keep the page unless another turn reads *clearly*
+    /// better (see [`DETECT_MARGIN`]). A page with little text, a blurry scan
+    /// and one this cannot decode all answer [`QuarterTurn::AsStored`], so a
+    /// page is never turned on a difference that is only noise.
+    ///
+    /// The half turn is always read with the stored one: upside-down text has
+    /// horizontal baselines, so Tesseract reads it as other words rather than
+    /// as a turned page, and only a stronger reading the right way round shows
+    /// it. The two quarter turns are read only when the stored reading is weak
+    /// ([`DETECT_SETTLED_SCORE`]), which is the shape a sideways page makes.
+    pub fn detect_upright(&mut self, image_bytes: &[u8]) -> Result<QuarterTurn> {
+        #[cfg(feature = "tesseract")]
+        {
+            let bitmap = image::load_from_memory(image_bytes)
+                .context("failed to decode the image whose orientation was to be found")?;
+            let sample = downscale_for_detection(&bitmap);
+
+            let stored = self.read_turn(&sample, QuarterTurn::AsStored)?;
+            let mut readings = vec![
+                (QuarterTurn::AsStored, stored),
+                (
+                    QuarterTurn::Clockwise180,
+                    self.read_turn(&sample, QuarterTurn::Clockwise180)?,
+                ),
+            ];
+            if stored < DETECT_SETTLED_SCORE {
+                for turn in [QuarterTurn::Clockwise90, QuarterTurn::Clockwise270] {
+                    readings.push((turn, self.read_turn(&sample, turn)?));
+                }
+            }
+            tracing::debug!("orientation readings (turn, score): {readings:?}");
+            Ok(choose_upright(&readings))
+        }
+        #[cfg(not(feature = "tesseract"))]
+        {
+            let _ = image_bytes;
+            anyhow::bail!("OCR support was not compiled in")
+        }
+    }
+
+    /// Recognise the reduced page in one turn and score what came back.
+    #[cfg(feature = "tesseract")]
+    fn read_turn(&mut self, sample: &image::GrayImage, turn: QuarterTurn) -> Result<f64> {
+        let turned = match turn {
+            QuarterTurn::AsStored => sample.clone(),
+            QuarterTurn::Clockwise90 => image::imageops::rotate90(sample),
+            QuarterTurn::Clockwise180 => image::imageops::rotate180(sample),
+            QuarterTurn::Clockwise270 => image::imageops::rotate270(sample),
+        };
+        let mut png = Vec::new();
+        image::DynamicImage::ImageLuma8(turned)
+            .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+            .context("failed to encode the image for its orientation check")?;
+        Ok(reading_score(&self.recognize(&png)?))
     }
 
     /// Recognise text in an encoded image (PNG, JPEG, TIFF, BMP...).
@@ -132,6 +302,68 @@ impl OcrEngine {
             let _ = image_bytes;
             anyhow::bail!("OCR support was not compiled in")
         }
+    }
+}
+
+/// The page reduced to the size the orientation detector reads, as grey: the
+/// turn is the question, so colour is only a cost here.
+#[cfg(feature = "tesseract")]
+fn downscale_for_detection(bitmap: &image::DynamicImage) -> image::GrayImage {
+    let gray = bitmap.to_luma8();
+    let long = gray.width().max(gray.height());
+    if long <= DETECT_LONG_EDGE {
+        return gray;
+    }
+    let scale = DETECT_LONG_EDGE as f64 / long as f64;
+    let width = ((gray.width() as f64 * scale).round() as u32).max(1);
+    let height = ((gray.height() as f64 * scale).round() as u32).max(1);
+    image::imageops::resize(&gray, width, height, image::imageops::FilterType::Triangle)
+}
+
+/// How much this reading looks like a page: the characters of each confident
+/// word, weighted by that word's confidence. A sideways page read as stored
+/// yields few words, or short ones, or words the engine is unsure of — all of
+/// which score far below the same page read the right way up.
+#[cfg(feature = "tesseract")]
+fn reading_score(reading: &OcrResult) -> f64 {
+    reading
+        .words
+        .iter()
+        .map(|word| {
+            let letters = word.text.chars().filter(|c| c.is_alphanumeric()).count();
+            if letters < 2 || word.confidence < DETECT_WORD_CONFIDENCE {
+                return 0.0;
+            }
+            word.confidence as f64 * letters as f64
+        })
+        .sum()
+}
+
+/// Pick the turn a page is read best in — or the stored one, unless the gain
+/// is large enough to be the page's orientation rather than noise.
+#[cfg(feature = "tesseract")]
+fn choose_upright(readings: &[(QuarterTurn, f64)]) -> QuarterTurn {
+    let stored = readings
+        .iter()
+        .find(|(turn, _)| *turn == QuarterTurn::AsStored)
+        .map(|(_, score)| *score)
+        .unwrap_or(0.0);
+    // `>` keeps the earlier turn on a tie, so the stored page wins a draw.
+    let (best, score) =
+        readings
+            .iter()
+            .copied()
+            .fold((QuarterTurn::AsStored, stored), |best, next| {
+                if next.1 > best.1 {
+                    next
+                } else {
+                    best
+                }
+            });
+    if best == QuarterTurn::AsStored || score < DETECT_MIN_SCORE || score < stored * DETECT_MARGIN {
+        QuarterTurn::AsStored
+    } else {
+        best
     }
 }
 
@@ -242,6 +474,129 @@ mod tests {
         assert!(r.words.iter().all(|w| !w.text.trim().is_empty()));
     }
 
+    /// A reading with just these words, at these confidences.
+    fn reading(words: &[(&str, f32)]) -> OcrResult {
+        OcrResult {
+            text: String::new(),
+            lines: Vec::new(),
+            words: words
+                .iter()
+                .map(|(text, confidence)| OcrWord {
+                    text: text.to_string(),
+                    bbox: [0, 0, 1, 1],
+                    confidence: *confidence,
+                })
+                .collect(),
+        }
+    }
+
+    /// The scores of the same page read in all four turns, upright and
+    /// `(turn, words)`.
+    fn turns(
+        upright: &[(&str, f32)],
+        others: &[(QuarterTurn, &[(&str, f32)])],
+    ) -> Vec<(QuarterTurn, f64)> {
+        let mut scores = vec![(QuarterTurn::AsStored, reading_score(&reading(upright)))];
+        for (turn, words) in others {
+            scores.push((*turn, reading_score(&reading(words))));
+        }
+        scores
+    }
+
+    #[test]
+    fn a_page_is_read_best_in_its_upright_turn() {
+        let sideways = reading(&[("|", 91.0), ("I", 88.0), ("-", 95.0)]);
+        assert_eq!(
+            reading_score(&sideways),
+            0.0,
+            "a turn that finds no words is no reason to turn the page"
+        );
+
+        let scores = turns(
+            &[("ACME", 90.0), ("Invoice", 85.0)],
+            &[
+                (QuarterTurn::Clockwise90, &[("|", 91.0)]),
+                (QuarterTurn::Clockwise180, &[("3W3", 70.0)]),
+                (QuarterTurn::Clockwise270, &[]),
+            ],
+        );
+        assert_eq!(choose_upright(&scores), QuarterTurn::AsStored);
+
+        // The same page, read better by the quarter turn: the page is sideways.
+        let scores = turns(
+            &[("|", 80.0)],
+            &[
+                (
+                    QuarterTurn::Clockwise90,
+                    &[("ACME", 92.0), ("Invoice", 88.0)],
+                ),
+                (QuarterTurn::Clockwise180, &[]),
+                (QuarterTurn::Clockwise270, &[]),
+            ],
+        );
+        assert_eq!(choose_upright(&scores), QuarterTurn::Clockwise90);
+    }
+
+    #[test]
+    fn an_upside_down_page_is_turned_round() {
+        let scores = turns(
+            &[("ıuǝɹɐdS", 52.0)],
+            &[
+                (QuarterTurn::Clockwise90, &[]),
+                (
+                    QuarterTurn::Clockwise180,
+                    &[("ACME", 91.0), ("Supplies", 89.0)],
+                ),
+                (QuarterTurn::Clockwise270, &[]),
+            ],
+        );
+        assert_eq!(choose_upright(&scores), QuarterTurn::Clockwise180);
+    }
+
+    #[test]
+    fn a_close_reading_is_not_a_reason_to_turn_a_page() {
+        // Sideways reads a little better by accident; the margin says that is
+        // not the page's orientation.
+        let scores = turns(
+            &[("invoice", 80.0), ("total", 78.0)],
+            &[
+                (
+                    QuarterTurn::Clockwise90,
+                    &[("invoice", 84.0), ("total", 80.0)],
+                ),
+                (QuarterTurn::Clockwise180, &[]),
+                (QuarterTurn::Clockwise270, &[]),
+            ],
+        );
+        assert_eq!(choose_upright(&scores), QuarterTurn::AsStored);
+    }
+
+    #[test]
+    fn a_settled_upright_reading_needs_no_other_turn() {
+        // The detector stops after the stored turn when it is already strong;
+        // what it is left holding is still the stored page.
+        let scores = vec![(
+            QuarterTurn::AsStored,
+            DETECT_SETTLED_SCORE.max(DETECT_MIN_SCORE) + 1.0,
+        )];
+        assert_eq!(choose_upright(&scores), QuarterTurn::AsStored);
+    }
+
+    #[test]
+    fn a_page_with_almost_no_text_is_left_as_stored() {
+        // A one-word page reads better turned, but not enough to be evidence:
+        // four turns of a nearly empty page must not rotate a document.
+        let scores = turns(
+            &[("42", 90.0)],
+            &[
+                (QuarterTurn::Clockwise90, &[("42", 95.0)]),
+                (QuarterTurn::Clockwise180, &[]),
+                (QuarterTurn::Clockwise270, &[]),
+            ],
+        );
+        assert_eq!(choose_upright(&scores), QuarterTurn::AsStored);
+    }
+
     /// A unique scratch directory under the system temp.
     fn scratch(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -287,6 +642,12 @@ mod tests {
             Some(dir.join("tessdata")),
             "a package's own tessdata directory is recognised"
         );
+        // A combined language list needs every file: the package is
+        // Tesseract's whole world once pointed at, so one language is not
+        // enough to claim two.
+        assert_eq!(tessdata_beside(&dir, "eng+deu"), None);
+        std::fs::write(dir.join("tessdata").join("deu.traineddata"), b"").unwrap();
+        assert_eq!(tessdata_beside(&dir, "eng+deu"), Some(dir.join("tessdata")));
         // The language must match: other languages are not ours to provide.
         assert_eq!(tessdata_beside(&dir, "fra"), None);
 

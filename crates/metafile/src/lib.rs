@@ -32,13 +32,25 @@
 //! layouts by walking the record chain: the one that ends exactly at the end of
 //! the file, on the end-of-file record, is the one the file uses.
 
-mod dib;
+// Public because a DIB also arrives from outside a metafile: an RTF
+// `\wbitmap`/`\dibitmap` payload is the same `BITMAPINFO` with no file header,
+// and wrapping one needs the header's layout. Parsing it there as well would let
+// the wrapper and the renderer disagree about where a palette or a colour mask
+// ends — see the module's own notes.
+pub mod dib;
 mod emf;
 mod font;
 mod paint;
 mod wmf;
 
-pub use paint::{Bitmap, Canvas, Clip, Color, FillRule, Point, Rect, Rop, Transform};
+pub use paint::{pt, Bitmap, Canvas, Clip, Color, FillRule, Point, Rect, Rop, Transform};
+
+// The built-in font is also what a VML shape's text is drawn in: VML is another
+// vector drawing a Word document can carry (`w:pict`), drawn by the DOCX reader
+// into the same kind of canvas, and it faces the same problem — a shape names a
+// font family and the host is asked for outlines it may not have. Exposing it
+// keeps one substitute rather than two.
+pub use font::{draw_text, text_width, Horizontal, TextAlign, Vertical};
 
 use std::fmt;
 

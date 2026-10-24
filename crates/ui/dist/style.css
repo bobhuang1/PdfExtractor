@@ -303,6 +303,78 @@ main.comparing {
   font-size: 12px;
 }
 
+/* The line naming the formats, and the way to ask the CLI again: a binary
+   rebuilt or replaced while the window is open is picked up by asking, not by
+   reopening the window. */
+.formats-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 6px;
+}
+
+.formats-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.formats-row .hint {
+  margin: 0;
+}
+
+.formats-text .cli-line {
+  margin-top: 2px;
+}
+
+.formats-row button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* The formats under the same headings the native chooser groups by. The heading
+   column is as wide as the longest family name, so the formats line up rather
+   than each row finding its own left edge. */
+.format-families {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.format-family {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) 1fr;
+  gap: 10px;
+}
+
+.format-family dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.format-family dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* The binary the formats were asked of, directly under their line. A path can
+   be long and has no break opportunities of its own, so it wraps anywhere
+   rather than pushing the form wider. */
+.cli-line {
+  overflow-wrap: anywhere;
+}
+
+.cli-line code {
+  color: var(--ink);
+}
+
+/* A hint that is a fault — the CLI could not be asked which formats it reads —
+   is not advice to be read past in grey. */
+.hint.bad {
+  color: var(--bad);
+}
+
 input[type="text"]:disabled {
   background: #f1f3f6;
   color: var(--muted);

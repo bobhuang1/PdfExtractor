@@ -1,0 +1,44 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: dummy.pdf
+origin:
+  binary_hash: 5567742171328095092
+  filename: dummy.pdf
+  mimetype: application/pdf
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 842.0
+      width: 595.0
+pictures: []
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Dummy PDF file
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 83.89999999999998
+      coord_origin: TOPLEFT
+      l: 56.8
+      r: 290.1421
+      t: 67.79999999999995
+    charspan:
+    - 0
+    - 14
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: Dummy PDF file
+version: 1.10.0

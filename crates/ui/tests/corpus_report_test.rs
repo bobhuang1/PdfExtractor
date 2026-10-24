@@ -321,7 +321,12 @@ fn read_baseline(path: &Path) -> diff::Memory {
 /// of them rather than one per run. What "worse" means is not decided here either:
 /// the lines arrive already held by the gate ([`gate::Session`]), and the floor a
 /// document carries is the sentence the panel refuses with.
-fn ratchet(lines: &[Line], baseline: Option<&diff::Memory>, update: bool) -> Vec<String> {
+fn ratchet(
+    lines: &[Line],
+    baseline: Option<&diff::Memory>,
+    update: bool,
+    unbridged: &[String],
+) -> Vec<String> {
     let path = baseline_path();
     let now: BTreeMap<String, diff::Numbers> = lines
         .iter()
@@ -329,10 +334,28 @@ fn ratchet(lines: &[Line], baseline: Option<&diff::Memory>, update: bool) -> Vec
         .collect();
 
     if update {
+        let mut documents = now;
+        // A document this machine could not measure keeps what the file already
+        // remembers: rewriting the baseline without LibreOffice must not forget
+        // the readings the bridge produced somewhere else.
+        if !unbridged.is_empty() {
+            if let Some(previous) = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<diff::Memory>(&text).ok())
+            {
+                for name in unbridged {
+                    if let Some(numbers) = previous.documents.get(name) {
+                        documents
+                            .entry(name.clone())
+                            .or_insert_with(|| numbers.clone());
+                    }
+                }
+            }
+        }
         let baseline = diff::Memory {
             note: BASELINE_NOTE.to_string(),
             measured: measurement(),
-            documents: now,
+            documents,
         };
         let json = serde_json::to_string_pretty(&baseline).expect("the baseline serialises");
         std::fs::write(&path, format!("{json}\n")).expect("write the baseline");
@@ -380,11 +403,22 @@ fn ratchet(lines: &[Line], baseline: Option<&diff::Memory>, update: bool) -> Vec
         }
     }
     for name in baseline.documents.keys() {
-        if !now.contains_key(name) {
+        // A document this machine could not measure — a legacy `.doc` with no
+        // LibreOffice to read it through — is not a gap in the file: its
+        // numbers are remembered from the run that had the bridge, and this run
+        // has no reading of the same kind to hold them to.
+        if !now.contains_key(name) && !unbridged.contains(name) {
             complaints.push(format!(
                 "{name}: in the baseline, but this run compared no such document"
             ));
         }
+    }
+    if !unbridged.is_empty() {
+        println!(
+            "{} document(s) left out for lack of LibreOffice, their baseline entries kept: {}",
+            unbridged.len(),
+            unbridged.join(", ")
+        );
     }
 
     println!();
@@ -420,21 +454,29 @@ fn ratchet(lines: &[Line], baseline: Option<&diff::Memory>, update: bool) -> Vec
     worse
 }
 
-/// The corpus documents, by file stem. The images written beside a document are
-/// directories, not documents.
+/// The documents a reference can be held against, by file stem: the corpus, and
+/// the fixtures beside it. A format is held to a real Docling conversion before
+/// it joins the corpus (`inventory.xlsx`, the XLSX parser's workbook, lives in
+/// `test-data/` with its reference in the same `docling/` folder as the rest),
+/// and this ratchet covers every reference the folder holds. The images written
+/// beside a document are directories, not documents.
 fn corpus_inputs() -> BTreeMap<String, PathBuf> {
     let mut found = BTreeMap::new();
-    let corpus = repository_root().join("test-data/real");
-    for entry in std::fs::read_dir(&corpus)
-        .expect("read the corpus")
-        .flatten()
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if let Some(stem) = path.file_stem() {
-            found.insert(stem.to_string_lossy().into_owned(), path);
+    for directory in ["test-data/real", "test-data"] {
+        let directory = repository_root().join(directory);
+        for entry in std::fs::read_dir(&directory)
+            .expect("read the document directories")
+            .flatten()
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(stem) = path.file_stem() {
+                found
+                    .entry(stem.to_string_lossy().into_owned())
+                    .or_insert(path);
+            }
         }
     }
     found
@@ -458,6 +500,58 @@ fn references() -> Vec<(String, PathBuf)> {
     found
 }
 
+/// Whether a document is a plain image, whose only text comes from OCR.
+///
+/// This report is measured with `--ocr never` so its numbers do not depend on
+/// the machine's tessdata. An image has no text layer at all, so converting one
+/// that way would measure an empty page and remember it as such — a baseline
+/// entry that says the document has no content. The image's reference is held
+/// by the golden suite, which runs it through OCR and compares the text; the
+/// ratchet has nothing to measure here.
+fn is_plain_image(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "webp")
+    )
+}
+
+/// Whether a document is read through LibreOffice, one way or another.
+///
+/// A legacy `.doc` is the same file read two ways: through Writer when
+/// LibreOffice is installed — headings, list markers, merged tables and pictures
+/// — and through the built-in piece-table reader when it is not, which reads the
+/// words alone. The rest of these extensions have no reader here at all and are
+/// the bridge's alone. Their numbers therefore depend on an external converter,
+/// so a run without one cannot compare them — the same reason a plain image is
+/// skipped, stated for the same kind of fact.
+fn is_bridged(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("doc" | "wps" | "wp" | "wpd" | "wks" | "wdb" | "xls" | "ppt")
+    )
+}
+
+/// Whether the CLI on this machine will reach LibreOffice, by the same rule the
+/// CLI itself uses: `PDFE_SOFFICE` naming a file, or `soffice`/`libreoffice` on
+/// `PATH`.
+fn libreoffice_available() -> bool {
+    if let Some(path) = std::env::var_os("PDFE_SOFFICE") {
+        return PathBuf::from(path).is_file();
+    }
+    let search = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&search).any(|directory| {
+        ["soffice", "libreoffice"]
+            .iter()
+            .any(|name| directory.join(name).is_file())
+    })
+}
+
 /// Convert the whole corpus in one run of the CLI.
 ///
 /// One process rather than 37: the comparison is what this test is about, and a
@@ -475,6 +569,35 @@ fn convert_corpus(cli: &Path, out: &Path) {
         .status()
         .expect("run the CLI over the corpus");
     assert!(status.success(), "the corpus conversion failed: {status}");
+
+    // A reference whose document is a fixture beside the corpus rather than in
+    // it (`inventory.xlsx`, the XLSX parser's workbook) is converted on its
+    // own, to the same name a directory run would give it — the stem, `.json`
+    // — so the comparison finds its output the same way. Only documents that
+    // have a reference are converted: the fixture folder holds scripts and
+    // sources too.
+    let inputs = corpus_inputs();
+    for (stem, _) in references() {
+        let Some(path) = inputs.get(&stem) else {
+            continue;
+        };
+        if path.starts_with(&corpus) || is_plain_image(path) {
+            continue;
+        }
+        let path = path.clone();
+        let output = out.join(format!("{stem}.json"));
+        let status = Command::new(cli)
+            .args(["-i", path.to_str().expect("a UTF-8 path")])
+            .args(["-o", output.to_str().expect("a UTF-8 path")])
+            .args(["--ocr", "never"])
+            .status()
+            .expect("run the CLI over a fixture");
+        assert!(
+            status.success(),
+            "{} did not convert: {status}",
+            path.display()
+        );
+    }
 }
 
 /// Compare every corpus document with its reference and print them worst first.
@@ -500,11 +623,32 @@ fn the_whole_corpus_compared_worst_first() {
     let inputs = corpus_inputs();
     let mut lines = Vec::new();
     let mut missing = Vec::new();
+    let mut skipped = Vec::new();
+    // The documents this machine could not measure because the bridge is not
+    // here: kept apart from the other skips, because the baseline remembers
+    // them and this run has nothing to hold them to.
+    let mut unbridged = Vec::new();
     for (stem, reference) in references() {
         let Some(input) = inputs.get(&stem) else {
             missing.push(format!("{stem}: the corpus has no such document"));
             continue;
         };
+        if is_plain_image(input) {
+            println!(
+                "skipping {stem}: an image's text needs OCR, and this report is measured with --ocr never"
+            );
+            skipped.push(stem.clone());
+            continue;
+        }
+        if is_bridged(input) && !libreoffice_available() {
+            println!(
+                "skipping {stem}: it is read through LibreOffice, and this run has none \
+                 (its numbers would be the built-in reader's, not the bridge's)"
+            );
+            skipped.push(stem.clone());
+            unbridged.push(stem.clone());
+            continue;
+        }
         let ours = scratch.0.join(format!("{stem}.json"));
         if !ours.exists() {
             missing.push(format!("{stem}: the conversion wrote no output"));
@@ -717,9 +861,17 @@ fn the_whole_corpus_compared_worst_first() {
         println!("    {note}");
     }
 
-    // The summary is the point of this test, so it must not be a partial one.
+    // The summary is the point of this test, so it must not be a partial one:
+    // every reference is either compared or deliberately skipped, never lost.
     assert!(missing.is_empty(), "{missing:?}");
-    assert_eq!(lines.len(), references().len());
+    assert_eq!(
+        lines.len() + skipped.len(),
+        references().len(),
+        "{} compared, {} skipped, {} reference(s) in all",
+        lines.len(),
+        skipped.len(),
+        references().len()
+    );
     assert!(lines.len() >= 30, "the corpus is bigger than this");
     for line in &lines {
         assert_eq!(
@@ -740,7 +892,7 @@ fn the_whole_corpus_compared_worst_first() {
     // document, than what the repository remembers. This is the only judgement this
     // test makes about the readings, and it is a relative one — the golden suite is
     // still the authority on whether they are good enough.
-    let regressions = ratchet(&lines, baseline.as_ref(), update);
+    let regressions = ratchet(&lines, baseline.as_ref(), update, &unbridged);
     assert!(
         regressions.is_empty(),
         "the corpus report is worse than the baseline in {} place(s), listed above.\n\

@@ -59,7 +59,7 @@ fn corpus_readme_keeps_its_tables() {
         .items
         .iter()
         .filter_map(|b| match b {
-            Block::Table { rows } => Some(rows),
+            Block::Table { grid } => Some(grid),
             _ => None,
         })
         .collect();
@@ -67,7 +67,7 @@ fn corpus_readme_keeps_its_tables() {
     assert!(
         tables
             .iter()
-            .any(|rows| rows.len() > 3 && rows.iter().any(|r| r.len() >= 3)),
+            .any(|grid| grid.num_rows > 3 && grid.num_cols >= 3),
         "tables are too small to be the real ones: {tables:?}"
     );
 }

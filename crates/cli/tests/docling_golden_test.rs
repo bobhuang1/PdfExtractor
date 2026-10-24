@@ -76,17 +76,29 @@ fn convert_corpus(out: &Path) {
     assert!(status.success(), "the corpus conversion failed");
 }
 
-/// The corpus document a reference was generated from, found by file stem.
+/// The document a reference was generated from, found by file stem.
+///
+/// The corpus comes first; a hand-written fixture beside it (`inventory.xlsx`,
+/// the XLSX parser's own workbook) can be held to a real Docling conversion the
+/// same way, which is what makes a new format's output comparable before it
+/// joins the corpus.
 fn corpus_input(stem: &str) -> PathBuf {
-    std::fs::read_dir(corpus_dir())
-        .expect("read the corpus")
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_stem()
-                .is_some_and(|name| name.to_string_lossy() == stem)
-        })
-        .unwrap_or_else(|| panic!("no corpus document named {stem}.*"))
+    let fixtures = repository_root().join("test-data");
+    for directory in [corpus_dir(), fixtures] {
+        let found = std::fs::read_dir(&directory)
+            .expect("read the document directories")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file())
+            .find(|path| {
+                path.file_stem()
+                    .is_some_and(|name| name.to_string_lossy() == stem)
+            });
+        if let Some(path) = found {
+            return path;
+        }
+    }
+    panic!("no corpus document or fixture named {stem}.*")
 }
 
 /// Every `*.json` the conversion wrote, with its document name.
@@ -374,6 +386,17 @@ impl Conformance {
         {
             parents.insert(format!("#/pictures/{index}"), item["parent"].clone());
         }
+        // A group is a parent too: an XLSX sheet holds the sheet's tables, and
+        // a body listing the sheet needs the sheet's own parent to agree with
+        // it the way an item's does.
+        for (index, group) in document["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            parents.insert(format!("#/groups/{index}"), group["parent"].clone());
+        }
 
         for group in ["body", "furniture"] {
             let Some(node) = document.get(group) else {
@@ -382,36 +405,44 @@ impl Conformance {
             if node.is_null() {
                 continue;
             }
-            let reference = format!("#/{group}");
-            for (index, child) in node["children"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                let Some(target) = child.get("$ref").and_then(Value::as_str) else {
-                    self.fail(
-                        format!("{group}/children/{index}"),
-                        "a child is not a {\"$ref\": ...} object".to_string(),
-                    );
-                    continue;
-                };
-                let Some(parent) = parents.get(target) else {
-                    self.fail(
-                        format!("{group}/children/{index}"),
-                        format!("{target} is not an item of this document"),
-                    );
-                    continue;
-                };
-                let parent = parent.get("$ref").and_then(Value::as_str);
-                if parent != Some(reference.as_str()) {
-                    self.fail(
-                        format!("{group}/children/{index}"),
-                        format!(
-                            "{target} is listed under {reference} but names {parent:?} as its parent"
-                        ),
-                    );
-                }
+            self.children_agree(&format!("#/{group}"), node, &parents);
+        }
+        // And a group owes its own children the same agreement: a sheet
+        // listing a table that names another sheet is a broken hierarchy just
+        // as a body listing a furniture item is.
+        for (index, node) in document["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            self.children_agree(&format!("#/groups/{index}"), node, &parents);
+        }
+    }
+
+    /// Every child `node` lists resolves to an item whose `parent` is `owner`.
+    fn children_agree(&mut self, owner: &str, node: &Value, parents: &Map<String, Value>) {
+        for (index, child) in node["children"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let path = format!("{owner}/children/{index}");
+            let Some(target) = child.get("$ref").and_then(Value::as_str) else {
+                self.fail(path, "a child is not a {\"$ref\": ...} object");
+                continue;
+            };
+            let Some(parent) = parents.get(target) else {
+                self.fail(path, format!("{target} is not an item of this document"));
+                continue;
+            };
+            let parent = parent.get("$ref").and_then(Value::as_str);
+            if parent != Some(owner) {
+                self.fail(
+                    path,
+                    format!("{target} is listed under {owner} but names {parent:?} as its parent"),
+                );
             }
         }
     }
@@ -517,6 +548,17 @@ impl Conformance {
             }
         }
 
+        // Groups are how an XLSX worksheet holds its tables; they obey the
+        // same field and enum rules as every other node.
+        for (index, group) in document["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            self.fields("GroupItem", group, &format!("{name}/groups/{index}"));
+        }
+
         self.hierarchy(document);
         self.problems.clone()
     }
@@ -543,6 +585,69 @@ fn every_corpus_document_conforms_to_the_docling_schema() {
         problems.len(),
         problems.join("\n  ")
     );
+}
+
+/// Convert a fixture beside the corpus on its own and hold it to the schema.
+///
+/// A format that has not joined the corpus must still produce a document
+/// Docling can load, and a fixture is what lets it be tested before it does.
+fn assert_fixture_conforms(file: &str, stem: &str, tag: &str) {
+    let scratch = Scratch::new(tag);
+    let input = repository_root().join("test-data").join(file);
+    assert!(input.exists(), "missing {}", input.display());
+    let output = scratch.0.join(format!("{stem}.json"));
+    let status = Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+        .args([
+            "-i",
+            input.to_str().expect("a UTF-8 path"),
+            "-o",
+            output.to_str().expect("a UTF-8 path"),
+        ])
+        .status()
+        .expect("run the CLI binary");
+    assert!(status.success(), "{file} did not convert");
+
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&output).expect("read our output"))
+            .expect("our output is JSON");
+    let problems = Conformance::new(schema()).document(stem, &document);
+    assert!(
+        problems.is_empty(),
+        "{} problem(s):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+}
+
+/// A workbook is held to the same check, including the sheet groups it adds,
+/// which the corpus documents have never exercised.
+#[test]
+fn a_workbook_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("inventory.xlsx", "inventory", "xlsx-schema");
+}
+
+/// A deck adds things no corpus document has: `chapter` groups that hold
+/// their slide's items, list items with a `marker` and `enumerated`, and a
+/// table whose cell spans two columns.
+#[test]
+fn a_presentation_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("q3_review.pptx", "q3_review", "pptx-schema");
+}
+
+/// A plain image is a page whose origin names the image's own media type —
+/// not `application/pdf`, which is what Docling writes for one.
+#[test]
+fn a_plain_image_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("invoice_scan.png", "invoice_scan", "image-schema");
+}
+
+/// An RTF is a flow document, but its table is a real grid: a cell can span
+/// rows and columns, and the header is a flag on the cells rather than a
+/// position. The fixture is LibreOffice's export of a brief whose region runs
+/// down two rows and whose total runs across two columns.
+#[test]
+fn a_word_processor_rtf_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("merged_table.rtf", "merged_table", "rtf-schema");
 }
 
 /// The format revision we write is the one the committed schema describes.
@@ -576,9 +681,13 @@ struct Agreement {
     pages_theirs: usize,
     /// Share of the reference's alphanumeric characters that are also ours,
     /// counted as multisets so a repeated character has to be present twice.
-    /// Formula notation is excluded; see [`compare`].
+    /// Formula items are compared as notation instead; see [`compare`].
     text_agreement: f64,
     formulas_ours: usize,
+    /// The reference's formula items carrying text whose LaTeX we reproduce.
+    /// Whitespace is ignored, so a difference in spacing is not a difference in
+    /// notation; a different command, operator or character is.
+    formulas_reproduced: usize,
     /// Every formula item the reference has, whether or not it carries text.
     formulas_theirs: usize,
     /// The reference's formula items that carry text — the ones that say what an
@@ -629,11 +738,11 @@ struct Agreement {
 /// design: blocks are segmented, labelled and ordered differently. What must
 /// hold is that we saw the same pages, the same characters, and the equations.
 ///
-/// Math is the one exclusion. Docling writes an equation as LaTeX
-/// (`\iiint_{V}^{}divFdV`); we linearise the Office Math tree to Unicode
-/// (`∭_V divFdV`). Both are the same equation and neither is wrong, so formula
-/// characters are left out of the agreement and a formula in the reference only
-/// has to be a formula here. See `test-data/golden/README.md`.
+/// Formulas are compared separately, as notation: Docling writes an equation as
+/// LaTeX (`\iiint_{V}^{}divFdV`) and so do we, so each reference formula with
+/// text must have the same LaTeX here up to whitespace. Its command letters are
+/// not folded into the character agreement, where every `\frac` would count as
+/// text. See `test-data/golden/README.md`.
 fn compare(ours: &Value, reference: &Value) -> Agreement {
     let pages_ours = ours["pages"].as_object().map_or(0, Map::len);
     let pages_theirs = reference["pages"].as_object().map_or(0, Map::len);
@@ -931,10 +1040,37 @@ fn compare(ours: &Value, reference: &Value) -> Agreement {
     notes.push(format!("labels ours {:?}", labels(ours)));
     notes.push(format!("labels Docling {:?}", labels(reference)));
 
+    // Formula notation: each reference equation is looked for among ours by
+    // its LaTeX with whitespace removed, so `- \infty  < x <  \infty` and
+    // `- \infty <x< \infty` agree while a different command does not.
+    let notation = |text: &str| -> String {
+        text.chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
+    };
+    let ours_formulas: std::collections::BTreeSet<String> = ours["texts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["label"].as_str() == Some("formula"))
+        .filter_map(|item| item["text"].as_str())
+        .map(notation)
+        .collect();
+    let formulas_reproduced = reference["texts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["label"].as_str() == Some("formula"))
+        .filter_map(|item| item["text"].as_str())
+        .filter(|text| text.chars().any(char::is_alphanumeric))
+        .filter(|text| ours_formulas.contains(&notation(text)))
+        .count();
+
     Agreement {
         pages_ours,
         pages_theirs,
         text_agreement,
+        formulas_reproduced,
         headings_kept,
         headings_demoted,
         merged_blocks,
@@ -1021,10 +1157,9 @@ fn boxes_overlap(one: (i64, [f64; 4]), other: (i64, [f64; 4])) -> bool {
 
 /// The alphanumeric characters of a document, as a multiset.
 ///
-/// Math is skipped, because it is the one thing the two render differently:
-/// Docling writes an equation as LaTeX, in a formula item or inline between
-/// dollar signs in a table cell, and we linearise the same Office Math tree to
-/// Unicode. What was found is the equation, not the spelling of it.
+/// Formula items are skipped because they are compared as notation separately;
+/// their LaTeX command letters are not words. Inline math between dollar signs
+/// in a table cell is removed for the same reason.
 fn characters(document: &Value) -> std::collections::BTreeMap<char, usize> {
     let mut counts = std::collections::BTreeMap::new();
     let mut add = |text: &str| {
@@ -1182,12 +1317,13 @@ fn our_output_agrees_with_real_docling_conversions() {
 
         let agreement = compare(&ours, &theirs);
         println!(
-            "{stem}: {}/{} pages, text agreement {:.3}, formulas {}/{}",
+            "{stem}: {}/{} pages, text agreement {:.3}, formulas {}/{} ({} in Docling's notation)",
             agreement.pages_ours,
             agreement.pages_theirs,
             agreement.text_agreement,
             agreement.formulas_ours,
-            agreement.formulas_theirs
+            agreement.formulas_theirs,
+            agreement.formulas_reproduced
         );
         println!(
             "    labels: {} heading(s) kept, {} read as body text, {} block(s) merged, \
@@ -1295,17 +1431,24 @@ fn our_output_agrees_with_real_docling_conversions() {
                 agreement.footnotes_kept, agreement.footnotes_theirs
             ));
         }
-        // The notation is ours, the equations are not: a document that
-        // contains n equations must report n of them. (Docling itemises one
-        // equation per `m:oMath`; so do we, since the comparison found us
-        // welding a paragraph's equations into one item.) Empty formula boxes
-        // are not equations and are not counted — see
-        // `formulas_with_text_theirs`.
+        // A document that contains n equations must report n of them, and
+        // each one in Docling's notation. (Docling itemises one equation per
+        // `m:oMath`; so do we, since the comparison found us welding a
+        // paragraph's equations into one item.) Empty formula boxes are not
+        // equations and are not counted — see `formulas_with_text_theirs`.
         if agreement.formulas_ours < agreement.formulas_with_text_theirs {
             mismatches.push(format!(
                 "{stem}: Docling found {} equation(s) with text, we found {} (of {} formula item(s) in all)",
                 agreement.formulas_with_text_theirs,
                 agreement.formulas_ours,
+                agreement.formulas_theirs
+            ));
+        }
+        if agreement.formulas_reproduced < agreement.formulas_with_text_theirs {
+            mismatches.push(format!(
+                "{stem}: {} of Docling's {} equation(s) are in its notation ({} formula item(s) in all)",
+                agreement.formulas_reproduced,
+                agreement.formulas_with_text_theirs,
                 agreement.formulas_theirs
             ));
         }
@@ -1333,6 +1476,31 @@ fn docling_core_accepts_our_documents() {
 
     let scratch = Scratch::new("oracle");
     convert_corpus(&scratch.0);
+    // The fixtures carry shapes the corpus has not: a workbook's sheet groups
+    // and a deck's slide groups. Docling's own model decides whether those are
+    // a document too.
+    let fixtures = scratch.0.join("fixtures");
+    std::fs::create_dir_all(&fixtures).expect("create the fixture output dir");
+    for (file, stem) in [
+        ("inventory.xlsx", "inventory"),
+        ("q3_review.pptx", "q3_review"),
+        ("invoice_scan.png", "invoice_scan"),
+    ] {
+        let input = repository_root().join("test-data").join(file);
+        let status = Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+            .args([
+                "-i",
+                input.to_str().expect("a UTF-8 path"),
+                "-o",
+                fixtures
+                    .join(format!("{stem}.json"))
+                    .to_str()
+                    .expect("a UTF-8 path"),
+            ])
+            .status()
+            .expect("run the CLI binary");
+        assert!(status.success(), "{file} did not convert");
+    }
     let output = Command::new(&python)
         .arg(&script)
         .arg(&scratch.0)
@@ -1432,15 +1600,32 @@ mod comparison {
         json!({"self_ref": "#/texts/0", "label": "formula", "text": text, "orig": text, "prov": []})
     }
 
-    /// Docling writes LaTeX for an equation and we write Unicode; neither is a
-    /// difference in what was found, so neither counts against the agreement.
+    /// Docling writes LaTeX for an equation and so do we; the same equation in
+    /// the same notation agrees even when spacing differs.
     #[test]
-    fn formula_notation_is_not_compared() {
+    fn formula_notation_is_compared_ignoring_whitespace() {
+        let ours = document(vec![formula("\\iiint_{V}^{}divFdV")], vec![]);
+        let theirs = document(vec![formula("\\iiint_{V}^{} divFdV")], vec![]);
+        let agreement = compare(&ours, &theirs);
+        assert_eq!(agreement.text_agreement, 1.0, "{agreement:?}");
+        assert_eq!(
+            (
+                agreement.formulas_ours,
+                agreement.formulas_theirs,
+                agreement.formulas_reproduced
+            ),
+            (1, 1, 1)
+        );
+    }
+
+    /// A formula written in another notation is still an equation, but it is
+    /// not in Docling's notation and the count says so.
+    #[test]
+    fn formula_written_another_way_is_not_reproduced() {
         let ours = document(vec![formula("∭_V divFdV")], vec![]);
         let theirs = document(vec![formula("\\iiint_{V}^{}divFdV")], vec![]);
         let agreement = compare(&ours, &theirs);
-        assert_eq!(agreement.text_agreement, 1.0, "{agreement:?}");
-        assert_eq!((agreement.formulas_ours, agreement.formulas_theirs), (1, 1));
+        assert_eq!(agreement.formulas_reproduced, 0, "{agreement:?}");
     }
 
     /// A PDF reference can hold formula boxes with no text at all — its layout
@@ -1457,8 +1642,7 @@ mod comparison {
         assert_eq!(agreement.formulas_ours, 0, "{agreement:?}");
     }
 
-    /// Dropping an equation is a real loss, and the count catches it even
-    /// though the notation is not compared.
+    /// Dropping an equation is a real loss, and the count catches it.
     #[test]
     fn a_dropped_equation_is_visible_in_the_counts() {
         let ours = document(vec![paragraph("Body")], vec![]);

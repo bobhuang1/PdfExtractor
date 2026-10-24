@@ -1,0 +1,15 @@
+# Fenced sample
+
+A paragraph before the code.
+
+```
+fn main() {
+    println!("hello");
+}
+```
+
+And a list after it.
+
+- Alpha
+
+- Beta

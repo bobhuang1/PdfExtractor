@@ -1,0 +1,35 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+furniture:
+  children: []
+  content_layer: furniture
+  label: unspecified
+  name: _root_
+  self_ref: '#/furniture'
+groups: []
+key_value_items: []
+name: math-accents.docx
+origin:
+  binary_hash: 10217605349004472236
+  filename: math-accents.docx
+  mimetype: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+pages: {}
+pictures: []
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: formula
+  orig: \acute{a}\grave{a}\check{a}\breve{a}\ocirc{a}\vec{a}\tilde{a}\hat{a}˙\vec{a}\vec{a}\tilde{a}\underline{a}
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: \acute{a}\grave{a}\check{a}\breve{a}\ocirc{a}\vec{a}\tilde{a}\hat{a}˙\vec{a}\vec{a}\tilde{a}\underline{a}
+version: 1.10.0

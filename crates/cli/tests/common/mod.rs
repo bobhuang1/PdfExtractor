@@ -154,7 +154,10 @@ pub fn referenced_assets(golden: &str) -> Vec<String> {
         while let Some(at) = rest.find("src=\"") {
             let after = &rest[at + 5..];
             let Some(end) = after.find('"') else { break };
-            remember(&mut found, &after[..end]);
+            // An HTML attribute escapes what it cannot write raw, so the file
+            // it names is the decoded value: `images/Q3 chart &amp; graph.gif`
+            // names `images/Q3 chart & graph.gif`.
+            remember(&mut found, &decode_html(&after[..end]));
             rest = &after[end..];
         }
 
@@ -164,6 +167,49 @@ pub fn referenced_assets(golden: &str) -> Vec<String> {
     }
     found.sort();
     found
+}
+
+/// The text an HTML attribute value stands for: the characters the writers
+/// escape (`&`, `<`, `>`, a quote) and the numeric references a page may write
+/// instead. Only the `src` value is decoded: a Markdown destination or a YAML
+/// scalar has no such escaping, so an `&amp;` there is the name's own text.
+fn decode_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        let decoded = after.find(';').filter(|end| *end <= 10).and_then(|end| {
+            let code = match &after[1..end] {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                entity => entity
+                    .strip_prefix('#')
+                    .and_then(|number| match number.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => number.parse().ok(),
+                    })
+                    .and_then(char::from_u32),
+            };
+            code.map(|code| (code, end + 1))
+        });
+        match decoded {
+            Some((code, length)) => {
+                out.push(code);
+                rest = &after[length..];
+            }
+            // Not a reference this knows: the `&` is the text's own.
+            None => {
+                out.push('&');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Keep `reference` when it is a relative path not already recorded. Quotes,
@@ -241,10 +287,12 @@ mod tests {
 [the spec](https://example.com/spec)\n\
 [notes](notes.txt)\n\
 ![spaced](<doc_images/a b.png>)\n\
+<p><img src=\"doc_images/Q3 chart &amp; graph.gif\" alt=\"Image\"></p>\n\
 ![again](doc_images/img1.png)\n";
         assert_eq!(
             referenced_assets(golden),
             vec![
+                "doc_images/Q3 chart & graph.gif".to_string(),
                 "doc_images/a b.png".to_string(),
                 "doc_images/img1.png".to_string(),
                 "doc_images/img2.png".to_string(),

@@ -1,0 +1,89 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/texts/2'
+  - $ref: '#/texts/3'
+  - $ref: '#/texts/4'
+  - $ref: '#/texts/5'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: fenced.md
+origin:
+  binary_hash: 7905350695401963384
+  filename: fenced.md
+  mimetype: text/markdown
+pages: {}
+pictures: []
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Fenced sample
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Fenced sample
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: A paragraph before the code.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: A paragraph before the code.
+- children: []
+  content_layer: body
+  label: code
+  orig: |-
+    fn main() {
+        println!("hello");
+    }
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: |-
+    fn main() {
+        println!("hello");
+    }
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: And a list after it.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/3'
+  text: And a list after it.
+- children: []
+  content_layer: body
+  enumerated: false
+  label: list_item
+  marker: '-'
+  orig: Alpha
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/4'
+  text: Alpha
+- children: []
+  content_layer: body
+  enumerated: false
+  label: list_item
+  marker: '-'
+  orig: Beta
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/5'
+  text: Beta
+version: 1.10.0

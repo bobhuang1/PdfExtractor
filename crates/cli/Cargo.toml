@@ -8,7 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# A picture written with `--image-export-mode embedded` carries its own bytes in
+# a base64 `data:` URI; reading the page back decodes them into the picture.
+base64.workspace = true
 clap.workspace = true
+image.workspace = true
 rayon.workspace = true
 # The `--progress` records are JSON lines, parsed by the desktop UI.
 serde_json.workspace = true
@@ -18,10 +22,24 @@ pdfextractor-core = { path = "../core" }
 pdfextractor-pdf-parser = { path = "../pdf-parser" }
 pdfextractor-docx-parser = { path = "../docx-parser" }
 pdfextractor-doc-parser = { path = "../doc-parser" }
+pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
+pdfextractor-pptx-parser = { path = "../pptx-parser" }
+# A chart's data is read by the one reader both a deck's and a workbook's
+# charts go through, so the two formats report the same numbers.
+pdfextractor-chart = { path = "../chart" }
+pdfextractor-image-parser = { path = "../image-parser" }
+# An SVG a Word or PowerPoint package carries is a drawing, not an encoding: it
+# is played into pixels at the size the package places it, so the document holds
+# the picture it shows rather than markup for whoever reads it next.
+pdfextractor-svg = { path = "../svg" }
+# The list of picture formats the flow reader accepts is the one this writes an
+# extracted picture under: the same table, not a copy.
+pdfextractor-picture-formats = { path = "../picture-formats" }
 pdfextractor-text-parser = { path = "../text-parser" }
 pdfextractor-layout = { path = "../layout" }
 pdfextractor-ocr-engine = { path = "../ocr-engine" }
 pdfextractor-json-exporter = { path = "../json-exporter" }
+pdfextractor-md-exporter = { path = "../md-exporter" }
 # The `--compare` mode holds each finished document to the same comparison, memory
 # and ratchet rules the window's Compare mode uses (`pdfextractor_ui::diff`), so the
 # two cannot drift apart. Without default features the desktop shell (Tauri, GTK) is
@@ -29,4 +47,15 @@ pdfextractor-json-exporter = { path = "../json-exporter" }
 pdfextractor-ui = { path = "../ui", default-features = false }
 
 [dev-dependencies]
+# An embedded picture is checked by decoding its `data:` URI and holding the
+# bytes to the JPEG the Markdown named.
 serde_json.workspace = true
+# A YAML golden is the whole document: the fixed-point test parses one back into
+# the model and renders it again, so the notation has to be readable here.
+serde_yaml.workspace = true
+# A package LibreOffice re-saved is inspected part by part, to see that the
+# hand-written SVG part was accepted rather than dropped.
+zip.workspace = true
+# A TIFF whose directories state different orientations is written by the test,
+# so the page that must not inherit its neighbour's turn can be made here.
+tiff.workspace = true

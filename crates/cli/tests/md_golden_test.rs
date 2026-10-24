@@ -31,6 +31,8 @@ const CASES: &[&str] = &[
     "irs_f1040.pdf",        // a long form: many tables, columns and furniture
     "flow.html",            // a flow format: headings, lists, code and a table
     "late_header.html",     // a table whose header row is declared below a caption
+    "social_cards.html",    // a page's head facts, carried as YAML front matter
+    "picture_names.html",   // a picture named with a space and an ampersand
     "fenced.md",            // Markdown in, Markdown out: a fence survives the trip
     "pictures.md",          // Markdown in with a picture: its file is copied and referenced
     "merged_cells.docx",    // a DOCX whose table merges cells: spans kept in HTML, flattened here
@@ -54,6 +56,8 @@ fn input_of(name: &str) -> PathBuf {
         "hello.pdf"
         | "flow.html"
         | "late_header.html"
+        | "social_cards.html"
+        | "picture_names.html"
         | "fenced.md"
         | "pictures.md"
         | "merged_cells.docx"
@@ -330,14 +334,17 @@ fn first_difference(
 /// Every committed Markdown golden is re-read and rendered again, and the
 /// result must be the golden **byte for byte**: the reader is the writer's
 /// inverse for every construct the goldens carry — headings, lists, fences,
-/// tables, links, `$$` formulas, a deck's notes and comment sections, the
-/// literal text an image without a file beside it becomes. `--include-notes`
-/// is passed on both passes, so a remark has to come back on the notes layer
-/// instead of becoming a paragraph. Without this gate an asymmetry — say, a
-/// heading gaining a `#` per round trip — renders happily and still changes the
-/// document every time it is saved. A second pass then proves the re-render is
-/// itself stable, which catches a construct that only agreed by accident on
-/// the first read. The file-backed picture case is
+/// tables, links, `$$` formulas, a deck's notes and comment sections, and the
+/// pictures a page names. The files those references name are copied beside the
+/// copied golden first, where its own path resolves, so a picture is read as
+/// the picture it is rather than as the words a broken reference falls back to;
+/// a name with a space is written in `<…>` and has to come back in `<…>`.
+/// `--include-notes` is passed on both passes, so a remark has to come back on
+/// the notes layer instead of becoming a paragraph. Without this gate an
+/// asymmetry — say, a heading gaining a `#` per round trip — renders happily and
+/// still changes the document every time it is saved. A second pass then proves
+/// the re-render is itself stable, which catches a construct that only agreed by
+/// accident on the first read. The file-backed picture case is
 /// `a_picture_survives_the_markdown_round_trip`.
 #[test]
 fn every_markdown_golden_is_a_fixed_point() {
@@ -364,6 +371,20 @@ fn every_markdown_golden_is_a_fixed_point() {
         let dir = scratch(&format!("fixed-{stem}"));
         let input = dir.join("doc.md");
         std::fs::copy(&golden, &input).expect("copy the golden");
+        // The pictures the golden names are part of it: a reference whose file
+        // is not beside the page is read as the words it is written with, and
+        // the fixed point would be about a missing file rather than the page.
+        for reference in common::referenced_assets(&golden_text) {
+            let source = golden_dir.join(&reference);
+            if !source.exists() {
+                continue;
+            }
+            let target = dir.join(&reference);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("create the picture directory");
+            }
+            std::fs::copy(&source, &target).expect("copy the picture beside the page");
+        }
 
         let first = convert_flow_with_notes(&input, &dir.join("first.json"), &["json", "md"], true);
         let first_markdown =

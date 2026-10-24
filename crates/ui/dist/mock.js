@@ -21,12 +21,32 @@
   const DOCUMENTS = ["/docs/annual report.pdf", "/docs/notes.md", "/docs/table.csv"];
   const STEP_MS = 600;
 
+  // What `pdfextractor-cli --list-input-formats` answers, in the shape the
+  // backend serialises: the flat names and the same names under the CLI's own
+  // family headings. The rebuilt binary below adds a reader to both lists.
+  function format_answer(rebuilt) {
+    return {
+      names: rebuilt
+        ? [".pdf", ".docx", ".wpd", ".png", ".webp"]
+        : [".pdf", ".docx", ".wpd", ".png"],
+      families: [
+        { name: "PDF", inputFormats: [".pdf"] },
+        { name: "Word", inputFormats: [".docx"] },
+        { name: "Works/WordPerfect", inputFormats: [".wpd"] },
+        { name: "Pictures", inputFormats: rebuilt ? [".png", ".webp"] : [".png"] },
+      ],
+    };
+  }
+
   let run = 0;
   let stopped = false;
   let timer = null;
   // Set by `start_conversion`: the stand-in plays a comparison only when the
   // page asked for one, exactly as the backend does.
   let comparing = false;
+  // Set by `refresh_input_formats`: the stand-in's binary has been rebuilt in a
+  // new place, which the page names beside the formats after asking again.
+  let rebuilt = false;
 
   const block = (kind, label, text, page) => ({ kind, label, text, page });
 
@@ -255,9 +275,26 @@
     core: {
       async invoke(command, args) {
         if (command === "frontend_ready") return null;
+        // What `pdfextractor-cli --list-input-formats` answers: the page must
+        // name and group *these*, so a list left in the page would show up here.
+        if (command === "input_formats") return format_answer(false);
+        // The stand-in's binary after a rebuild: one more reader. A page that
+        // kept the first answer would go on naming four formats after "Ask again".
+        if (command === "refresh_input_formats") {
+          rebuilt = true;
+          return format_answer(true);
+        }
+        // The path a run would start, which moves with the rebuilt binary the
+        // refresh above stands for.
+        if (command === "cli_program") {
+          return rebuilt
+            ? "/opt/pdfextractor-dev/pdfextractor-cli"
+            : "/usr/local/bin/pdfextractor-cli";
+        }
         if (command === "pick_path") {
           if (args.kind === "folder") return "/golden/docling";
-          return args.kind === "file" ? "/golden/docling/annual report.json" : "/docs";
+          if (args.kind === "document") return "/docs/annual report.pdf";
+          return "/golden/docling/annual report.json";
         }
         if (command === "cancel_conversion") {
           stopped = true;

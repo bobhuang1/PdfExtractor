@@ -1,0 +1,70 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: link_annotations.pdf
+origin:
+  binary_hash: 17306907466884832628
+  filename: link_annotations.pdf
+  mimetype: application/pdf
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 792.0
+      width: 612.0
+  '2':
+    page_no: 2
+    size:
+      height: 792.0
+      width: 612.0
+pictures: []
+schema_name: DoclingDocument
+tables: []
+texts:
+- children: []
+  content_layer: body
+  hyperlink: https://example.com/spec
+  label: paragraph
+  orig: Visit the spec page
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 492.0
+      coord_origin: TOPLEFT
+      l: 72.0
+      r: 205.0
+      t: 478.0
+    charspan:
+    - 0
+    - 19
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: Visit the spec page
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Second page
+  parent:
+    $ref: '#/body'
+  prov:
+  - bbox:
+      b: 392.0
+      coord_origin: TOPLEFT
+      l: 72.0
+      r: 138.0
+      t: 380.0
+    charspan:
+    - 0
+    - 11
+    page_no: 2
+  self_ref: '#/texts/1'
+  text: Second page
+version: 1.10.0

@@ -19,10 +19,40 @@
       <section class="field">
         <label for="input">Input — a file or a folder</label>
         <div class="row">
-          <input id="input" type="text" placeholder="document.pdf, report.docx, C:\\docs, ..." />
+          <input id="input" type="text" placeholder="a document file, or a folder of them" />
           <button id="pick-file" type="button">File…</button>
           <button id="pick-folder" type="button">Folder…</button>
         </div>
+        <!-- Filled from the CLI's own answer to `--list-input-formats`: the
+             formats are not written into this page, so a reader added to the
+             command line appears here without an edit. The answer is kept, and
+             "Ask again" drops it, so a binary rebuilt or replaced while this
+             window is open is what the window names. -->
+        <div class="formats-row">
+          <div class="formats-text">
+            <p class="hint" id="formats">Asking the CLI which formats it reads…</p>
+            <!-- The binary those formats were asked of, resolved again with the
+                 answer: a `PDFEXTRACTOR_CLI` pointed elsewhere is named here
+                 after "Ask again" rather than leaving the first path on screen. -->
+            <p class="hint cli-line" id="cli-line">
+              Binary <code id="cli-program">resolving…</code>
+            </p>
+          </div>
+          <button
+            id="reask-formats"
+            type="button"
+            title="Ask the CLI again — for a binary that was rebuilt or replaced while this window has been open"
+          >
+            Ask again
+          </button>
+        </div>
+        <!-- The same families the native File… chooser groups its filters by,
+             in the CLI's order. Filled from the answer above, never written here. -->
+        <dl
+          class="format-families"
+          id="format-families"
+          aria-label="Accepted formats by family"
+        ></dl>
       </section>
 
       <section class="field">
