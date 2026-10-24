@@ -8,3 +8,12 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# An RTF `\pict` payload is carried into the document model as a base64
+# `data:` URI, the same spelling an embedded Markdown or HTML page uses.
+base64.workspace = true
+# The picture formats a `<source type="…">` may name are the ones the CLI can
+# write out: one list, shared with it, so neither side can drift.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# An RTF picture may be a metafile, which Docling cannot name: it is played into
+# a PNG here, the same way a DOCX drawing is.
+pdfextractor-metafile = { path = "../metafile" }
