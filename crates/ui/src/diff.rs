@@ -2572,7 +2572,8 @@ fn clip_text(text: &str) -> String {
 /// multiset intersection, so a character the reference repeats twice has to be
 /// there twice to count twice. Equations are left out of both sides — their
 /// notation differs by design — which is also why an equation pair is a row of
-/// its own rather than a character-level loss.
+/// its own rather than a character-level loss. Calendar values are left out too,
+/// and for the same kind of reason: see [`without_calendar_values`].
 fn text_agreement(ours: &Value, reference: &Value) -> f64 {
     let mut available = characters(ours);
     let theirs = characters(reference);
@@ -2592,14 +2593,13 @@ fn text_agreement(ours: &Value, reference: &Value) -> f64 {
 }
 
 /// The alphanumeric characters of a document's text items and table cells, as a
-/// multiset. Math is excluded: see [`without_inline_math`].
+/// multiset. Math and calendar values are excluded: see [`without_inline_math`]
+/// and [`without_calendar_values`].
 fn characters(document: &Value) -> BTreeMap<char, usize> {
     let mut counts = BTreeMap::new();
     let mut add = |text: &str| {
-        for character in without_inline_math(text)
-            .chars()
-            .filter(|character| character.is_alphanumeric())
-        {
+        let text = without_calendar_values(&without_inline_math(text));
+        for character in text.chars().filter(|character| character.is_alphanumeric()) {
             *counts.entry(character).or_insert(0usize) += 1;
         }
     };
@@ -2648,6 +2648,85 @@ fn without_inline_math(text: &str) -> String {
         }
     }
     out
+}
+
+/// `text` with every calendar value written with numeric separators removed.
+///
+/// A `DATE` field has no text of its own: Word, LibreOffice and Docling each put
+/// the day *their* run happened into it when the document is written, so a legacy
+/// `.doc` read through the bridge holds today's date while a reference made from
+/// the same file holds the day its own conversion ran. Neither reading holds what
+/// the file stores, and the two never agree — which would make the character share
+/// of that document a reading of the calendar, and have the ratchet refuse a reading
+/// that lost nothing the next morning.
+///
+/// So a calendar value is not counted on either side. What is left out is the
+/// *value*, not the fact that something is there: the item still holds its date for
+/// the rows, so a reading that lost one is still a row that differs or a row only
+/// the reference has, and both of those are ratcheted on their own. Only the digits
+/// of the stamp stop feeding this share.
+///
+/// A calendar value is `a/b/c`, `a-b-c` or `a.b.c` with both separators the same,
+/// one of the outer groups a four-digit year, and the middle group a month or a day
+/// (`10/12/2026`, `4-26-2006`, `2026.10.12`). A two-digit year is left alone on
+/// purpose: `1.2.3` is a version as often as a date, and a stamp is what the fields
+/// write with a full year.
+fn without_calendar_values(text: &str) -> String {
+    let characters: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < characters.len() {
+        match calendar_value(&characters, index) {
+            Some(end) => index = end,
+            None => {
+                out.push(characters[index]);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Where the calendar value that starts at `start` ends, or `None` when what starts
+/// there is not one ([`without_calendar_values`] for the shape).
+///
+/// A run is only a value if nothing numeric precedes or follows it, so the tail of a
+/// longer number is never taken for a date.
+fn calendar_value(characters: &[char], start: usize) -> Option<usize> {
+    let digit = |index: usize| characters.get(index).is_some_and(char::is_ascii_digit);
+    let separator = |index: usize| matches!(characters.get(index), Some('/' | '-' | '.'));
+    if start > 0 && digit(start - 1) {
+        return None;
+    }
+    let group = |index: usize| {
+        let mut end = index;
+        while digit(end) {
+            end += 1;
+        }
+        (index..end, end)
+    };
+    let (first, after_first) = group(start);
+    if first.is_empty() || first.len() > 4 || !separator(after_first) {
+        return None;
+    }
+    let (second, after_second) = group(after_first + 1);
+    if second.is_empty()
+        || second.len() > 2
+        || characters.get(after_first) != characters.get(after_second)
+        || !separator(after_second)
+    {
+        return None;
+    }
+    let (third, end) = group(after_second + 1);
+    if third.is_empty() || third.len() > 4 || digit(end) {
+        return None;
+    }
+    // One of the outer groups is the year. Without one, `1.2.3` and `10/12/26` would
+    // be eaten as dates, and neither is a stamp a field writes.
+    if first.len() != 4 && third.len() != 4 {
+        return None;
+    }
+    Some(end)
 }
 
 /// What the two documents say about their pages: how many, how big, and whether
@@ -4793,6 +4872,41 @@ mod tests {
         let ours = document(&[text("paragraph", "abcabc")]);
         let reference = document(&[text("paragraph", "abcabcabcabc")]);
         assert_eq!(summary(&ours, &reference).text_agreement, 0.5);
+    }
+
+    #[test]
+    fn the_agreement_does_not_move_with_the_calendar() {
+        // `FloatingPictures.doc`'s footer, which is a `DATE` field: read through
+        // LibreOffice it holds the day that conversion ran, and the reference holds the
+        // day Docling's did. Counting the stamp's digits made that document's share a
+        // reading of the calendar, and the ratchet refused a reading that lost nothing
+        // the next morning. The two footers above are the same words on every day.
+        let ours = document(&[text("paragraph", "John Greer\tPage 7\t10/25/2026")]);
+        let reference = document(&[text("paragraph", "John Greer\tPage 7\t10/12/2026")]);
+        assert_eq!(summary(&ours, &reference).text_agreement, 1.0);
+
+        // The spellings a field writes, and the text that is not one. A two-digit year
+        // stays text on purpose: `1.2.3` is a version as often as it is a date.
+        assert_eq!(without_calendar_values("10/12/2026"), "");
+        assert_eq!(without_calendar_values("4-26-2006"), "");
+        assert_eq!(without_calendar_values("2026.10.12"), "");
+        assert_eq!(
+            without_calendar_values("on 10/12/2026 at 10:25"),
+            "on  at 10:25"
+        );
+        assert_eq!(without_calendar_values("10/12/26"), "10/12/26");
+        assert_eq!(without_calendar_values("1.2.3"), "1.2.3");
+        assert_eq!(without_calendar_values("12345/6/7890"), "12345/6/7890");
+    }
+
+    #[test]
+    fn a_date_a_reading_lost_is_still_a_row_that_differs() {
+        // Leaving the *value* out of the character share must not leave the item out of
+        // the comparison: a reading whose footer lost its date is not the reference's
+        // footer, and the row still says so — which is what the ratchet watches there.
+        let ours = document(&[text("paragraph", "John Greer\tPage 7")]);
+        let reference = document(&[text("paragraph", "John Greer\tPage 7\t10/12/2026")]);
+        assert_ne!(verdicts(&rows(&ours, &reference)), vec![Verdict::Same]);
     }
 
     #[test]

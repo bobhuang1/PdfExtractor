@@ -716,7 +716,14 @@ The report is also a **ratchet**: the numbers it measured last time live in
 `differs`, more rows only ours, more rows only the reference, or holds fewer of the
 reference's characters than that file remembers fails the test — naming itself and the
 count — so a change that helps one document and quietly harms another cannot pass. The
-rule and the gate that applies it are the library's (`crates/ui/src/diff.rs` and
+character share counts no calendar value: a `DATE` field has no text of its own, so a
+legacy `.doc` read through the bridge holds the day that conversion ran while its
+reference holds the day Docling's did, and counting those digits would make the gate a
+reading of the calendar — `FloatingPictures.doc` would fall through its floor on some
+mornings without a word of the document changing. Leaving out the value does not leave
+out the item: a footer that lost its date is still a row that differs or a row only the
+reference has, and those are ratcheted on their own. The rule and the gate that applies
+it are the library's (`crates/ui/src/diff.rs` and
 `gate.rs`): the panel, this report and the command line's `--compare` all hold a
 document through the same Session, so there is one gate rather than three that can
 drift. The

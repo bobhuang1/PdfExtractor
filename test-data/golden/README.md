@@ -213,7 +213,10 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
     cannot match a parser that reports what the file stores, so the four `.doc`
     comparisons sit at 0.94–1.00 rather than 1.00 by construction, and regenerating
     them changes the numbers a little. We report the stored results, which is what the
-    document says.
+    document says. The day is the one character of this that a comparison cannot be
+    asked about — the reference holds *its* conversion's day forever and ours holds
+    today's — so the character share leaves a calendar value out of both sides (see
+    the last of the limits below).
   * **LibreOffice's own style names can appear as text.** `testPictures.doc`'s
     reference contains a `Caption` item that is nowhere in the file — it is a paragraph
     style of the converted document. This is why the `.doc` references are a content
@@ -720,12 +723,17 @@ The comparison is about what the reference saw, so it does not force us to
   as Docling's own `.doc` conversion does. So the two readings agree about the
   footer's page number and the document's name where the built-in reader (a
   machine without LibreOffice) reports what the file stores instead — `Page 2`,
-  `4/26/2006`, the name the document was authored under. One consequence is
-  measured rather than asserted: the reference's footer holds the day *its*
-  conversion ran, so `FloatingPictures.doc`'s character agreement moves with the
-  calendar by up to 0.03pp (99.1620% on a day whose digits the reference also
-  has, 99.1475% on one that adds a `4`). See `progress.md` for the whole
-  accounting.
+  `4/26/2006`, the name the document was authored under. The `DATE` field is the
+  one with no answer to hold: the reference holds the day *its* conversion ran and
+  our reading holds the day it ran, so the character share counts neither — a
+  calendar value written with numeric separators (`10/12/2026`, `4-26-2006`,
+  `2026.10.12`) is dropped from both sides, and `FloatingPictures.doc` reads the
+  same **99.3%** (0.99275) on any day. The value is what is left out, not the item: without
+  those words the footer is still a row that differs or a row only the reference
+  has, and both of those are ratcheted. Before the rule the same reading scored
+  99.162% to 99.133% depending on the day, which is enough for the ratchet to
+  refuse a reading that lost nothing the next morning. See `progress.md` for the
+  whole accounting.
 
 * **TeX math glyphs in PDFs, and what the *reference* does with them.** The glyph codes
   are the font program's, and we read them (above) — which is also why agreement now
