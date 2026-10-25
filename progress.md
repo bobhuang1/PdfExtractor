@@ -11928,6 +11928,26 @@ test-data/__pycache__/make_mc_fallback_pictures.cpython-312.pyc` names
 `.gitignore:8:__pycache__/`. With both rules in place `git status --short` reports the
 working tree's edits and nothing else. `git diff --check` clean.
 
+## The generators' bytecode is ignored wherever it lands
+
+**What was asked.** Ignore Python bytecode caches under `test-data`.
+
+**The rules.** [.gitignore](.gitignore) already ignored `__pycache__/` at any depth, which
+is where `test-data/make_*.py` writes its cache when it runs —
+`test-data/__pycache__/` and a nested `test-data/golden/__pycache__/` alike. What it did
+not cover is the compiled file that lands *outside* a cache directory: a generator run
+through `py_compile`, imported with its cache turned off, or compiled beside itself leaves
+a `*.pyc` next to the source, and that file was still visible to git. `*.pyc` covers it
+now, so both spellings of the same output are ignored.
+
+**Verification.** `git check-ignore -v` names the rule that catches each:
+`test-data/__pycache__/make_preset_deck.cpython-312.pyc` and
+`test-data/golden/__pycache__/x.pyc` match `.gitignore:10:__pycache__/`, and a
+hypothetical `test-data/stray.pyc` now matches `.gitignore:11:*.pyc`. Nothing tracked
+changes hands: `git ls-files` finds **0** `.pyc` files, so none was ever committed;
+`git status --short` reports no bytecode at all, and `git status --ignored` still lists
+the cache directory as `!! test-data/__pycache__/`.
+
 ## The 0.1% `FloatingPictures` lost is the calendar, not the reading
 
 **What was asked.** Find why `FloatingPictures` lost 0.1% character agreement against
