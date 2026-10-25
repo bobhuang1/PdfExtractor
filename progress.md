@@ -11027,6 +11027,41 @@ changed; the workspace's remaining `-D warnings` findings are the newer clippy's
 lints in files this change did not touch (`metafile`, `md-exporter`, `doc-parser`,
 `pdf-parser`, `text-parser`, `cli/src/main.rs`).
 
+## A slide's picture background is held to a LibreOffice re-save
+
+**What was asked.** Hold `background_deck.pptx` to a LibreOffice re-save, so its
+picture background is verified by an office application the way the other picture
+fixtures are.
+
+**What the application keeps.** The backdrop is not a shape, so the question is
+whether it survives where the file put it rather than whether it is re-drawn.
+LibreOffice writes the deck back with the first slide's one `p:bg` still holding an
+`a:blipFill` that names the photograph, no `p:pic` beside it, and no `p:bg` on the
+second slide at all. The photograph is copied through byte for byte — the same
+15,684 bytes as `test-data/images/scan.jpg` — as one `image/jpeg` part the package
+declares and a relationship reaches.
+
+**The test.**
+`libreoffice_opens_and_resaves_the_picture_background_deck`
+([cli_test.rs](crates/cli/tests/cli_test.rs)) opens the fixture and writes it back,
+and holds what it wrote to the sentences (each still in its own slide), the
+backdrop (one `p:bg` on the first slide naming a picture, no `p:pic`, none on the
+second), the photograph (one declared, related `image/jpeg` part with the
+fixture's bytes), and this reader on the re-saved package: the same two pages,
+the first backed by the same 620 × 350 `image/jpeg` at 62 dpi with the
+photograph's own bytes and the second by nothing, no picture reported as an item,
+and the same words. A small helper, `backdrops_the_reader_takes`, reads the
+`pages` map rather than `pictures`, since a backdrop is the page's image.
+
+**Proof the gate bites.** Stripping the `<p:bg>` from a copy of the fixture fails
+the test with `background_deck.pptx: the first slide does not state one
+background`; restored byte for byte, it passes again.
+
+**Verification.** The new test passes (4.9 s) and the fixture's own
+`a_slides_picture_background_is_the_pages_image` still passes;
+`cargo fmt --all --check` clean, and clippy reports nothing in the files this
+change touched.
+
 ## A workbook's picture can be a bare JPEG 2000 codestream
 
 **What was asked.** Add a `.jpc` JPEG 2000 picture to the XLSX picture fixture
