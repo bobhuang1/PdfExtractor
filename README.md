@@ -1212,12 +1212,14 @@ the SVG copied through and the orange raster unchanged — though its export add
 line and shadow to the shapes, so this reader paints them into canvases about 13 pixels
 larger; LibreOffice refuses the DOCX half outright. The `worksheet_pictures` workbook
 keeps the four media parts it has filters for — BMP, GIF, PNG and JPEG — byte for byte,
-with both sheets' drawings still pointing at them, and drops the fifth, the bare JPEG
-2000 codestream named `.jpc`: there is no JPEG 2000 import filter, so a workbook a
-spreadsheet application re-saves loses that picture whole. The real-world
-`headerPic.docx` has its only picture in a header part, and LibreOffice keeps it there —
-under a second header as well, so this reader takes the original 80 × 80 picture and its
-copy. A slide's picture background is asked the same question: `background_deck.pptx`
+with both sheets' drawings still pointing at them, and drops the last two, the two
+spellings of a JPEG 2000 the fifth and sixth anchors name: the bare codestream `.jpc`
+and the `.jp2` container beside it. There is no JPEG 2000 import filter, so a workbook a
+spreadsheet application re-saves loses both pictures whole, whichever spelling the
+encoder chose. The real-world `headerPic.docx` has its only picture in a header part, and
+LibreOffice keeps it there — under a second header as well, so this reader takes the
+original 80 × 80 picture and its copy. A slide's picture background is asked the same
+question: `background_deck.pptx`
 keeps its first slide's `p:bg` as a background — the `a:blipFill` still naming the
 photograph, with no `p:pic` promoted beside it — and the second slide still states none,
 so the JPEG comes back byte for byte in a part the package declares and a relationship
