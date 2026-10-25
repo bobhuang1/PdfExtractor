@@ -947,6 +947,8 @@ test-data/
 ├── worksheet_pictures.xlsx                  # workbook that draws pictures (make_pictures_xlsx.py)
 ├── shape_deck.pptx                          # shapes PowerPoint paints itself (make_shape_deck.py)
 ├── background_deck.pptx                     # a slide with a picture background (make_background_deck.py)
+├── master_background_deck.pptx              # a picture background the slide master states
+│                                            #   (make_master_background_deck.py)
 ├── preset_deck.pptx                         # one shape per preset outline (make_preset_deck.py)
 ├── q3_review.pptx                           # deck fixture (make_deck_pptx.py)
 ├── legacy_deck.ppt                          # legacy deck fixture (make_legacy_ppt.py)
@@ -1220,7 +1222,15 @@ keeps its first slide's `p:bg` as a background — the `a:blipFill` still naming
 photograph, with no `p:pic` promoted beside it — and the second slide still states none,
 so the JPEG comes back byte for byte in a part the package declares and a relationship
 reaches, and this reader takes the same 620 × 350 page image from the deck the
-application wrote.
+application wrote. `master_background_deck.pptx` asks it of the inheritance: no slide of
+its three states a picture background — the photograph is the slide master's, behind
+the first two slides by inheritance and stopped at the third by the colour it states
+itself — and the application writes the deck back the same way, no `p:bg` on either
+inheriting slide, the master still holding the `a:blipFill` that names the photograph,
+and the third slide still holding its colour. The photograph comes through byte for
+byte there too, and this reader takes the same 620 × 350 page image from the first two
+pages of the re-saved deck and none from the third — a reading only the inherited
+background can give, since the re-saved slides name no picture themselves.
 
 Each re-saved package is converted by this tool as well, so the bridge covers our own
 reading of what the application wrote and not only the application's acceptance of the
@@ -1379,8 +1389,20 @@ picture item in the slide's group. `test-data/background_deck.pptx`
 has two slides — the first backed by `images/scan.jpg`, the second with no `p:bg` — and
 one end-to-end test holds the first page to a 620 × 350 `image/jpeg` at the 62 dpi its
 620 pixels across the 10-inch page imply, the second to no image, both sentences to
-their text, and `pictures` to none. A background stated as a theme fill or a colour is
-not a picture and is left to the page's own size.
+their text, and `pictures` to none.
+
+A slide that states no `p:bg` inherits the one behind it: from its layout first, then
+from the layout's master. That is where a deck usually keeps a photographic backdrop —
+one picture behind every slide — so a reader that looked at the slide's own part alone
+would come back with bare pages for a deck that was all photograph. This reader resolves
+the chain slide → layout → master and takes the first background one of them states,
+reading its `a:blipFill` through that part's own relationships; a `p:bg` stating a
+colour, a gradient or a theme fill (`p:bgRef`) is a background but not a picture, and the
+chain stops there rather than reaching past it to a picture behind.
+`test-data/master_background_deck.pptx` is the fixture: three slides, the photograph in
+the master, the first two slides stating nothing of their own, the third a colour — held
+by one test of the parser and one end-to-end test to the first two pages' 620 × 350
+image and the third page's none, with no picture item anywhere.
 
 A GIF arriving as the input file is an animation rather than one picture, and every
 frame of it is a page: `image-parser`'s `gif_frames` decodes them all, compositing each

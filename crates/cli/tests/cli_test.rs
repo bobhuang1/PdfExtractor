@@ -6056,6 +6056,203 @@ fn libreoffice_opens_and_resaves_the_picture_background_deck() {
     );
 }
 
+/// LibreOffice accepts `master_background_deck.pptx`, whose photograph is the
+/// slide *master's* background rather than any slide's: none of the three slides
+/// states a picture background, and the first two state no `p:bg` at all. A
+/// deck's photographic backdrop is usually kept this way — one picture behind
+/// every slide — so what a re-save asks is whether the application keeps it
+/// where the deck put it, rather than copying it onto each slide.
+///
+/// It opens the fixture and writes it back, and what it writes is held to
+///
+/// * the sentences: each still in its own slide, so the deck was read rather than
+///   refused;
+/// * the inheritance: neither of the first two slides states a `p:bg` of its own,
+///   so their backdrop is still the master's rather than a copy flattened onto
+///   them. The third slide states a colour of its own — a `p:bg` with an
+///   `a:solidFill` and no `a:blipFill` — so it keeps saying what is behind it
+///   instead of being given the photograph as well;
+/// * the master: it still states the photograph as its own `p:bg`, holding an
+///   `a:blipFill` that names a picture, and still draws no `p:pic` for it. Every
+///   background a master states is asked the same question, and at least one
+///   must be there — the application's export writes more than one master, and
+///   which of them a slide's layout points at is its business, not this test's;
+/// * the photograph: one `image/jpeg` part, declared and reached by a
+///   relationship, byte for byte the fixture's `images/scan.jpg` — the
+///   application copies a photograph through rather than re-encoding it; and
+/// * this reader, on what the application wrote: the same three pages, the first
+///   two backed by the same 620 × 350 `image/jpeg` at 62 dpi and the third by
+///   nothing, no picture reported as an item, and the same words as the fixture
+///   gave. That half is the test of the inheritance itself: the re-saved deck
+///   names the photograph in the master only, so a reader that looked at the
+///   slides alone would come back with three bare pages.
+#[test]
+fn libreoffice_opens_and_resaves_the_master_picture_background_deck() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the master picture-background re-save test");
+        return;
+    };
+    let file = "master_background_deck.pptx";
+    let bytes = fixture(file);
+    let ws = Workspace::new("master-background-resave");
+    let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+
+    let part = |name: &str| -> String {
+        parts
+            .iter()
+            .find(|(part, _)| part == name)
+            .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+            .unwrap_or_else(|| panic!("{file}: no {name} in the re-saved package"))
+    };
+    let background = |xml: &str| -> String {
+        xml.split_once("<p:bg>")
+            .and_then(|(_, rest)| rest.split_once("</p:bg>"))
+            .map(|(background, _)| background.to_string())
+            .unwrap_or_else(|| panic!("{file}: a background is never closed: {xml}"))
+    };
+    let first = part("ppt/slides/slide1.xml");
+    let second = part("ppt/slides/slide2.xml");
+    let third = part("ppt/slides/slide3.xml");
+    assert!(
+        first.contains("A photograph behind these words."),
+        "{file}: the first slide's sentence did not survive the re-save"
+    );
+    assert!(
+        second.contains("The same photograph behind these words."),
+        "{file}: the second slide's sentence did not survive the re-save"
+    );
+    assert!(
+        third.contains("A colour behind these words."),
+        "{file}: the third slide's sentence did not survive the re-save"
+    );
+    for (name, xml) in [("slide1.xml", &first), ("slide2.xml", &second)] {
+        assert!(
+            !xml.contains("<p:bg>"),
+            "{file}: {name} was given the master's background as its own"
+        );
+        assert!(
+            !xml.contains("<p:pic>"),
+            "{file}: {name} draws the backdrop as a picture shape"
+        );
+    }
+    assert_eq!(
+        third.matches("<p:bg>").count(),
+        1,
+        "{file}: the third slide does not state one background"
+    );
+    let colour = background(&third);
+    assert!(
+        colour.contains("<a:solidFill") && !colour.contains("<a:blipFill"),
+        "{file}: the third slide's own colour became the master's photograph: {colour}"
+    );
+
+    let masters: Vec<(String, String)> = parts
+        .iter()
+        .filter(|(name, _)| {
+            name.starts_with("ppt/slideMasters/slideMaster") && name.ends_with(".xml")
+        })
+        .map(|(name, data)| (name.clone(), String::from_utf8_lossy(data).to_string()))
+        .collect();
+    assert!(
+        !masters.is_empty(),
+        "{file}: the re-saved package has no slide master"
+    );
+    let mut stated = 0;
+    for (name, xml) in &masters {
+        assert!(
+            !xml.contains("<p:pic>"),
+            "{file}: {name} draws the backdrop as a picture shape"
+        );
+        for rest in xml.split("<p:bg>").skip(1) {
+            let kept = rest.split("</p:bg>").next().unwrap_or_default();
+            stated += 1;
+            assert!(
+                kept.contains("<a:blipFill") && kept.contains("<a:blip "),
+                "{file}: the background {name} kept names no picture: {kept}"
+            );
+        }
+    }
+    assert!(
+        stated > 0,
+        "{file}: no master states the photograph's background"
+    );
+
+    let photograph = fixture("images/scan.jpg");
+    let photographs: Vec<&String> = parts
+        .iter()
+        .filter(|(name, _)| name.ends_with(".jpg") || name.ends_with(".jpeg"))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        photographs.len(),
+        1,
+        "{file}: the fixture's one photograph came back as {photographs:?}; the parts are {:#?}",
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    let name = photographs[0];
+    assert_eq!(
+        parts
+            .iter()
+            .find(|(part, _)| part == name)
+            .map(|(_, data)| data),
+        Some(&photograph),
+        "{file}: {name} is not the photograph the fixture carries"
+    );
+    assert!(
+        declared_as(&parts, name, "image/jpeg"),
+        "{file}: {name} is not declared as an image/jpeg part"
+    );
+    assert!(
+        reached_by_a_relationship(&parts, name),
+        "{file}: no relationship reaches {name}"
+    );
+
+    let before = backdrops_the_reader_takes(&ws, file, &bytes, "before");
+    let after = backdrops_the_reader_takes(&ws, file, &resaved, "after");
+    assert_eq!(
+        after.pages.len(),
+        3,
+        "{file}: the re-saved deck is not three slides: {after:#?}"
+    );
+    for (index, page) in after.pages.iter().take(2).enumerate() {
+        let backdrop = page.as_ref().unwrap_or_else(|| {
+            panic!(
+                "{file}: slide {} lost the master's background: {after:#?}",
+                index + 1
+            )
+        });
+        assert_eq!(
+            backdrop.mimetype, "image/jpeg",
+            "{file}: the backdrop is not the photograph"
+        );
+        assert_eq!(
+            backdrop.size,
+            (620.0, 350.0),
+            "{file}: the backdrop is not the 620 × 350 scan"
+        );
+        assert_eq!(
+            backdrop.dpi, 62,
+            "{file}: 620 pixels across 720 pt is 62 dpi"
+        );
+        assert_eq!(
+            backdrop.bytes, photograph,
+            "{file}: the page image is not the photograph's own bytes"
+        );
+    }
+    assert_eq!(
+        after.pages[2], None,
+        "{file}: the third slide's colour became a picture"
+    );
+    assert_eq!(
+        after.pictures, 0,
+        "{file}: the backdrop was reported as a picture item"
+    );
+    assert_eq!(
+        after, before,
+        "{file}: the re-saved deck is not the fixture's reading"
+    );
+}
+
 /// LibreOffice accepts the BMP and TIFF fixture packages as packages that carry
 /// pictures, not just files this project happens to read.
 ///

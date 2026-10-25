@@ -248,7 +248,7 @@ impl PptxDocument {
             let slide = Node::parse(&bytes).with_context(|| format!("malformed {part}"))?;
             let hidden = matches!(slide.attr("show"), Some("0") | Some("false"));
             let slide_rels = read_relationships(&mut archive, part)?;
-            let style = SlideStyle::load(&mut archive, &slide_rels)?;
+            let style = SlideStyle::load(&mut archive, &slide_rels, &media, width, height)?;
             let context = ShapeContext {
                 width,
                 height,
@@ -582,6 +582,11 @@ struct Placeholder {
 struct SlideStyle {
     layout: HashMap<usize, LayoutPlaceholder>,
     master: MasterStyle,
+    /// The background the layout states, when it states one: a slide that
+    /// states none of its own takes this before the master's.
+    layout_background: Option<StatedBackground>,
+    /// The background the master states, the last one a slide inherits.
+    master_background: Option<StatedBackground>,
     /// The colours the master's theme declares. A shape's fill is usually a
     /// theme slot rather than a literal colour, so a slide without this could
     /// not paint the shapes the deck draws itself.
@@ -611,6 +616,9 @@ impl SlideStyle {
     fn load(
         archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
         rels: &HashMap<String, Relationship>,
+        media: &HashMap<String, Vec<u8>>,
+        width: f64,
+        height: f64,
     ) -> Result<Self> {
         let mut style = Self::default();
         let Some(layout_part) = rels
@@ -624,6 +632,9 @@ impl SlideStyle {
             return Ok(style);
         };
         let layout = Node::parse(&bytes).with_context(|| format!("malformed {layout_part}"))?;
+
+        let layout_rels = read_relationships(archive, &layout_part)?;
+        style.layout_background = stated_background(&layout, &layout_rels, media, width, height);
 
         if let Some(tree) = layout.find("spTree") {
             for shape in tree.children_named("sp") {
@@ -642,7 +653,6 @@ impl SlideStyle {
             }
         }
 
-        let layout_rels = read_relationships(archive, &layout_part)?;
         let Some(master_part) = layout_rels
             .values()
             .find(|rel| rel.is("/slideMaster") && !rel.external)
@@ -654,6 +664,9 @@ impl SlideStyle {
             return Ok(style);
         };
         let master = Node::parse(&bytes).with_context(|| format!("malformed {master_part}"))?;
+
+        let master_rels = read_relationships(archive, &master_part)?;
+        style.master_background = stated_background(&master, &master_rels, media, width, height);
 
         if let Some(tree) = master.find("spTree") {
             for shape in tree.children_named("sp") {
@@ -670,7 +683,6 @@ impl SlideStyle {
 
         // The master's theme is the file's colour scheme: a shape stating
         // `a:schemeClr val="accent1"` takes it from here.
-        let master_rels = read_relationships(archive, &master_part)?;
         if let Some(theme_part) = master_rels
             .values()
             .find(|rel| rel.is("/theme") && !rel.external)
@@ -1253,33 +1265,72 @@ fn picture_shape(shape: &Node, context: &ShapeContext) -> Option<PictureShape> {
     })
 }
 
-/// The picture a slide states as its background, if it states one.
+/// What a part says about its own background, as far as a picture goes.
+#[derive(Debug, Clone)]
+enum StatedBackground {
+    /// `p:bg/p:bgPr/a:blipFill` naming a picture the package holds.
+    Picture(PictureShape),
+    /// A `p:bg` stated without a picture this can read: a colour, a gradient, a
+    /// theme fill (`p:bgRef`), or a blip whose part is not in the package.
+    Other,
+}
+
+/// The picture a slide paints behind its own content, if it paints one.
 ///
-/// A background is not a shape: PowerPoint writes it in
-/// `p:cSld/p:bg/p:bgPr`, outside the shape tree, and a picture fill there is an
-/// `a:blipFill` naming a media part through the slide's own relationships — the
-/// same `a:blip` a picture uses. Reading only the shape tree loses a
-/// photographic backdrop whole, so it is taken here as the page's image at the
-/// full slide box. A background stated as a theme fill (`p:bgRef`) or as a
-/// colour is not a picture and is left to the slide's shapes and page size.
+/// A background is not a shape: PowerPoint writes it in `p:cSld/p:bg/p:bgPr`,
+/// outside the shape tree, and a picture fill there is an `a:blipFill` naming a
+/// media part through the stating part's own relationships — the same `a:blip`
+/// a picture uses. Reading only the shape tree loses a photographic backdrop
+/// whole, so it is taken here as the page's image at the full slide box.
+///
+/// A slide that states no `p:bg` at all inherits one: from its layout first,
+/// then from the layout's master. That is the usual place a deck keeps a
+/// photographic backdrop — one picture for every slide — so a slide is only
+/// held to the background of its own part when its own part states one. A
+/// `p:bg` that is a colour, a gradient or a theme fill (`p:bgRef`) states a
+/// background that is not a picture, and the inheritance stops there rather
+/// than reaching past it to a picture behind.
 fn slide_background(
     slide: &Node,
     context: &ShapeContext,
     width: f64,
     height: f64,
 ) -> Option<PictureShape> {
-    let blip = slide
-        .child("cSld")?
-        .child("bg")?
-        .child("bgPr")?
-        .child("blipFill")?
-        .child("blip")?;
-    let (mime, data) = blip_bytes(blip, context)?;
-    Some(PictureShape {
-        bbox: [0.0, 0.0, width, height],
-        mime,
-        data,
-    })
+    let stated = stated_background(slide, context.rels, context.media, width, height)
+        .or_else(|| context.style.layout_background.clone())
+        .or_else(|| context.style.master_background.clone());
+    match stated {
+        Some(StatedBackground::Picture(picture)) => Some(picture),
+        _ => None,
+    }
+}
+
+/// The background one part states in its own `p:cSld/p:bg`.
+///
+/// `None` means the part states no background, so the part behind it decides;
+/// `Some(StatedBackground::Other)` means it states one that is not a picture,
+/// which is where the inheritance stops.
+fn stated_background(
+    part: &Node,
+    rels: &HashMap<String, Relationship>,
+    media: &HashMap<String, Vec<u8>>,
+    width: f64,
+    height: f64,
+) -> Option<StatedBackground> {
+    let background = part.child("cSld")?.child("bg")?;
+    let picture = background
+        .child("bgPr")
+        .and_then(|properties| properties.child("blipFill"))
+        .and_then(|fill| fill.child("blip"))
+        .and_then(|blip| blip_bytes_in(blip, rels, media))
+        .map(|(mime, data)| {
+            StatedBackground::Picture(PictureShape {
+                bbox: [0.0, 0.0, width, height],
+                mime,
+                data,
+            })
+        });
+    Some(picture.unwrap_or(StatedBackground::Other))
 }
 
 /// English Metric Units per point: the units a slide's placement is stated in
@@ -1352,7 +1403,18 @@ fn bullet_pictures(shape: &Node, context: &ShapeContext) -> Vec<PictureShape> {
 /// here: the drawing when the blip states one, the raster otherwise, and pixels
 /// turned upright when their EXIF tag says PowerPoint shows them that way.
 fn blip_bytes(blip: &Node, context: &ShapeContext) -> Option<(&'static str, Vec<u8>)> {
-    let (mime, data) = picture_bytes(blip, context)?;
+    blip_bytes_in(blip, context.rels, context.media)
+}
+
+/// [`blip_bytes`] for a part whose relationships and media are already in hand
+/// rather than behind a [`ShapeContext`] — a layout's or master's background,
+/// whose relationships are its own.
+fn blip_bytes_in(
+    blip: &Node,
+    rels: &HashMap<String, Relationship>,
+    media: &HashMap<String, Vec<u8>>,
+) -> Option<(&'static str, Vec<u8>)> {
+    let (mime, data) = picture_bytes_in(blip, rels, media)?;
     Some(match pdfextractor_image_parser::turn_upright(&data) {
         Some(upright) => {
             tracing::debug!(
@@ -1375,16 +1437,20 @@ fn blip_bytes(blip: &Node, context: &ShapeContext) -> Option<(&'static str, Vec<
 /// the one whose resolution the file leaves open, so it is taken whenever its
 /// part is in the package. A `svgBlip` naming anything else, or a part that is
 /// not here, leaves the fallback as the picture — which is what it is for.
-fn picture_bytes(blip: &Node, context: &ShapeContext) -> Option<(&'static str, Vec<u8>)> {
+fn picture_bytes_in(
+    blip: &Node,
+    rels: &HashMap<String, Relationship>,
+    media: &HashMap<String, Vec<u8>>,
+) -> Option<(&'static str, Vec<u8>)> {
     let part = |id: &str| -> Option<(&'static str, Vec<u8>)> {
         // `r:embed` is the embedded copy; a linked picture (`r:link`) points
         // outside the package and has no bytes here.
-        let relationship = context.rels.get(id)?;
+        let relationship = rels.get(id)?;
         if relationship.external {
             return None;
         }
         let mime = mime_for(&relationship.target)?;
-        let data = context.media.get(&relationship.target)?;
+        let data = media.get(&relationship.target)?;
         Some((mime, data.clone()))
     };
     if let Some(drawing) = blip
