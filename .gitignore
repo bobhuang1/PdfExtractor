@@ -12,6 +12,9 @@ __pycache__/
 !test-data/golden/compare-baseline.json
 # Real Docling conversions: golden references, not conversions of ours.
 !test-data/golden/docling/*.json
+# Docling's own schema, generated from its model: the contract the conformance
+# tests read, not an output of ours — a fresh checkout has to carry it.
+!test-data/golden/DoclingDocument.json
 # The photographed corpus's ground truth: written with the images, not an output.
 !test-data/photos/corpus.json
 # The window's bundle configuration — source, not output: the release
