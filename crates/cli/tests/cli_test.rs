@@ -4166,6 +4166,100 @@ fn assert_the_reader_agrees(fixture: &str, before: &[ReadPicture], after: &[Read
     }
 }
 
+/// A page's picture background as the JSON names it: the media type, the size in
+/// points, the resolution, and the bytes written beside the JSON.
+#[derive(Debug, PartialEq)]
+struct Backdrop {
+    mimetype: String,
+    size: (f64, f64),
+    dpi: u64,
+    bytes: Vec<u8>,
+}
+
+/// What this reader makes of a deck's pages: each page's backdrop in page order,
+/// `None` where the page states none, the pictures it reports as items, and the
+/// document's words.
+#[derive(Debug, PartialEq)]
+struct PageBackdrops {
+    pages: Vec<Option<Backdrop>>,
+    pictures: usize,
+    words: Vec<String>,
+}
+
+/// Convert a package with the CLI and return the backdrop each page states.
+///
+/// A backdrop is the page's `image`, not a picture item, so this reads `pages`
+/// rather than `pictures`: a deck whose background came back as a shape would be
+/// a different reading of the same page, which is why the item count is carried
+/// with it.
+fn backdrops_the_reader_takes(
+    ws: &Workspace,
+    fixture: &str,
+    package: &[u8],
+    tag: &str,
+) -> PageBackdrops {
+    let input = ws.write(&format!("{tag}/{fixture}"), package);
+    let output = ws.join(&format!("{tag}/{fixture}.json"));
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pages = doc["pages"].as_object().expect("a pages map");
+    let mut numbers: Vec<u32> = pages
+        .keys()
+        .map(|number| number.parse().expect("a page number"))
+        .collect();
+    numbers.sort_unstable();
+    let pages = numbers
+        .into_iter()
+        .map(|number| {
+            pages[&number.to_string()]["image"]
+                .as_object()
+                .map(|image| {
+                    let uri = image["uri"].as_str().unwrap_or_else(|| {
+                        panic!("{fixture}: a page image with no file: {image:#?}")
+                    });
+                    Backdrop {
+                        mimetype: image["mimetype"]
+                            .as_str()
+                            .expect("a page image's mimetype")
+                            .to_string(),
+                        size: (
+                            image["size"]["width"]
+                                .as_f64()
+                                .expect("a page image's width"),
+                            image["size"]["height"]
+                                .as_f64()
+                                .expect("a page image's height"),
+                        ),
+                        dpi: image["dpi"].as_u64().expect("a page image's resolution"),
+                        bytes: std::fs::read(ws.join(tag).join(uri))
+                            .unwrap_or_else(|e| panic!("{fixture}: {uri} was not written: {e}")),
+                    }
+                })
+        })
+        .collect();
+
+    PageBackdrops {
+        pages,
+        pictures: doc["pictures"].as_array().expect("a pictures list").len(),
+        words: doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .map(|item| item["text"].as_str().unwrap_or_default().to_string())
+            .collect(),
+    }
+}
+
 /// Whether some part's relationships reach `name`, by the file name the target
 /// ends with. A part nothing points at is a file left in the package, not a
 /// picture the document holds.
@@ -5816,6 +5910,149 @@ fn libreoffice_opens_and_resaves_the_header_picture_fixture() {
          re-saved: {:#?}\nfixture: {:#?}",
         after[1],
         before[0]
+    );
+}
+
+/// LibreOffice accepts `background_deck.pptx`, whose first slide paints a
+/// photograph as its background rather than placing it as a shape: the picture is
+/// `p:cSld/p:bg/p:bgPr/a:blipFill`, outside the shape tree, and the second slide
+/// states no `p:bg` at all. A backdrop has no frame of its own, so what a re-save
+/// asks is whether the picture survives where the file put it.
+///
+/// It opens the fixture and writes it back, and what it writes is held to
+///
+/// * the sentences: each still in its own slide, so the deck was read rather than
+///   refused;
+/// * the backdrop: still the first slide's one `p:bg`, holding an `a:blipFill` that
+///   names a picture, and still nothing on the second slide. An application that
+///   dropped the fill, or promoted it to a full-slide `p:pic`, fails here;
+/// * the photograph: one `image/jpeg` part, declared and reached by a
+///   relationship, byte for byte the fixture's `images/scan.jpg` — the application
+///   copies a photograph through rather than re-encoding it; and
+/// * this reader, on what the application wrote: the same pages, the first backed
+///   by the same 620 × 350 `image/jpeg` at the same 62 dpi and the second by
+///   nothing, no picture reported as an item, and the same words as the fixture
+///   gave.
+#[test]
+fn libreoffice_opens_and_resaves_the_picture_background_deck() {
+    let Some(soffice) = soffice_binary() else {
+        eprintln!("no soffice on PATH; skipping the picture-background re-save test");
+        return;
+    };
+    let file = "background_deck.pptx";
+    let bytes = fixture(file);
+    let ws = Workspace::new("background-resave");
+    let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
+
+    let slide = |name: &str| -> String {
+        parts
+            .iter()
+            .find(|(part, _)| part == name)
+            .map(|(_, data)| String::from_utf8_lossy(data).to_string())
+            .unwrap_or_else(|| panic!("{file}: no {name} in the re-saved package"))
+    };
+    let first = slide("ppt/slides/slide1.xml");
+    let second = slide("ppt/slides/slide2.xml");
+    assert!(
+        first.contains("A photograph behind the words."),
+        "{file}: the first slide's sentence did not survive the re-save"
+    );
+    assert!(
+        second.contains("No picture behind these words."),
+        "{file}: the second slide's sentence did not survive the re-save"
+    );
+
+    assert_eq!(
+        first.matches("<p:bg>").count(),
+        1,
+        "{file}: the first slide does not state one background"
+    );
+    let background = first
+        .split_once("<p:bg>")
+        .and_then(|(_, rest)| rest.split_once("</p:bg>"))
+        .map(|(background, _)| background)
+        .unwrap_or_else(|| panic!("{file}: the background is never closed"));
+    assert!(
+        background.contains("<a:blipFill") && background.contains("<a:blip "),
+        "{file}: the background the application kept names no picture: {background}"
+    );
+    assert!(
+        !first.contains("<p:pic>"),
+        "{file}: the backdrop became a picture shape rather than a background"
+    );
+    assert!(
+        !second.contains("<p:bg>"),
+        "{file}: the second slide was given a background it never stated"
+    );
+
+    let photograph = fixture("images/scan.jpg");
+    let photographs: Vec<&String> = parts
+        .iter()
+        .filter(|(name, _)| name.ends_with(".jpg") || name.ends_with(".jpeg"))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        photographs.len(),
+        1,
+        "{file}: the fixture's one photograph came back as {photographs:?}; the parts are {:#?}",
+        parts.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    let name = photographs[0];
+    assert_eq!(
+        parts
+            .iter()
+            .find(|(part, _)| part == name)
+            .map(|(_, data)| data),
+        Some(&photograph),
+        "{file}: {name} is not the photograph the fixture carries"
+    );
+    assert!(
+        declared_as(&parts, name, "image/jpeg"),
+        "{file}: {name} is not declared as an image/jpeg part"
+    );
+    assert!(
+        reached_by_a_relationship(&parts, name),
+        "{file}: no relationship reaches {name}"
+    );
+
+    let before = backdrops_the_reader_takes(&ws, file, &bytes, "before");
+    let after = backdrops_the_reader_takes(&ws, file, &resaved, "after");
+    assert_eq!(
+        after.pages.len(),
+        2,
+        "{file}: the re-saved deck is not two slides: {after:#?}"
+    );
+    let backdrop = after.pages[0]
+        .as_ref()
+        .unwrap_or_else(|| panic!("{file}: the first slide lost its background: {after:#?}"));
+    assert_eq!(
+        backdrop.mimetype, "image/jpeg",
+        "{file}: the backdrop is not the photograph"
+    );
+    assert_eq!(
+        backdrop.size,
+        (620.0, 350.0),
+        "{file}: the backdrop is not the 620 × 350 scan"
+    );
+    assert_eq!(
+        backdrop.dpi, 62,
+        "{file}: 620 pixels across 720 pt is 62 dpi"
+    );
+    assert_eq!(
+        backdrop.bytes, photograph,
+        "{file}: the page image is not the photograph's own bytes"
+    );
+    assert_eq!(
+        after.pages[1], None,
+        "{file}: the second slide gained a backdrop"
+    );
+    assert_eq!(
+        after.pictures, 0,
+        "{file}: the backdrop was reported as a picture item"
+    );
+    assert_eq!(
+        after, before,
+        "{file}: the re-saved deck is not the fixture's reading"
     );
 }
 
