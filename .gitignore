@@ -4,8 +4,11 @@
 # source — visible; ignoring the folder does not stop a build writing into it.
 /dist/
 # The bytecode a fixture generator leaves beside itself when it runs, not source:
-# `test-data/make_*.py` writes it into `test-data/__pycache__`.
+# `test-data/make_*.py` writes it into `test-data/__pycache__`, and a script run
+# through `py_compile`, imported with its cache turned off, or compiled beside
+# itself leaves a `*.pyc` next to the source instead. Neither is ever committed.
 __pycache__/
+*.pyc
 *.json
 !test-data/expected/*.json
 # The Compare mode's per-document numbers: a record, not an output, so it is kept.
