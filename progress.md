@@ -11062,6 +11062,103 @@ background`; restored byte for byte, it passes again.
 `cargo fmt --all --check` clean, and clippy reports nothing in the files this
 change touched.
 
+## A slide's picture background is inherited from its layout and master
+
+**What was asked.** Add the same re-save check for a slide whose picture
+background comes from a theme or master rather than the slide itself.
+
+**Why it is a different reading.** A background can be stated by the slide, by
+its layout, or by the layout's master, and a part that states none inherits the
+one behind it. A deck's photographic backdrop is usually the master's — one
+picture behind every slide — so a reader that looked only at each slide's own
+`p:bg` came back with bare pages for a deck that was all photograph, and a
+re-save of such a deck would have had nothing to hold. The fixture, the reading
+and the re-save check are the three pieces this section is about.
+
+**The fixture.** [make_master_background_deck.py](test-data/make_master_background_deck.py)
+writes [master_background_deck.pptx](test-data/master_background_deck.pptx),
+three slides on the blank layout. The photograph — `images/scan.jpg`, the same
+15,684-byte 620 × 350 scan the other office fixtures use — is the deck's
+`ppt/media/master_backdrop.jpeg`, named from
+`ppt/slideMasters/slideMaster1.xml`'s own
+`p:bg/p:bgPr/a:blipFill` through that master's own relationships. python-pptx
+writes a theme background there (`<p:bgRef idx="1001"><a:schemeClr val="bg1"/>`),
+so the element is replaced whole in the saved package: nothing in python-pptx
+can author a picture fill on a background at any level. The first two slides
+state no `p:bg` at all, so the photograph behind them is only the master's; the
+third states a colour of its own
+(`<a:solidFill><a:schemeClr val="accent2"/></a:solidFill>`), so the fixture also
+holds the inheritance to stopping wherever a part states a background.
+
+**The reader.** `SlideStyle::load` already parsed the layout and master behind a
+slide — for placeholders, bullets and the theme — and it now also records the
+background each of them states, as `Option<StatedBackground>`, where a stated
+background is either a picture the package holds or something else (a colour, a
+gradient, a theme fill, a blip whose part is missing). `slide_background` takes
+the first one stated along slide → layout → master and keeps it only if it is a
+picture, so a slide that states a colour is not given the master's photograph as
+well. The blip is resolved through the *stating* part's relationships: a
+`ShapeContext` carries the slide's, and the master's `r:embed` names a part in
+the master's own `.rels`. That is why `picture_bytes` and `blip_bytes` now take
+the relationships and media in hand (`picture_bytes_in`, `blip_bytes_in`) with
+the `ShapeContext` forms delegating to them: a picture is read one way wherever
+it is named from, and the layout's and master's backgrounds go through the same
+reading, `asvg:svgBlip` preference and EXIF upright turn included.
+
+**The tests.**
+- [background_test.rs](crates/pptx-parser/tests/background_test.rs) gains
+  `a_picture_background_the_master_states_is_every_slides`: the first two slides
+  carry the JPEG's own bytes at the full slide box, each with its one text shape
+  and no picture, and the third has no page image at all.
+- `libreoffice_opens_and_resaves_the_master_picture_background_deck` in
+  [cli_test.rs](crates/cli/tests/cli_test.rs) opens the fixture and writes it
+  back, and holds what it wrote to
+  - the sentences: each still in its own slide;
+  - the inheritance: neither of the first two slides states a `p:bg` of its own,
+    so the backdrop was not flattened onto them, and none of them draws a
+    `p:pic`;
+  - the override: the third slide still states one background, an `a:solidFill`
+    with no `a:blipFill` in it, so the colour stayed a colour;
+  - the master: every background a master states is an `a:blipFill` naming a
+    picture, there is at least one, and no master draws a `p:pic` for it;
+  - the photograph: one declared, related `image/jpeg` part byte for byte the
+    fixture's 15,684 bytes; and
+  - this reader on the re-saved package: three pages, the first two backed by
+    the same 620 × 350 `image/jpeg` at 62 dpi with the photograph's own bytes
+    and the third by nothing, no picture reported as an item, the same words,
+    and the same reading the fixture gives. That half is the test of the
+    inheritance itself: the re-saved slides name no picture, so a reader that
+    looked at the slides alone would come back with three bare pages.
+
+**What the application keeps.** LibreOffice writes the deck back with the
+photograph in the master and nowhere else: eleven masters — its export writes
+one per layout, as it does for the two-slide background fixture — each holding
+`<p:bg><p:bgPr><a:blipFill rotWithShape="0"><a:blip r:embed="rId2">…`, the
+photograph copied through byte for byte as `ppt/media/image1.jpeg`, declared and
+reached by a relationship. That plurality is why the test asks every master's
+background rather than one master's: which master a slide's layout points at is
+the application's business. Neither inheriting slide gains a `p:bg`, and the
+third keeps its solid fill, so what comes back is the same picture in the same
+place — behind the slides rather than on them.
+
+**Proof the gate bites.** Two ways. Stripping the `<p:bg>` out of the fixture's
+master fails the test with `master_background_deck.pptx: no master states the
+photograph's background`; restored byte for byte, it passes again. And removing
+the inherited candidates from `slide_background` — leaving the reading of the
+slide's own `p:bg` — fails it with
+`master_background_deck.pptx: slide 1 lost the master's background`, which is
+the half of the test the reader change exists for.
+
+**Docs.** The test-data layout, the re-save paragraph and the picture section of
+[README.md](README.md) describe the master-stated backdrop, the inheritance
+order, and what the application does with it.
+
+**Verification.** `cargo test -p pdfextractor-pptx-parser` **33 passed** (26
+unit, 3 background, 2 preset, 2 shapes);
+`cargo test -p pdfextractor-cli --test cli_test` **125 passed** (one new) in
+430.06 s; `cargo fmt --all --check` clean, and clippy reports nothing in the
+crates this change touched.
+
 ## A workbook's picture can be a bare JPEG 2000 codestream
 
 **What was asked.** Add a `.jpc` JPEG 2000 picture to the XLSX picture fixture
