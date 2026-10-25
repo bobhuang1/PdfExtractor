@@ -265,6 +265,11 @@ pub fn gif_frames(data: &[u8]) -> Vec<PngPicture> {
 /// A frame is laid on white for the reason a GIF's frame is: a page is white
 /// paper, not a hole in it.
 ///
+/// Each frame is its stored grid. A WebP's EXIF orientation tag is the file's
+/// rather than a frame's — every frame was stored the same way — so the caller
+/// turns all of them by [`ImageDocument::orientation`], or none, never just the
+/// frame it happened to measure.
+///
 /// Empty when the bytes are not a WebP, are not animated, or do not decode, so
 /// a caller keeps the single page it would otherwise write.
 pub fn webp_frames(data: &[u8]) -> Vec<PngPicture> {

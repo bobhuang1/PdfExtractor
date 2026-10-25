@@ -2369,6 +2369,105 @@ fn an_animated_webp_is_a_page_per_frame() {
     }
 }
 
+/// An animated WebP's EXIF tag is the file's, so it turns the whole strip: every
+/// frame of an animation was stored the same way, because they are one picture.
+/// `turning_turned.webp` is the three pages of `turning.webp` stored a quarter
+/// turn anticlockwise on a 160 × 480 canvas, with tag 6 saying to turn them back.
+/// A reader that applied the tag to the frame it measured — the first — and not
+/// to the rest would report page one upright and pages two and three on their
+/// side, at the stored grid and with their words unreadable; each sheet says its
+/// own words, so a page turned by the wrong tag, or left unturned, shows the
+/// wrong words or none rather than passing quietly.
+///
+/// The pages are held to the upright 480 × 160 the tag describes, to each page's
+/// own two lines and no other page's, and to line boxes that are horizontal and
+/// inside the page — which only upright pixels give.
+#[test]
+fn an_animated_webps_exif_orientation_turns_every_frame() {
+    let ws = Workspace::new("turned-animated-webp");
+    let bytes = std::fs::read(repository_root().join("test-data/images/turning_turned.webp"))
+        .expect("the turned animation fixture");
+    let input = ws.write("turning_turned.webp", &bytes);
+    let output = ws.join("turning_turned.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "always",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(doc["origin"]["mimetype"], "image/webp");
+    let pages = doc["pages"].as_object().expect("a page list");
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    for page in 1..=3 {
+        let size = &doc["pages"][page.to_string()]["size"];
+        assert_eq!(
+            (
+                size["width"].as_f64().expect("a width"),
+                size["height"].as_f64().expect("a height"),
+            ),
+            (480.0, 160.0),
+            "page {page} is not the upright frame: {size}"
+        );
+    }
+
+    let frames = [
+        (1, "WEBP ONE", "Page 1 of 3"),
+        (2, "WEBP TWO", "Page 2 of 3"),
+        (3, "WEBP THREE", "Page 3 of 3"),
+    ];
+    for (page, words, subline) in frames {
+        let on_page: Vec<&serde_json::Value> = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .filter(|item| item["prov"][0]["page_no"].as_i64() == Some(page))
+            .collect();
+        let reading = on_page
+            .iter()
+            .map(|item| item["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            reading.contains(words),
+            "page {page} should show {words}, and shows {reading:?}"
+        );
+        assert!(
+            reading.contains(subline),
+            "page {page} should show {subline}, and shows {reading:?}"
+        );
+        for (other_page, other_words, other_subline) in frames {
+            if other_page == page {
+                continue;
+            }
+            assert!(
+                !reading.contains(other_words) && !reading.contains(other_subline),
+                "page {page} also shows page {other_page}'s words: {reading:?}"
+            );
+        }
+        for item in on_page {
+            let bbox = &item["prov"][0]["bbox"];
+            let (left, top, right, bottom) = (
+                bbox["l"].as_f64().expect("a left edge"),
+                bbox["t"].as_f64().expect("a top edge"),
+                bbox["r"].as_f64().expect("a right edge"),
+                bbox["b"].as_f64().expect("a bottom edge"),
+            );
+            assert!(
+                right - left > bottom - top,
+                "page {page} has a sideways line box, so recognition saw the stored grid: {bbox}"
+            );
+            assert!(
+                left >= 0.0 && top >= 0.0 && right <= 480.5 && bottom <= 160.5,
+                "page {page} has a box outside the upright page: {bbox}"
+            );
+        }
+    }
+}
+
 /// A TIFF is a stack too: `pages.tiff` is a three-sheet batch — the shape a
 /// scanner's feeder writes, one image file directory per sheet — and each
 /// directory is a page a reader turns, at its own size. A reader that stopped at
@@ -2519,6 +2618,109 @@ fn a_tiffs_sheets_are_turned_by_their_own_orientation_tags() {
     // their side and become 4 × 6; the second is already upright at 5 × 3 and
     // must not be turned by the first sheet's tag.
     assert_eq!(sizes, vec![(4.0, 6.0), (5.0, 3.0), (4.0, 6.0)], "{pages:?}");
+}
+
+/// The same batch fed the other way up: `pages_turned.tiff` stores its first
+/// sheet upright and tagged 1, its second a quarter turn the other way and
+/// tagged 6, and its third the opposite quarter and tagged 8. Every page is the
+/// same 480 × 160 once turned, but two of the three are stored as 160 × 480.
+///
+/// Recognition reads pixels, not tags, so a single page's turn would cost the
+/// others their text: this is the end-to-end half of the rule the synthetic
+/// fixture above pins, with words a recogniser can actually read. It holds
+///
+/// * the pages: three, each at the upright 480 × 160 and not the stored grid
+///   two of them arrived in;
+/// * the words: each page's own two lines, and no other page's, so a sheet
+///   turned by its neighbour's tag fails by showing the wrong words rather than
+///   by silence; and
+/// * the boxes: every line horizontal and inside the page, which is only true
+///   if the engine was handed upright pixels — sideways ones give no such
+///   lines.
+#[test]
+fn a_tiffs_turned_sheets_are_read_upright_by_ocr() {
+    let ws = Workspace::new("turned-tiff-ocr");
+    let bytes = std::fs::read(repository_root().join("test-data/images/pages_turned.tiff"))
+        .expect("the turned multi-page fixture");
+    let input = ws.write("pages_turned.tiff", &bytes);
+    let output = ws.join("pages_turned.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "always",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(doc["origin"]["mimetype"], "image/tiff");
+    let pages = doc["pages"].as_object().expect("a page list");
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    for page in 1..=3 {
+        let size = &doc["pages"][page.to_string()]["size"];
+        assert_eq!(
+            (
+                size["width"].as_f64().expect("a width"),
+                size["height"].as_f64().expect("a height"),
+            ),
+            (480.0, 160.0),
+            "page {page} is not the upright sheet: {size}"
+        );
+    }
+
+    let sheets = [
+        (1, "PAGE ONE", "Sheet 1 of 3"),
+        (2, "PAGE TWO", "Sheet 2 of 3"),
+        (3, "PAGE THREE", "Sheet 3 of 3"),
+    ];
+    for (page, words, subline) in sheets {
+        let on_page: Vec<&serde_json::Value> = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .filter(|item| item["prov"][0]["page_no"].as_i64() == Some(page))
+            .collect();
+        let reading = on_page
+            .iter()
+            .map(|item| item["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            reading.contains(words),
+            "page {page} should show {words}, and shows {reading:?}"
+        );
+        assert!(
+            reading.contains(subline),
+            "page {page} should show {subline}, and shows {reading:?}"
+        );
+        for (other_page, other_words, other_subline) in sheets {
+            if other_page == page {
+                continue;
+            }
+            assert!(
+                !reading.contains(other_words) && !reading.contains(other_subline),
+                "page {page} also shows page {other_page}'s words: {reading:?}"
+            );
+        }
+        for item in on_page {
+            let bbox = &item["prov"][0]["bbox"];
+            let (left, top, right, bottom) = (
+                bbox["l"].as_f64().expect("a left edge"),
+                bbox["t"].as_f64().expect("a top edge"),
+                bbox["r"].as_f64().expect("a right edge"),
+                bbox["b"].as_f64().expect("a bottom edge"),
+            );
+            assert!(
+                right - left > bottom - top,
+                "page {page} has a sideways line box, so recognition saw the stored grid: {bbox}"
+            );
+            assert!(
+                left >= 0.0 && top >= 0.0 && right <= 480.5 && bottom <= 160.5,
+                "page {page} has a box outside the upright page: {bbox}"
+            );
+        }
+    }
 }
 
 /// Word and PowerPoint 2016 and later state an SVG picture twice: the `a:blip`'s
@@ -2752,6 +2954,101 @@ fn the_same_svg_converts_the_same_however_it_is_stored() {
     }
 }
 
+/// An SVG is authored against its own viewport and placed in whatever frame the
+/// document gives it. When the two have different proportions the drawing's own
+/// `preserveAspectRatio` decides how they meet: the default `xMidYMid meet`
+/// keeps the drawing's shape and leaves the rest of the frame transparent,
+/// while `none` stretches the two axes independently. Every other SVG fixture
+/// here states no attribute, so those all ask the default; this one asks `none`.
+///
+/// `svg_stretch_picture.docx` places a 40 × 24 drawing split red and blue in a
+/// 2.5 × 0.5 in frame — five to one, where the drawing is five to three. The
+/// rendered picture is held to the frame and its pixels: 180 × 36 points at
+/// 144 dpi is 360 × 72, the halves are still left and right, and the pixels a
+/// default fit would have left as margin at either side are the drawing's own
+/// ink. A reader that ignored the attribute would centre a 120-pixel-wide
+/// drawing in a 360-pixel frame, which the two margin samples catch.
+#[test]
+fn an_svg_stating_none_is_stretched_to_its_frame() {
+    let file = "svg_stretch_picture.docx";
+    let bytes = fixture(file);
+    // The fixture's claim first: the drawing it carries states the non-default
+    // fit, so a package that quietly lost the attribute cannot pass this test by
+    // looking like a default fit.
+    let parts = package_parts(&bytes, file);
+    let drawing = parts
+        .iter()
+        .find(|(name, _)| name.ends_with(".svg"))
+        .map(|(_, drawing)| String::from_utf8_lossy(drawing).to_string())
+        .unwrap_or_else(|| panic!("{file}: the package carries no drawing"));
+    assert!(
+        drawing.contains(r#"preserveAspectRatio="none""#),
+        "{file}: the drawing does not state the fit this test is about: {drawing}"
+    );
+
+    let ws = Workspace::new("svg-stretch");
+    let input = ws.write(file, &bytes);
+    let output = ws.join("svg_stretch_picture.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 1, "{pictures:#?}");
+    let image = &pictures[0]["image"];
+    assert_eq!(image["mimetype"], "image/png");
+    assert_eq!(image["dpi"].as_u64(), Some(144));
+    assert_eq!(image["size"]["width"].as_f64(), Some(360.0), "{image:#?}");
+    assert_eq!(image["size"]["height"].as_f64(), Some(72.0), "{image:#?}");
+    let uri = image["uri"].as_str().expect("an image uri");
+    assert!(uri.ends_with(".png"), "the drawing was written as {uri}");
+    let written = std::fs::read(ws.join(uri)).expect("the picture written beside the JSON");
+    let drawn = image::load_from_memory(&written)
+        .unwrap_or_else(|e| panic!("{uri} does not decode: {e}"))
+        .to_rgba8();
+    assert_eq!(
+        drawn.dimensions(),
+        (360, 72),
+        "{uri} is not the frame's grid"
+    );
+
+    const RED: [u8; 4] = [192, 57, 43, 255];
+    const BLUE: [u8; 4] = [47, 109, 181, 255];
+    for (x, y, wanted, why) in [
+        (2, 2, RED, "the frame's corner is not the red half"),
+        (
+            30,
+            36,
+            RED,
+            "the margin a default fit leaves on the left is not the drawing's ink",
+        ),
+        (90, 36, RED, "the left half is not red"),
+        (270, 36, BLUE, "the right half is not blue"),
+        (
+            330,
+            36,
+            BLUE,
+            "the margin a default fit leaves on the right is not the drawing's ink",
+        ),
+        (
+            357,
+            69,
+            BLUE,
+            "the frame's opposite corner is not the blue half",
+        ),
+    ] {
+        assert_eq!(drawn.get_pixel(x, y).0, wanted, "{uri}: {why}");
+    }
+}
+
 /// A picture stated twice without an `asvg:svgBlip`: the drawing in an
 /// `mc:AlternateContent`'s `mc:Choice`, and, in `mc:Fallback`, the copy an older
 /// reader shows — a VML `v:imagedata` in Word, a second `p:pic` in PowerPoint.
@@ -2937,11 +3234,23 @@ fn a_fallback_only_picture_is_the_fallback() {
     /// to walk into, rather than a paragraph of the body.
     struct PictureIn {
         fixture: &'static str,
-        /// The part the pictures are stated in.
+        /// The part the body's pictures are stated in.
         drawing: &'static str,
         /// What a fallback branch names its picture with.
         fallback_copy: &'static str,
-        /// The element the second fallback is written inside, and its close: a
+        /// How many fallback branches the part states: the body's picture and
+        /// every container's. The DOCX has four here — the body, a cell, a cell
+        /// in a nested table and a text box — and one more in its header part.
+        fallbacks: usize,
+        /// How many pictures the conversion reads from the package: the body's
+        /// and each container's, the header's furniture picture included.
+        pictures: usize,
+        /// How many of them a rendering of the document shows: furniture is not
+        /// body content, so a header's picture is read but not rendered.
+        rendered: usize,
+        /// The sentences the fixture states, each exactly once.
+        sentences: &'static [&'static str],
+        /// The element the second picture is written inside, and its close: a
         /// table's cell in the DOCX, a group on the slide. The first picture is
         /// outside it, in the body.
         open: &'static str,
@@ -2956,6 +3265,20 @@ fn a_fallback_only_picture_is_the_fallback() {
             fixture: "mc_fallback_pictures.docx",
             drawing: "word/document.xml",
             fallback_copy: "v:imagedata",
+            fallbacks: 4,
+            pictures: 5,
+            rendered: 4,
+            sentences: &[
+                "Before the picture.",
+                "After the picture.",
+                "Before the table picture.",
+                "After the table picture.",
+                "Before the nested table picture.",
+                "After the nested table picture.",
+                "Before the text box picture.",
+                "After the text box picture.",
+                "The header.",
+            ],
             open: "<w:tc>",
             close: "</w:tc>",
             name: "table",
@@ -2964,6 +3287,15 @@ fn a_fallback_only_picture_is_the_fallback() {
             fixture: "mc_fallback_pictures.pptx",
             drawing: "ppt/slides/slide1.xml",
             fallback_copy: "<p:pic>",
+            fallbacks: 2,
+            pictures: 2,
+            rendered: 2,
+            sentences: &[
+                "Before the picture.",
+                "After the picture.",
+                "Before the group picture.",
+                "After the group picture.",
+            ],
             open: "<p:grpSp>",
             close: "</p:grpSp>",
             name: "group",
@@ -2973,6 +3305,10 @@ fn a_fallback_only_picture_is_the_fallback() {
             fixture,
             drawing,
             fallback_copy,
+            fallbacks,
+            pictures: picture_count,
+            rendered,
+            sentences,
             open,
             close,
             name,
@@ -2994,8 +3330,8 @@ fn a_fallback_only_picture_is_the_fallback() {
 
         assert_eq!(
             drawing_xml.matches("<mc:AlternateContent>").count(),
-            2,
-            "{fixture}: the two pictures are not stated as alternate content"
+            fallbacks,
+            "{fixture}: the pictures are not stated as alternate content"
         );
         assert_eq!(
             drawing_xml.matches("<mc:Choice>").count(),
@@ -3005,7 +3341,7 @@ fn a_fallback_only_picture_is_the_fallback() {
         );
         assert_eq!(
             drawing_xml.matches("<mc:Fallback>").count(),
-            2,
+            fallbacks,
             "{fixture}: the fallback is not each picture's only branch"
         );
 
@@ -3057,9 +3393,9 @@ fn a_fallback_only_picture_is_the_fallback() {
         let pictures = doc["pictures"].as_array().expect("a pictures list");
         assert_eq!(
             pictures.len(),
-            2,
-            "{fixture}: the body's fallback and the one in the {name} are the document's \
-             pictures: {pictures:#?}"
+            picture_count,
+            "{fixture}: every fallback the package states is a picture of the document: \
+             {pictures:#?}"
         );
         for picture in pictures {
             let image = &picture["image"];
@@ -3091,8 +3427,8 @@ fn a_fallback_only_picture_is_the_fallback() {
         let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
         assert_eq!(
             html.matches("<img src=\"").count(),
-            2,
-            "{fixture}: the render does not show both fallbacks:\n{html}"
+            rendered,
+            "{fixture}: the render does not show every body picture:\n{html}"
         );
         let texts = doc["texts"].as_array().expect("a text list");
         let words = texts
@@ -3102,12 +3438,7 @@ fn a_fallback_only_picture_is_the_fallback() {
             .join(" ");
         let before = format!("Before the {name} picture.");
         let after = format!("After the {name} picture.");
-        for sentence in [
-            "Before the picture.",
-            "After the picture.",
-            before.as_str(),
-            after.as_str(),
-        ] {
+        for sentence in sentences {
             assert_eq!(
                 words.matches(sentence).count(),
                 1,
@@ -3131,12 +3462,368 @@ fn a_fallback_only_picture_is_the_fallback() {
                 .unwrap_or_else(|| panic!("{fixture}: the document does not state {sentence}"));
             position(format!("#/texts/{index}"))
         };
-        let second_picture = position("#/pictures/1".to_string());
-        assert!(
-            text_at(&before) < second_picture && second_picture < text_at(&after),
-            "{fixture}: the {name}'s picture is not read between the sentences around it"
+        if fixture.ends_with(".docx") {
+            // A Word cell holds its own picture: the table stands between the
+            // sentences that frame it, and the picture is in the group that
+            // cell references — not a body item beside the table, which would
+            // be a picture the cell does not hold.
+            let group = doc["groups"]
+                .as_array()
+                .expect("a group list")
+                .iter()
+                .find(|group| {
+                    group["children"].as_array().is_some_and(|children| {
+                        children.iter().any(|child| child["$ref"] == "#/pictures/1")
+                    })
+                })
+                .unwrap_or_else(|| {
+                    panic!("{fixture}: no group holds the cell's picture: {doc:#?}")
+                });
+            let cell = doc["tables"]
+                .as_array()
+                .expect("a table list")
+                .iter()
+                .flat_map(|table| {
+                    table["data"]["table_cells"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                })
+                .find(|cell| cell["ref"]["$ref"] == group["self_ref"])
+                .unwrap_or_else(|| {
+                    panic!("{fixture}: no cell references the group holding the picture")
+                });
+            assert_eq!(
+                cell["text"], "",
+                "{fixture}: the cell holding the picture is not the empty cell it was"
+            );
+            let table = group["parent"]["$ref"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{fixture}: the group has no parent"));
+            let table_at = position(table.to_string());
+            assert!(
+                text_at(&before) < table_at && table_at < text_at(&after),
+                "{fixture}: the table holding the cell's picture is not read between the \
+                 sentences around it"
+            );
+        } else {
+            let second_picture = position("#/pictures/1".to_string());
+            assert!(
+                text_at(&before) < second_picture && second_picture < text_at(&after),
+                "{fixture}: the {name}'s picture is not read between the sentences around it"
+            );
+        }
+    }
+}
+
+/// The `ordinal`-th `open … close` element in `xml`, counting from zero.
+///
+/// The container a picture is stated in is not always the first of its kind —
+/// the DOCX has a table in a table, so the cell that holds the nested picture is
+/// the third `<w:tc>` — and the markup between two containers is exactly what a
+/// test that only looked at the first one would mistake for it.
+fn nth_element<'a>(xml: &'a str, open: &str, close: &str, ordinal: usize) -> &'a str {
+    let mut search = 0;
+    let mut start = 0;
+    for _ in 0..=ordinal {
+        let found = xml[search..]
+            .find(open)
+            .map(|index| search + index)
+            .unwrap_or_else(|| panic!("no {open} number {ordinal}"));
+        start = found;
+        search = found + open.len();
+    }
+    // The element can hold another of its own kind — the nested table's cell is
+    // inside the outer cell — so its end is the close that takes the depth back
+    // to zero, not the first close after it.
+    let mut depth = 0usize;
+    let mut cursor = start;
+    loop {
+        let next_open = xml[cursor..].find(open).map(|index| cursor + index);
+        let next_close = xml[cursor..].find(close).map(|index| cursor + index);
+        match (next_open, next_close) {
+            (Some(opened), Some(closed)) if opened < closed => {
+                depth += 1;
+                cursor = opened + open.len();
+            }
+            (_, Some(closed)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return &xml[start + open.len()..closed];
+                }
+                cursor = closed + close.len();
+            }
+            (Some(_), None) => panic!("{open} number {ordinal} is never closed"),
+            (None, None) => panic!("{open} number {ordinal} is never closed"),
+        }
+    }
+}
+
+/// A fallback-only picture is read wherever a Word document states it: a cell
+/// of a table, a cell of a table inside another table's cell, a text box's own
+/// content, and a header. Each is a container the reader has to walk into, and
+/// each is stated only in `mc:Fallback` — no `mc:Choice` beside it — so a reader
+/// that stops at the body's paragraphs, or that reads only the choice, loses it.
+///
+/// The fixture puts the same 60 × 36 orange raster in all four places and in the
+/// body, so the test can follow one picture through each container: the tables'
+/// cells become rich cells holding the picture in a group under the table, the
+/// text box's picture is read where the box stands in the body, and the header's
+/// is furniture. The outer table is the one whose cell holds the nested table —
+/// a Word cell is flow content, and a table in it is a block the reader reports
+/// in its own right — so its cell carries the words and the nested table follows
+/// it; the nested picture is the nested table's cell's.
+#[test]
+fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
+    let name = "mc_fallback_pictures.docx";
+    let bytes = fixture(name);
+    assert_picture_parts_are_declared_and_related(&package_parts(&bytes, name), name);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+        .unwrap_or_else(|e| panic!("{name}: not a ZIP: {e}"));
+    let mut parts = std::collections::HashMap::new();
+    for part in ["word/document.xml", "word/header1.xml"] {
+        let mut xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive
+                .by_name(part)
+                .unwrap_or_else(|e| panic!("{name}: no {part}: {e}")),
+            &mut xml,
+        )
+        .expect("read the part");
+        parts.insert(part, xml);
+    }
+    drop(archive);
+    let document = &parts["word/document.xml"];
+    let header = &parts["word/header1.xml"];
+
+    // Where each fallback stands in the fixture itself, before the reading is
+    // asked anything: a cell of the outer table, the third cell (the nested
+    // table's, inside the outer cell), the text box's content, and the header.
+    assert_eq!(document.matches("<w:tc>").count(), 3, "{document}");
+    let (before_the_tables, _) = document
+        .split_once("<w:tc>")
+        .unwrap_or_else(|| panic!("{name}: no table cell"));
+    assert_eq!(
+        before_the_tables.matches("<mc:Fallback>").count(),
+        1,
+        "{name}: the body's picture is not outside every container"
+    );
+    let outer_cell = nth_element(document, "<w:tc>", "</w:tc>", 1);
+    let nested_cell = nth_element(document, "<w:tc>", "</w:tc>", 2);
+    assert!(
+        outer_cell.contains(nested_cell) && outer_cell.contains("<w:tbl>"),
+        "{name}: the nested table is not inside the outer cell"
+    );
+    for (place, xml, fallbacks) in [
+        (
+            "the table's cell",
+            nth_element(document, "<w:tc>", "</w:tc>", 0),
+            1,
+        ),
+        ("the outer cell", outer_cell, 1),
+        ("the nested table's cell", nested_cell, 1),
+        (
+            "the text box",
+            nth_element(document, "<w:txbxContent>", "</w:txbxContent>", 0),
+            1,
+        ),
+    ] {
+        assert_eq!(
+            xml.matches("<mc:Fallback>").count(),
+            fallbacks,
+            "{name}: the picture in {place} is not stated where the test says it is"
         );
     }
+    assert_eq!(
+        header.matches("<mc:Fallback>").count(),
+        1,
+        "{name}: the header does not state a fallback picture"
+    );
+    assert!(
+        header.contains("v:imagedata"),
+        "{name}: the header's fallback does not name its picture"
+    );
+    assert_eq!(
+        document.matches("<mc:Choice>").count() + header.matches("<mc:Choice>").count(),
+        0,
+        "{name}: a choice is stated beside a fallback, so a picture is not fallback-only"
+    );
+
+    let ws = Workspace::new("mc-fallback-containers");
+    let output = ws.join("out.json");
+    run_ok(&[
+        "-i",
+        repository_root()
+            .join("test-data")
+            .join(name)
+            .to_str()
+            .unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+    let doc = json_of(&output);
+
+    // Five pictures: the body's, the table's, the nested table's, the text
+    // box's, and the header's — the last on the furniture layer.
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 5, "{pictures:#?}");
+    for (index, picture) in pictures.iter().enumerate() {
+        let image = &picture["image"];
+        assert_eq!(
+            (
+                image["size"]["width"].as_f64(),
+                image["size"]["height"].as_f64(),
+            ),
+            (Some(60.0), Some(36.0)),
+            "picture {index} is not the fallback's size: {image:#?}"
+        );
+        let layer = if index == 4 { "furniture" } else { "body" };
+        assert_eq!(picture["content_layer"], layer, "picture {index}");
+        let uri = image["uri"].as_str().expect("an image uri");
+        let raster = image::load_from_memory(
+            &std::fs::read(ws.join(uri)).expect("the picture written beside the JSON"),
+        )
+        .expect("the fallback decodes")
+        .to_rgba8();
+        assert_eq!(
+            raster.get_pixel(0, 0).0,
+            [224, 140, 40, 255],
+            "picture {index} ({uri}) is not the orange box a fallback carries"
+        );
+    }
+
+    // The two table pictures are their cells': each is in a group whose parent
+    // is the table, among the table's children, and the cell that references it
+    // holds no words of its own. The outer table is the third, and its cell says
+    // what the fixture says it says.
+    let tables = doc["tables"].as_array().expect("a table list");
+    assert_eq!(tables.len(), 3, "{tables:#?}");
+    for (table_index, picture_index) in [(0usize, 1usize), (1, 2)] {
+        let table = &tables[table_index];
+        let group = doc["groups"]
+            .as_array()
+            .expect("a group list")
+            .iter()
+            .find(|group| {
+                group["children"].as_array().is_some_and(|children| {
+                    children
+                        .iter()
+                        .any(|child| child["$ref"] == format!("#/pictures/{picture_index}"))
+                })
+            })
+            .unwrap_or_else(|| panic!("no group holds picture {picture_index}: {doc:#?}"));
+        assert_eq!(
+            group["parent"]["$ref"],
+            format!("#/tables/{table_index}"),
+            "the group holding picture {picture_index} is not the table's"
+        );
+        assert!(
+            table["children"].as_array().is_some_and(|children| {
+                children
+                    .iter()
+                    .any(|child| child["$ref"] == group["self_ref"])
+            }),
+            "the table does not list the group holding picture {picture_index}"
+        );
+        let cell = table["data"]["table_cells"]
+            .as_array()
+            .expect("a cell list")
+            .iter()
+            .find(|cell| cell["ref"]["$ref"] == group["self_ref"])
+            .unwrap_or_else(|| {
+                panic!("no cell references the group holding picture {picture_index}")
+            });
+        assert_eq!(
+            cell["text"], "",
+            "the cell holding picture {picture_index} is not the empty cell it was"
+        );
+    }
+    let outer = &tables[2]["data"]["table_cells"];
+    assert_eq!(
+        outer.as_array().map(Vec::len),
+        Some(1),
+        "the outer table is not the one-cell table it was"
+    );
+    assert_eq!(outer[0]["text"], "The outer cell.", "{outer:#?}");
+    assert!(
+        outer[0].get("ref").is_none(),
+        "the outer cell holds a table, not a picture"
+    );
+
+    // The text box's picture and the table that holds the nested one stand
+    // between the sentences that frame them, in the body's own order.
+    let order = reading_order(&doc);
+    let position = |reference: String| {
+        order
+            .iter()
+            .position(|item| *item == reference)
+            .unwrap_or_else(|| panic!("{reference} is not in the body"))
+    };
+    let texts = doc["texts"].as_array().expect("a text list");
+    let text_at = |sentence: &str| {
+        let index = texts
+            .iter()
+            .position(|item| item["text"].as_str() == Some(sentence))
+            .unwrap_or_else(|| panic!("the document does not state {sentence}"));
+        position(format!("#/texts/{index}"))
+    };
+    let text_box = position("#/pictures/3".to_string());
+    assert!(
+        text_at("Before the text box picture.") < text_box
+            && text_box < text_at("After the text box picture."),
+        "the text box's picture is not read between the sentences around it"
+    );
+    let nested_table = position("#/tables/1".to_string());
+    assert!(
+        text_at("Before the nested table picture.") < nested_table
+            && nested_table < text_at("After the nested table picture."),
+        "the nested table's picture is not read between the sentences around it"
+    );
+
+    // The header's picture is furniture, after the header's own words — the
+    // header is not body content and does not join the body's order.
+    let furniture = doc["furniture"]["children"]
+        .as_array()
+        .expect("a furniture list");
+    let header_words = furniture
+        .iter()
+        .position(|child| {
+            child["$ref"]
+                .as_str()
+                .and_then(|reference| reference.strip_prefix("#/texts/"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .is_some_and(|index| texts[index]["text"] == "The header.")
+        })
+        .unwrap_or_else(|| panic!("the header's words are not furniture: {furniture:#?}"));
+    let header_picture = furniture
+        .iter()
+        .position(|child| child["$ref"] == "#/pictures/4")
+        .unwrap_or_else(|| panic!("the header's picture is not furniture: {furniture:#?}"));
+    assert!(
+        header_words < header_picture,
+        "the header's picture is not read after its words: {furniture:#?}"
+    );
+    assert!(
+        !order.iter().any(|item| item == "#/pictures/4"),
+        "the header's picture joined the body's order"
+    );
+
+    // The header's picture is furniture, so the rendering of the body shows the
+    // four body pictures and not the header's — the JSON above is where the
+    // header's is held.
+    let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
+    assert_eq!(
+        html.matches("<img src=\"").count(),
+        4,
+        "the render does not show every body fallback:\n{html}"
+    );
 }
 
 /// A shape can be filled with a picture rather than a colour, and the fill
@@ -3499,22 +4186,27 @@ fn reached_by_a_relationship(parts: &[(String, Vec<u8>)], name: &str) -> bool {
 /// Whether a package states a part's media type as `mime` — by an `<Override>`
 /// naming the part, or a `<Default>` for its extension. Both are declarations of
 /// the same fact; which one a writer picks is its business.
+///
+/// The type is matched as the whole `ContentType` value rather than as a
+/// substring of the declaration, so `image/svg` does not stand in for
+/// `image/svg+xml`: a package naming a type that is not the registered one has
+/// not declared the part.
 fn declared_as(parts: &[(String, Vec<u8>)], name: &str, mime: &str) -> bool {
     let Some((_, data)) = parts.iter().find(|(part, _)| part == "[Content_Types].xml") else {
         return false;
     };
     let types = String::from_utf8_lossy(data);
     let path = format!("/{}", name.replace('\\', "/"));
+    let states = |declaration: &str| declaration.contains(&format!("ContentType=\"{mime}\""));
     if types.split("<Override ").any(|declaration| {
-        declaration.contains(&format!("PartName=\"{path}\"")) && declaration.contains(mime)
+        declaration.contains(&format!("PartName=\"{path}\"")) && states(declaration)
     }) {
         return true;
     }
     let extension = name.rsplit_once('.').map(|(_, extension)| extension);
     extension.is_some_and(|extension| {
         types.split("<Default ").any(|declaration| {
-            declaration.contains(&format!("Extension=\"{extension}\""))
-                && declaration.contains(mime)
+            declaration.contains(&format!("Extension=\"{extension}\"")) && states(declaration)
         })
     })
 }
@@ -3530,6 +4222,18 @@ fn declared_as(parts: &[(String, Vec<u8>)], name: &str, mime: &str) -> bool {
 /// know is not a picture part it can judge, and is left alone rather than
 /// guessed at.
 fn assert_picture_parts_are_declared_and_related(parts: &[(String, Vec<u8>)], label: &str) {
+    let seen = picture_parts_declared_and_related(parts, label);
+    assert!(
+        seen > 0,
+        "{label}: the package holds no picture part to hold to its statements"
+    );
+}
+
+/// The same walk as the assertion above, without the requirement that the
+/// package hold a picture at all — a workbook of tables is a package with no
+/// media part to judge. It answers how many parts it judged, so a caller walking
+/// a corpus can tell a fixture with pictures from one without.
+fn picture_parts_declared_and_related(parts: &[(String, Vec<u8>)], label: &str) -> usize {
     let mut seen = 0;
     for (name, _) in parts {
         let Some((_, extension)) = name.rsplit_once('.') else {
@@ -3539,7 +4243,7 @@ fn assert_picture_parts_are_declared_and_related(parts: &[(String, Vec<u8>)], la
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
             "gif" => "image/gif",
-            "svg" => "image/svg",
+            "svg" => "image/svg+xml",
             "bmp" => "image/bmp",
             "tif" | "tiff" => "image/tiff",
             "emf" => "image/x-emf",
@@ -3562,9 +4266,63 @@ fn assert_picture_parts_are_declared_and_related(parts: &[(String, Vec<u8>)], la
             "{label}: {name} is in the package but no relationship reaches it"
         );
     }
+    seen
+}
+
+/// Every `.docx`, `.pptx` and `.xlsx` below `directory`, at any depth: the
+/// fixtures a parser test reads sit both in `test-data` and in its `real/`
+/// corpus of application-written files.
+fn fixture_packages(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let entries = std::fs::read_dir(directory)
+        .unwrap_or_else(|e| panic!("missing {}: {e}", directory.display()));
+    for entry in entries {
+        let path = entry.expect("a fixture entry").path();
+        if path.is_dir() {
+            found.extend(fixture_packages(&path));
+        } else if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("docx" | "pptx" | "xlsx")
+        ) {
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Every committed OOXML fixture, held to the same two statements as the tests
+/// that open a part by name.
+///
+/// The parser tests take a fixture's pictures through the reader, which resolves
+/// a picture by relationship: a media part no relationship reaches shows up
+/// there as a missing picture, so that statement is exercised by the reader's
+/// own answer. The declaration is not: no reader in this project consults
+/// `[Content_Types].xml` to paint a picture, so a fixture whose media part names
+/// no media type reads exactly the same and its test passes. Walking the corpus
+/// asks the package itself, so the fixtures those tests read are held to both
+/// statements whether or not the test can see them.
+#[test]
+fn every_fixture_package_declares_and_relates_its_media_parts() {
+    let root = repository_root();
+    let mut with_pictures = 0;
+    let mut judged = 0;
+    for path in fixture_packages(&root.join("test-data")) {
+        let label = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("missing {label}: {e}"));
+        let seen = picture_parts_declared_and_related(&package_parts(&bytes, &label), &label);
+        if seen > 0 {
+            with_pictures += 1;
+            judged += seen;
+        }
+    }
     assert!(
-        seen > 0,
-        "{label}: the package holds no picture part to hold to its statements"
+        with_pictures > 0 && judged > 0,
+        "no fixture package holds a picture part to hold to its statements"
     );
 }
 
@@ -3937,9 +4695,35 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
         return;
     };
 
-    for (file, body_part, keeps_a_fallback_branch) in [
-        ("mc_fallback_pictures.docx", "word/document.xml", true),
-        ("mc_fallback_pictures.pptx", "ppt/slides/slide1.xml", false),
+    for (file, body_part, keeps_a_fallback_branch, fallbacks, sentences) in [
+        (
+            "mc_fallback_pictures.docx",
+            "word/document.xml",
+            true,
+            4,
+            &[
+                "Before the picture.",
+                "After the picture.",
+                "Before the table picture.",
+                "After the table picture.",
+                "Before the nested table picture.",
+                "After the nested table picture.",
+                "Before the text box picture.",
+                "After the text box picture.",
+            ][..],
+        ),
+        (
+            "mc_fallback_pictures.pptx",
+            "ppt/slides/slide1.xml",
+            false,
+            2,
+            &[
+                "Before the picture.",
+                "After the picture.",
+                "Before the group picture.",
+                "After the group picture.",
+            ][..],
+        ),
     ] {
         let bytes = fixture(file);
         let ws = Workspace::new(&format!("fallback-resave-{file}"));
@@ -3950,19 +4734,9 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
             .find(|(name, _)| name == body_part)
             .map(|(_, data)| String::from_utf8_lossy(data).to_string())
             .unwrap_or_else(|| panic!("{file}: no {body_part} in the re-saved package"));
-        let framed = if file.ends_with(".docx") {
-            "table"
-        } else {
-            "group"
-        };
-        for sentence in [
-            "Before the picture.".to_string(),
-            "After the picture.".to_string(),
-            format!("Before the {framed} picture."),
-            format!("After the {framed} picture."),
-        ] {
+        for sentence in sentences {
             assert!(
-                body.contains(sentence.as_str()),
+                body.contains(sentence),
                 "{file}: {sentence} did not survive the re-save"
             );
         }
@@ -3970,12 +4744,12 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
         if keeps_a_fallback_branch {
             assert_eq!(
                 body.matches("<mc:Fallback>").count(),
-                2,
-                "{file}: the application did not keep both fallback branches"
+                fallbacks,
+                "{file}: the application did not keep every fallback branch"
             );
             assert_eq!(
                 body.matches("<v:imagedata").count(),
-                2,
+                fallbacks,
                 "{file}: a fallback it kept does not name its picture"
             );
             // The picture that stood in a cell is still the cell's rather than
@@ -3990,6 +4764,36 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
             assert!(
                 cell[..cell_end].contains("<v:imagedata"),
                 "{file}: the cell's fallback is not inside the cell the picture stood in"
+            );
+            // So are the nested table's cell and the text box's own content.
+            let nested = nth_element(&body, "<w:tc>", "</w:tc>", 2);
+            assert!(
+                nested.contains("<v:imagedata"),
+                "{file}: the nested table's fallback is not inside its cell"
+            );
+            let text_box = nth_element(&body, "<w:txbxContent>", "</w:txbxContent>", 0);
+            assert!(
+                text_box.contains("<v:imagedata"),
+                "{file}: the text box's fallback is not inside the text box"
+            );
+            // The header is its own part, and the application keeps the picture
+            // and the fallback there too.
+            let header = parts
+                .iter()
+                .filter(|(name, _)| name.starts_with("word/header"))
+                .map(|(name, data)| (name, String::from_utf8_lossy(data).to_string()))
+                .find(|(_, xml)| xml.contains("<v:imagedata"))
+                .unwrap_or_else(|| panic!("{file}: no header part kept the picture"));
+            assert_eq!(
+                header.1.matches("<mc:Fallback>").count(),
+                1,
+                "{file}: {} does not hold one fallback",
+                header.0
+            );
+            assert!(
+                header.1.contains("The header."),
+                "{file}: {} lost the header's words",
+                header.0
             );
         } else {
             assert_eq!(
@@ -4055,7 +4859,26 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
 
         let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
         let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
-        assert_the_reader_agrees(file, &before, &after);
+        if keeps_a_fallback_branch {
+            // The application writes the header into the default and first-page
+            // (or even-page) headers, so the header's picture is copied into two
+            // parts and this reader takes both copies: one picture more than the
+            // fixture holds, and the same picture as the one it copies.
+            assert_eq!(
+                after.len(),
+                before.len() + 1,
+                "{file}: the re-saved package gives {} picture(s) where the fixture gives {}",
+                after.len(),
+                before.len()
+            );
+            assert!(
+                the_same_picture(&before[4], &after[5]),
+                "{file}: the header's second copy is not the fixture's header picture"
+            );
+            assert_the_reader_agrees(file, &before, &after[..before.len()]);
+        } else {
+            assert_the_reader_agrees(file, &before, &after);
+        }
     }
 }
 
@@ -5555,12 +6378,14 @@ fn a_webp_and_both_jpeg_2000_spellings_embedded_in_office_files_become_png_pictu
 /// part behind them: Word paints the shape from the markup, so a conversion has
 /// to paint it too. A shape, a group of shapes and a WordArt therefore each
 /// become a picture at the size the file gives them, written beside the JSON and
-/// named in the render. So do the three ways an autoshape is more than a flat
-/// box: a `v:fill type="gradient"` ramps two colours across the shape, a
-/// `v:shadow` puts a grey copy of the silhouette under it, and a `v:stroke`
-/// `endarrow` puts a filled head on the end of a line. The Word horizontal rule
-/// in the same fixture is a paragraph's line, not a drawing, and must not become
-/// a seventh picture.
+/// named in the render. So do the ways an autoshape is more than a flat box: a
+/// `v:fill type="gradient"` ramps two colours across the shape, a `v:shadow`
+/// puts a grey copy of the silhouette under it, a `v:stroke` `endarrow` puts a
+/// filled head on the end of a line, and VML's `focus` and `focussize` move
+/// where a ramp's colours sit — the first putting the second colour in the
+/// middle of the blend, the second holding the first colour flat across a disc.
+/// The Word horizontal rule in the same fixture is a paragraph's line, not a
+/// drawing, and must not become a ninth picture.
 ///
 /// The box and the group are the VML a DOCX writer emits, so the group's oval is
 /// placed in the group's `coordsize` (at `1200` of `2000`, i.e. 60 of its 100 pt)
@@ -5587,7 +6412,7 @@ fn a_vml_shape_and_a_wordart_become_pictures() {
     let pictures = doc["pictures"].as_array().expect("a pictures list");
     assert_eq!(
         pictures.len(),
-        6,
+        8,
         "the horizontal rule must not be a picture: {pictures:#?}"
     );
     let sizes: Vec<(f64, f64)> = pictures
@@ -5604,7 +6429,8 @@ fn a_vml_shape_and_a_wordart_become_pictures() {
     // 120 × 60 pt box is 240 × 120 pixels — the size the model carries, with the
     // resolution that makes it 120 × 60 points on the page. The shadowed 80 × 40
     // pt box carries its 5 pt shadow past the frame, and the 100 pt line carries
-    // its arrowhead's 6 pt reach on every side.
+    // its arrowhead's 6 pt reach on every side. The focused ramp is its 120 × 60
+    // pt box, and the focus-sized radial fill its 80 × 80 pt square.
     assert_eq!(
         sizes,
         vec![
@@ -5614,6 +6440,8 @@ fn a_vml_shape_and_a_wordart_become_pictures() {
             (240.0, 120.0),
             (170.0, 90.0),
             (228.0, 28.0),
+            (240.0, 120.0),
+            (160.0, 160.0),
         ]
     );
 
@@ -5748,11 +6576,72 @@ fn a_vml_shape_and_a_wordart_become_pictures() {
         "past the tip"
     );
 
+    // The focused ramp: `focus` is where the blend's middle sits, so the same
+    // red-blue pair runs red, blue, red across the box — the second stop sits
+    // where an unfocused ramp would be half-mixed, and both ends are the first
+    // colour. A reader that dropped `focus` would leave the middle half-mixed
+    // and the right edge blue, which is what these three points rule out.
+    let focused = image::load_from_memory(
+        &std::fs::read(ws.join(pictures[6]["image"]["uri"].as_str().unwrap()))
+            .expect("the focused ramp"),
+    )
+    .expect("the focused ramp decodes")
+    .to_rgba8();
+    let left = focused.get_pixel(2, 60).0;
+    let middle = focused.get_pixel(120, 60).0;
+    let right = focused.get_pixel(237, 60).0;
+    assert!(
+        left[0] > 240 && left[2] < 10,
+        "the focused ramp starts red: {left:?}"
+    );
+    assert!(
+        middle[2] > 240 && middle[0] < 10,
+        "its second colour sits in the middle of the blend: {middle:?}"
+    );
+    assert!(
+        right[0] > 240 && right[2] < 10,
+        "and it runs back to the first colour at the other end: {right:?}"
+    );
+    let quarter = focused.get_pixel(60, 60).0;
+    assert!(
+        (i32::from(quarter[0]) - 127).abs() < 12 && (i32::from(quarter[2]) - 127).abs() < 12,
+        "and halfway between its stops a quarter of the way along: {quarter:?}"
+    );
+
+    // The focus-sized radial fill: `focussize="50%,50%"` on an 80 pt box makes
+    // the first colour a 40 pt disc rather than a point, so the points inside
+    // it are exactly the first colour — where a point-focused ramp would
+    // already have blended most of them — and the ramp from the disc's edge
+    // still reaches the second colour at the frame's.
+    let radial = image::load_from_memory(
+        &std::fs::read(ws.join(pictures[7]["image"]["uri"].as_str().unwrap()))
+            .expect("the focused radial"),
+    )
+    .expect("the focused radial decodes")
+    .to_rgba8();
+    for (x, y) in [(80, 80), (61, 61), (99, 61), (61, 99), (99, 99)] {
+        assert_eq!(
+            radial.get_pixel(x, y).0,
+            [192, 57, 43, 255],
+            "the focus region is flat at ({x}, {y})"
+        );
+    }
+    let beyond = radial.get_pixel(150, 80).0;
+    assert!(
+        beyond[2] > 130 && beyond[0] < 130,
+        "past the disc the ramp has moved toward the second colour: {beyond:?}"
+    );
+    let edge = radial.get_pixel(159, 80).0;
+    assert!(
+        edge[2] > 165 && edge[0] < 70,
+        "and reaches it at the frame's edge: {edge:?}"
+    );
+
     // The render names the pictures, and the prose around them is unchanged.
     let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
     assert_eq!(
         html.matches("<img src=\"").count(),
-        6,
+        8,
         "a picture is missing from the render:\n{html}"
     );
     let words = doc["texts"]
@@ -8080,6 +8969,137 @@ fn a_pages_social_cards_survive_the_markdown_round_trip() {
     ]);
     assert_eq!(
         std::fs::read_to_string(&from_markdown).expect("the HTML from Markdown"),
+        std::fs::read_to_string(&direct).expect("the HTML from the page"),
+        "the head changed on the way from HTML through Markdown"
+    );
+}
+
+/// A page's head can be cards and nothing else: no description, no canonical
+/// URL. What travels as YAML front matter is then the card list alone, and the
+/// reader has to take it without the fields beside it — an empty `description:`
+/// or a canonical URL the page never named would be a statement it never made,
+/// and it would show up in the page written from the Markdown.
+#[test]
+fn a_page_whose_head_is_only_social_cards_keeps_them_through_markdown() {
+    let ws = Workspace::new("markdown-cards-only");
+    let page = ws.write(
+        "page.html",
+        b"<html><head><title>Release notes</title>\n\
+          <meta property=\"og:title\" content=\"Release notes &amp; changes\">\n\
+          <meta property=\"og:type\" content=\"article\">\n\
+          <meta property=\"og:image\" content=\"https://example.com/notes.png\">\n\
+          <meta property=\"og:image:alt\" content=\"A page of notes\">\n\
+          <meta name=\"twitter:card\" content=\"summary\">\n\
+          <meta name=\"twitter:site\" content=\"@example\">\n\
+          </head><body><h1>Release notes</h1><p>Two changes.</p></body></html>",
+    );
+
+    let markdown = ws.join("page.md");
+    run_ok(&[
+        "-i",
+        page.to_str().unwrap(),
+        "-o",
+        markdown.to_str().unwrap(),
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+    let written = std::fs::read_to_string(&markdown).expect("the Markdown written");
+    let (front, body) = written
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n\n"))
+        .expect("a front matter and a blank line before the body");
+    assert_eq!(body, "# Release notes\n\nTwo changes.\n");
+    // Only the cards: the page stated neither of the two fields beside them.
+    for absent in ["description:", "canonical:"] {
+        assert!(
+            !front.lines().any(|line| line.starts_with(absent)),
+            "the front matter names {absent} though the page never stated it:\n{front}"
+        );
+    }
+    assert!(
+        front.starts_with("social:\n- key: og:title\n  content: Release notes & changes\n"),
+        "{front}"
+    );
+    // Order is part of what the head said: the alt stays after its image, the
+    // Twitter keys after the Open Graph ones — and a value YAML would read as
+    // something else is quoted on the way out (`@example` is not a plain
+    // scalar).
+    for card in [
+        "- key: og:image\n  content: https://example.com/notes.png\n",
+        "- key: og:image:alt\n  content: A page of notes\n",
+        "- key: twitter:card\n  content: summary\n",
+        // The block ends at the closing `---`, so the last card carries no
+        // trailing newline of its own.
+        "- key: twitter:site\n  content: '@example'",
+    ] {
+        assert!(front.contains(card), "lost {card:?}:\n{front}");
+    }
+    let image = front.find("og:image\n").expect("the image");
+    let alt = front.find("og:image:alt\n").expect("its alt");
+    assert!(image < alt, "the alt moved above its image:\n{front}");
+
+    // Reading it back renders the same file: the cards are the document's head
+    // rather than a paragraph at the top of the page.
+    let again = ws.join("again.md");
+    run_ok(&[
+        "-i",
+        markdown.to_str().unwrap(),
+        "-o",
+        again.to_str().unwrap(),
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(&again).expect("the second Markdown"),
+        written,
+        "the cards changed on the way back through Markdown"
+    );
+
+    // The page written from the Markdown has the head the original stated — the
+    // cards in `property` and `name` — and none of the lines the page never had.
+    let from_markdown = ws.join("from-markdown.html");
+    run_ok(&[
+        "-i",
+        markdown.to_str().unwrap(),
+        "-o",
+        from_markdown.to_str().unwrap(),
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+    let head = std::fs::read_to_string(&from_markdown).expect("the HTML from the Markdown");
+    for line in [
+        "<meta property=\"og:title\" content=\"Release notes &amp; changes\">",
+        "<meta property=\"og:image:alt\" content=\"A page of notes\">",
+        "<meta name=\"twitter:card\" content=\"summary\">",
+        "<meta name=\"twitter:site\" content=\"@example\">",
+    ] {
+        assert!(head.contains(line), "lost {line}: {head}");
+    }
+    assert!(
+        !head.contains("name=\"description\"") && !head.contains("rel=\"canonical\""),
+        "the page grew a head line it never had: {head}"
+    );
+
+    // Byte for byte the page the original gives, so nothing else moved either.
+    let direct = ws.join("direct.html");
+    run_ok(&[
+        "-i",
+        page.to_str().unwrap(),
+        "-o",
+        direct.to_str().unwrap(),
+        "--to",
+        "html",
+        "--ocr",
+        "never",
+    ]);
+    assert_eq!(
+        head,
         std::fs::read_to_string(&direct).expect("the HTML from the page"),
         "the head changed on the way from HTML through Markdown"
     );

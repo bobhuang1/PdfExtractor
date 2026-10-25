@@ -86,7 +86,7 @@ fn ink_span(raster: &Raster) -> (usize, usize, usize, usize, usize) {
         0usize,
         0usize,
     );
-    for (index, px) in raster.pixels.chunks_exact(4).enumerate() {
+    for (index, px) in raster.pixels.as_chunks::<4>().0.iter().enumerate() {
         if px[0] == 255 && px[1] == 255 && px[2] == 255 {
             continue;
         }

@@ -124,7 +124,7 @@ pub fn run_length(data: &[u8]) -> Option<Vec<u8>> {
             _ => {
                 let count = 257 - length as usize;
                 let byte = *data.get(i)?;
-                out.extend(std::iter::repeat(byte).take(count));
+                out.extend(std::iter::repeat_n(byte, count));
                 i += 1;
             }
         }

@@ -347,11 +347,17 @@ impl Conformance {
             return;
         };
         for (index, cell) in cells.iter().enumerate() {
-            self.fields(
-                "TableCell",
-                cell,
-                &format!("{path}/data/table_cells/{index}"),
-            );
+            // A cell with a `ref` is Docling's `RichTableCell` — the cell that
+            // holds an item of the document rather than only words — and a
+            // cell without one is the plain `TableCell`. Its `ref` is required
+            // on the first and forbidden on the second, so the two are not
+            // interchangeable and the class is chosen by what the cell states.
+            let class = if cell.get("ref").is_some() {
+                "RichTableCell"
+            } else {
+                "TableCell"
+            };
+            self.fields(class, cell, &format!("{path}/data/table_cells/{index}"));
         }
     }
 
@@ -417,6 +423,50 @@ impl Conformance {
             .enumerate()
         {
             self.children_agree(&format!("#/groups/{index}"), node, &parents);
+        }
+
+        // A rich cell references one of its table's children, whose parent is
+        // that table. Docling refuses a document where either disagrees — its
+        // own `validate_tree` asks the same two questions — so a cell holding a
+        // picture in a group is held to them here.
+        for (index, table) in document["tables"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let owner = format!("#/tables/{index}");
+            let children: Vec<&str> = table["children"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|child| child.get("$ref").and_then(Value::as_str))
+                .collect();
+            for (cell_index, cell) in table["data"]["table_cells"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let Some(target) = cell
+                    .get("ref")
+                    .and_then(|reference| reference.get("$ref"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let path = format!("{owner}/data/table_cells/{cell_index}/ref");
+                let Some(parent) = parents.get(target) else {
+                    self.fail(path, format!("{target} is not an item of this document"));
+                    continue;
+                };
+                if parent.get("$ref").and_then(Value::as_str) != Some(owner.as_str()) {
+                    self.fail(path.clone(), format!("{target}'s parent is {parent}"));
+                }
+                if !children.contains(&target) {
+                    self.fail(path, format!("{target} is not one of {owner}'s children"));
+                }
+            }
         }
     }
 

@@ -143,13 +143,13 @@
       "agreement": 1.0
     },
     "drawing": {
-      "rows": 282,
+      "rows": 271,
       "same": 122,
       "notation": 0,
-      "differs": 11,
+      "differs": 22,
       "contained": 27,
-      "oursOnly": 40,
-      "theirsOnly": 82,
+      "oursOnly": 29,
+      "theirsOnly": 71,
       "placed": 0,
       "placedItems": 0,
       "placedBoxes": 0,

@@ -1872,10 +1872,13 @@ fn convert_docx(
     // Header and footer content, kept as furniture rather than discarded.
     let mut furniture = Vec::new();
     for item in &parsed.furniture {
-        image_seq += 1;
-        if let Some(reference) =
-            emit_furniture_item(&mut builder, item, output_path, &mut image_dir, image_seq)
-        {
+        if let Some(reference) = emit_furniture_item(
+            &mut builder,
+            item,
+            output_path,
+            &mut image_dir,
+            &mut image_seq,
+        ) {
             furniture.push(reference);
         }
     }
@@ -1998,6 +2001,9 @@ fn convert_xlsx(
                                 // A cell never labels its own row on a
                                 // worksheet.
                                 row_header: false,
+                                // A worksheet's cell holds text; its pictures
+                                // are anchored on the sheet, not drawn in it.
+                                pictures: Vec::new(),
                             })
                             .collect(),
                     };
@@ -2146,6 +2152,7 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
             // are what each row is about.
             column_header: true,
             row_header: false,
+            pictures: Vec::new(),
         });
     }
     for row in 1..=data_rows {
@@ -2165,6 +2172,7 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
                 col_span: 1,
                 column_header: false,
                 row_header: col == 0,
+                pictures: Vec::new(),
             });
         }
     }
@@ -2314,6 +2322,9 @@ fn convert_pptx(
                                 // takes it for; a slide has no row headers.
                                 column_header: cell.row == 0,
                                 row_header: false,
+                                // A slide's table cell holds text; a picture on
+                                // the slide is a shape of its own.
+                                pictures: Vec::new(),
                             })
                             .collect(),
                     };
@@ -2472,7 +2483,7 @@ fn comment_timestamp(date: &str) -> std::borrow::Cow<'_, str> {
     let mut text = String::with_capacity(date.len());
     text.push_str(&date[..dot + 1]);
     text.push_str(&fraction[..milliseconds]);
-    text.extend(std::iter::repeat('0').take(3 - milliseconds));
+    text.extend(std::iter::repeat_n('0', 3 - milliseconds));
     text.push_str(&fraction[digits..]);
     if text == date {
         Cow::Borrowed(date)
@@ -2648,12 +2659,13 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     };
 
     // The pages the file is: the still, or the first frame of an animation, and
-    // then every later frame. A GIF states no orientation of its own, but a file
-    // that had to be turned to be read is turned throughout: its frames (and an
-    // animated WebP's) are one strip of the same picture. A TIFF's directories
-    // are not one strip, though:
-    // each sheet was already turned by its own directory's tag in `tiff_frames`,
-    // so the first sheet's turn must not be applied to the rest again.
+    // then every later frame. An animated WebP's EXIF tag states how the whole
+    // strip was stored, and a GIF states no orientation of its own; either way a
+    // file that had to be turned to be read is turned throughout, because its
+    // frames are one strip of the same picture. A TIFF's directories are not one
+    // strip, though: each sheet was already turned by its own directory's tag in
+    // `tiff_frames`, so the first sheet's turn must not be applied to the rest
+    // again.
     //
     // Each page carries the grid the engine will see, because a TIFF's sheets
     // need not share one: the first page's is the header's, a later frame's its
@@ -2676,13 +2688,24 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
             // Each directory's own tag was already applied to its pixels.
             (frame.data.clone(), (frame.width, frame.height))
         } else {
-            let turned = if applied == QuarterTurn::AsStored {
-                None
+            // An EXIF tag is a statement about the file, not about its first
+            // page: every frame of an animation was stored the same way, so
+            // every frame is turned by it. Only a WebP carries such a tag and
+            // an animation together; a GIF has none, and when the first page
+            // had to be turned to be read, the strip is turned with it.
+            let (turned, swaps) = if declared != pdfextractor_image_parser::Orientation::Normal {
+                (orient_for_ocr(&frame.data, declared), declared.swaps_axes())
+            } else if applied == QuarterTurn::AsStored {
+                (None, false)
             } else {
-                rotate_for_ocr(&frame.data, applied.degrees()).map(|(png, _, _)| png)
+                (
+                    rotate_for_ocr(&frame.data, applied.degrees()).map(|(png, _, _)| png),
+                    applied.swaps_axes(),
+                )
             };
             match turned {
-                Some(png) => (png, (frame.height, frame.width)),
+                Some(png) if swaps => (png, (frame.height, frame.width)),
+                Some(png) => (png, (frame.width, frame.height)),
                 None => (frame.data.clone(), (frame.width, frame.height)),
             }
         };
@@ -3319,7 +3342,8 @@ fn emit_docx_item(
             builder.add_labeled_text(text, "formula");
         }
         DocxItem::Table { rows, num_cols } => {
-            builder.add_table_grid(&grid_table(rows, *num_cols));
+            let grid = grid_table(rows, *num_cols, output_path, image_dir, image_seq, "pg1_");
+            builder.add_table_grid(&grid);
         }
         DocxItem::Picture {
             mime,
@@ -3347,7 +3371,7 @@ fn emit_furniture_item(
     item: &pdfextractor_docx_parser::DocxItem,
     output_path: &Path,
     image_dir: &mut Option<PathBuf>,
-    seq: usize,
+    image_seq: &mut usize,
 ) -> Option<Ref> {
     use pdfextractor_docx_parser::DocxItem;
     match item {
@@ -3363,7 +3387,15 @@ fn emit_furniture_item(
         } => Some(builder.add_furniture_item(text, label, *level, marker.clone())),
         DocxItem::Formula { text } => Some(builder.add_furniture_text(text, "formula")),
         DocxItem::Table { rows, num_cols } => {
-            Some(builder.add_furniture_table_grid(&grid_table(rows, *num_cols)))
+            let grid = grid_table(
+                rows,
+                *num_cols,
+                output_path,
+                image_dir,
+                image_seq,
+                "furniture_",
+            );
+            Some(builder.add_furniture_table_grid(&grid))
         }
         DocxItem::Picture {
             mime,
@@ -3371,7 +3403,8 @@ fn emit_furniture_item(
             width_pt,
             height_pt,
         } => {
-            let name = format!("furniture_{seq}");
+            *image_seq += 1;
+            let name = format!("furniture_{image_seq}");
             let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
             let image = write_image(image_dir, output_path, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
@@ -3385,13 +3418,44 @@ fn emit_furniture_item(
 /// covers are left out — the cell that opened the merge holds its rows, which
 /// is what makes it one cell instead of several (the reading the rectangular
 /// rows of `add_table_plain` cannot express).
-fn grid_table(rows: &[Vec<pdfextractor_docx_parser::DocxCell>], num_cols: usize) -> GridTable {
+///
+/// A cell that holds pictures has them written out as they are met, and gives
+/// them to the cell — the builder places them in a group under the table, so a
+/// picture inside a table cell stays the cell's rather than becoming an item of
+/// the body beside the table. `prefix` is what those files are named from, the
+/// body's `pg1_` or the furniture's `furniture_`, so a header's cell picture and
+/// one in the document do not collide in the image directory.
+fn grid_table(
+    rows: &[Vec<pdfextractor_docx_parser::DocxCell>],
+    num_cols: usize,
+    output_path: &Path,
+    image_dir: &mut Option<PathBuf>,
+    image_seq: &mut usize,
+    prefix: &str,
+) -> GridTable {
     let mut cells = Vec::new();
     for (r, row) in rows.iter().enumerate() {
         for cell in row {
             if cell.covered {
                 continue;
             }
+            let pictures = cell
+                .pictures
+                .iter()
+                .filter_map(|picture| {
+                    *image_seq += 1;
+                    let name = format!("{prefix}{image_seq}");
+                    let (mime, data) = office_media(
+                        picture.mime,
+                        picture.data.clone(),
+                        picture.width_pt,
+                        picture.height_pt,
+                    );
+                    write_image(image_dir, output_path, &name, mime, &data).map(|uri| {
+                        describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
+                    })
+                })
+                .collect();
             cells.push(GridCell {
                 text: cell.text.clone(),
                 start_row: r,
@@ -3403,6 +3467,7 @@ fn grid_table(rows: &[Vec<pdfextractor_docx_parser::DocxCell>], num_cols: usize)
                 // column labels its row. It is stated rather than inferred so
                 // an XLSX table — which has no row headers — can say otherwise.
                 row_header: !cell.header && cell.start_col == 0 && r > 0,
+                pictures,
             });
         }
     }
@@ -3440,6 +3505,7 @@ fn flow_grid(grid: &pdfextractor_text_parser::TableGrid) -> GridTable {
                 col_span: cell.col_span,
                 column_header: grid.header_row(cell.row),
                 row_header: cell.col == 0 && cell.row > 0,
+                pictures: Vec::new(),
             })
             .collect(),
     }
@@ -3470,7 +3536,7 @@ fn link_covering(links: &[pdfextractor_pdf_parser::PageLink], bbox: [f64; 4]) ->
         let width = (bbox[2].min(link.rect[2]) - bbox[0].max(link.rect[0])).max(0.0);
         let height = (bbox[3].min(link.rect[3]) - bbox[1].max(link.rect[1])).max(0.0);
         let covered = width * height;
-        if covered > 0.5 * area && best.map_or(true, |(top, _)| covered > top) {
+        if covered > 0.5 * area && best.is_none_or(|(top, _)| covered > top) {
             best = Some((covered, link.uri.as_str()));
         }
     }

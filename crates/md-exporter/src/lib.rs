@@ -174,6 +174,7 @@ pub fn render_with_images(
         image_mode,
         image_base: image_base.map(Path::to_path_buf),
         groups: Vec::new(),
+        doc,
     };
     // The body tree is the document. Furniture lives beside it (and, for a
     // page-labelled document, mixed into its order) and is skipped per item by
@@ -296,7 +297,7 @@ pub fn export_to_file_with_images(
     Ok(())
 }
 
-struct Renderer {
+struct Renderer<'a> {
     /// One entry per rendered block, joined by a blank line at the end.
     blocks: Vec<String>,
     /// How a picture is referred to.
@@ -308,9 +309,12 @@ struct Renderer {
     /// marker back — and whether the group is a comment's section, which the
     /// quotes inside it are labelled for.
     groups: Vec<(usize, bool)>,
+    /// The document being written, so a table cell can look up the pictures its
+    /// own `ref` names.
+    doc: &'a DoclingDocument,
 }
 
-impl Renderer {
+impl<'a> Renderer<'a> {
     /// Append one block, unless it would be empty: a blank line in the output
     /// is a paragraph break, and an empty paragraph is noise.
     fn block(&mut self, text: String) {
@@ -322,7 +326,7 @@ impl Renderer {
 
 /// The Markdown writer as a [`Visitor`]: the shared walk decides what is
 /// visited and in what order, this decides what each item becomes.
-impl Visitor for Renderer {
+impl Visitor for Renderer<'_> {
     fn text(&mut self, _index: usize, item: &TextItem) {
         self.text_item(item);
     }
@@ -340,7 +344,7 @@ impl Visitor for Renderer {
     }
 }
 
-impl Renderer {
+impl Renderer<'_> {
     fn text_item(&mut self, item: &TextItem) {
         // A deck's remarks are not slide content, and a reader who asked for
         // them still has to be able to tell which is which: a quoted block
@@ -473,18 +477,17 @@ impl Renderer {
         ));
     }
 
-    fn picture(&mut self, item: &PictureItem) {
+    /// One picture as inline Markdown: `None` when there is no picture to
+    /// point at (vector art, or a media type Docling cannot name), because a
+    /// broken image link is worse than none.
+    fn picture_markup(&self, item: &PictureItem) -> Option<String> {
         match self.image_mode {
-            // A picture without a usable image — vector art, or a media type
-            // Docling cannot name — has no file to point at, and a broken image
-            // link is worse than none.
             ImageMode::Referenced => {
-                if let Some(uri) = item.image.as_ref().and_then(|image| image.uri.as_deref()) {
-                    // A file the page named may hold a space, a bracket or a
-                    // `&`: `destination` is what keeps `(…)` from ending at
-                    // the first `)` and the space from reading as a title.
-                    self.block(format!("![Image]({})", destination(uri)));
-                }
+                let uri = item.image.as_ref().and_then(|image| image.uri.as_deref())?;
+                // A file the page named may hold a space, a bracket or a `&`:
+                // `destination` is what keeps `(…)` from ending at the first
+                // `)` and the space from reading as a title.
+                Some(format!("![Image]({})", destination(uri)))
             }
             ImageMode::Embedded => {
                 let data = item
@@ -495,22 +498,79 @@ impl Renderer {
                     // The bytes are here, so the whole picture travels in the
                     // document. The media type is the image's own, never PNG by
                     // assumption: a JPEG relabelled PNG would not decode.
-                    Some(uri) => self.block(format!("![Image]({})", destination(&uri))),
+                    Some(uri) => Some(format!("![Image]({})", destination(&uri))),
                     // Nothing to embed (no image, or bytes not on disk): mark
                     // the spot rather than point at a file that may not be
                     // shipped with the page.
-                    None => self.block(IMAGE_PLACEHOLDER.to_string()),
+                    None => Some(IMAGE_PLACEHOLDER.to_string()),
                 }
             }
-            ImageMode::Placeholder => self.block(IMAGE_PLACEHOLDER.to_string()),
+            ImageMode::Placeholder => Some(IMAGE_PLACEHOLDER.to_string()),
         }
     }
 
+    fn picture(&mut self, item: &PictureItem) {
+        if let Some(markup) = self.picture_markup(item) {
+            self.block(markup);
+        }
+    }
+
+    /// The pictures a table cell holds, as inline Markdown, in the cell's own
+    /// order: a Word cell's picture is the cell's, and reads inside its pipe
+    /// cell rather than as a block beside the table.
+    fn cell_picture_markup(&self, cell: &pdfextractor_core::TableCell) -> String {
+        cell_pictures(self.doc, cell)
+            .iter()
+            .filter_map(|picture| self.picture_markup(picture))
+            .map(|markup| markup.replace('|', "\\|"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn table(&mut self, table: &TableItem) {
-        if let Some(block) = pipe_table(table) {
+        let rendered = pipe_table_with(table, |cell| self.cell_picture_markup(cell));
+        if let Some(block) = rendered {
             self.block(block);
         }
     }
+}
+
+/// The pictures a table cell holds, resolved through the item its `ref` names.
+///
+/// A rich cell references one item — the group a builder places a Word cell's
+/// content in — and its pictures are that group's children. A `ref` that names
+/// a picture directly is answered too, and one that names something else (or
+/// nothing the document holds) gives no pictures rather than a broken render.
+pub(crate) fn cell_pictures<'a>(
+    doc: &'a DoclingDocument,
+    cell: &pdfextractor_core::TableCell,
+) -> Vec<&'a PictureItem> {
+    let Some(path) = cell
+        .reference
+        .as_ref()
+        .map(|reference| reference.ref_path.as_str())
+    else {
+        return Vec::new();
+    };
+    let picture = |path: &str| {
+        path.strip_prefix("#/pictures/")
+            .and_then(|index| index.parse::<usize>().ok())
+    };
+    if let Some(index) = picture(path) {
+        return doc.pictures.get(index).into_iter().collect();
+    }
+    let Some(group) = path
+        .strip_prefix("#/groups/")
+        .and_then(|index| index.parse::<usize>().ok())
+        .and_then(|index| doc.groups.get(index))
+    else {
+        return Vec::new();
+    };
+    group
+        .children
+        .iter()
+        .filter_map(|child| doc.pictures.get(picture(&child.ref_path)?))
+        .collect()
 }
 
 /// The `data:` URI carrying `image`'s bytes, when they can be reached.
@@ -542,6 +602,16 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
 /// the two formats differ in every markup *around* a table but never in which
 /// cell holds what. A table with no rows or no columns has no table to write.
 pub(crate) fn pipe_table(table: &TableItem) -> Option<String> {
+    pipe_table_with(table, |_| String::new())
+}
+
+/// The same table, with whatever each cell holds besides its words written into
+/// the cell after them: a cell with pictures shows them inline, where a reader
+/// of the table meets them, rather than as blocks beside it.
+pub(crate) fn pipe_table_with(
+    table: &TableItem,
+    extra: impl Fn(&pdfextractor_core::TableCell) -> String,
+) -> Option<String> {
     let rows = table.data.num_rows;
     let cols = table.data.num_cols;
     if rows == 0 || cols == 0 {
@@ -558,13 +628,21 @@ pub(crate) fn pipe_table(table: &TableItem) -> Option<String> {
         if r >= rows || c >= cols {
             continue;
         }
-        grid[r][c] = cell
+        let mut content = cell
             .text
             .replace('|', "\\|")
             .lines()
             .map(str::trim)
             .collect::<Vec<_>>()
             .join(" ");
+        let held = extra(cell);
+        if !held.is_empty() {
+            if !content.is_empty() {
+                content.push(' ');
+            }
+            content.push_str(&held);
+        }
+        grid[r][c] = content;
         if cell.column_header && header_row.is_none() {
             header_row = Some(r);
         }
@@ -1128,6 +1206,7 @@ mod tests {
             col_span: span,
             column_header: header,
             row_header: false,
+            pictures: Vec::new(),
         };
         b.add_table_grid(&GridTable {
             num_rows: 3,
@@ -1186,6 +1265,57 @@ mod tests {
         b.add_table_plain(&[vec!["a|b".into()], vec!["c".into()]]);
         let md = render(&b.build());
         assert!(md.contains("a\\|b"), "{md}");
+    }
+
+    /// A cell a Word document fills with a picture holds it in the model, so the
+    /// Markdown writer has to write it where the cell is: inside the pipe row,
+    /// after the cell's words. A writer that carried the picture as a block of
+    /// its own would put an image beside the table, where the document has none.
+    #[test]
+    fn a_picture_a_cell_holds_is_written_in_the_cell() {
+        let mut b = DocumentBuilder::new("demo");
+        b.add_table_grid(&GridTable {
+            num_rows: 1,
+            num_cols: 2,
+            cells: vec![
+                GridCell {
+                    text: "Before".into(),
+                    start_row: 0,
+                    start_col: 0,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                },
+                GridCell {
+                    text: String::new(),
+                    start_row: 0,
+                    start_col: 1,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: vec![PictureData {
+                        mimetype: "image/png".into(),
+                        width: Some(60),
+                        height: Some(36),
+                        dpi: Some(96),
+                        uri: "demo_images/pg1_1.png".into(),
+                    }],
+                },
+            ],
+        });
+        let md = render(&b.build());
+        assert_eq!(md.matches("![Image]").count(), 1, "{md}");
+        let line = md
+            .lines()
+            .find(|line| line.contains("![Image]"))
+            .expect("the picture is rendered");
+        assert!(
+            line.starts_with("| Before") && line.contains("![Image](demo_images/pg1_1.png)"),
+            "the picture is not in its cell: {md}"
+        );
     }
 
     #[test]
@@ -1266,6 +1396,23 @@ mod tests {
              ![Image](<images/scan (1).jpg>)\n\n\
              ![Image](<images/a\\<b\\>c.jpg>)\n\n\
              ![Image](a&b.png)\n"
+        );
+    }
+
+    /// A name can need both things at once: the `<…>` form, because a space
+    /// would otherwise end the address and start a title, and the backslash
+    /// escapes Markdown requires inside it for `<`, `>` and a backslash itself.
+    /// `a_picture_with_a_spaced_name_is_angle_bracketed` holds each on its own —
+    /// `images/scan & notes.jpg` for the wrapper, `images/a<b>c.jpg` for the
+    /// escapes — and the `picture_names.html` golden holds a real file name with
+    /// a space. The pair together is held here, because a writer that escaped
+    /// only when no space was present would pass all of those.
+    #[test]
+    fn a_picture_name_is_wrapped_and_escaped_at_once() {
+        let doc = picture_doc("images/Q3 chart <final>\\graph.gif", "image/gif");
+        assert_eq!(
+            render(&doc),
+            "![Image](<images/Q3 chart \\<final\\>\\\\graph.gif>)\n"
         );
     }
 

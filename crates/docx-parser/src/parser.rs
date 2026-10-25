@@ -79,11 +79,27 @@ pub enum DocxItem {
     },
 }
 
+/// A picture a cell holds: the media part's bytes, the type they are, and the
+/// frame the document places them in.
+#[derive(Debug, Clone)]
+pub struct DocxPicture {
+    pub mime: &'static str,
+    pub data: Vec<u8>,
+    /// Placement size in points: the drawing's `wp:extent`, or an embedded
+    /// object's original size.
+    pub width_pt: Option<f64>,
+    pub height_pt: Option<f64>,
+}
+
 /// One cell of a parsed table: its text, its place in the layout grid, and
 /// the merges its markup declares.
 #[derive(Debug, Clone, Default)]
 pub struct DocxCell {
     pub text: String,
+    /// The pictures the cell states, in the order they were read: a Word cell
+    /// is a container of its own, and a picture in it belongs to the cell
+    /// rather than to the table's neighbourhood in the body.
+    pub pictures: Vec<DocxPicture>,
     /// Grid column the cell starts at (0-based): `w:gridBefore` plus the
     /// spans of the cells before it in its row.
     pub start_col: usize,
@@ -130,6 +146,8 @@ struct TableRow {
 #[derive(Default)]
 struct CellRead {
     text: String,
+    /// The pictures its paragraphs held, resolved to their media parts.
+    pictures: Vec<DocxPicture>,
     /// `w:gridSpan`, one when unstated.
     col_span: usize,
     /// `w:vMerge`: a restart opens a vertical merge, anything else continues
@@ -1862,15 +1880,31 @@ impl<'a> Extractor<'a> {
             self.para_text.clear();
             self.para_has_plain_text = false;
             self.para_pieces.clear();
-            // The cell holds the words. A picture in a cell has no cell to sit
-            // in — a table of this document is rows of text — so it stands in
-            // the body where its cell was read, before the table it belongs to,
-            // rather than being dropped with the cell's paragraph. Dropping it
-            // would take a picture the file states out of the document the file
-            // describes.
+            // The picture is the cell's: it is resolved to its media part and
+            // kept on the cell it was read in, rather than left in the body
+            // beside the table. A cell that holds nothing else is still a cell
+            // of the grid, and its picture travels with it.
             for pending in pictures {
-                if let Some(item) = self.materialise(pending) {
-                    self.items.push(item);
+                if let Some(DocxItem::Picture {
+                    mime,
+                    data,
+                    width_pt,
+                    height_pt,
+                }) = self.materialise(pending)
+                {
+                    if let Some(cell) = self
+                        .tables
+                        .last_mut()
+                        .and_then(|table| table.rows.last_mut())
+                        .and_then(|row| row.cells.last_mut())
+                    {
+                        cell.pictures.push(DocxPicture {
+                            mime,
+                            data,
+                            width_pt,
+                            height_pt,
+                        });
+                    }
                 }
             }
             return;
@@ -2871,6 +2905,7 @@ fn resolve_table(table: TableState) -> (usize, Vec<Vec<DocxCell>>) {
             let span = cell.col_span.max(1);
             cells.push(DocxCell {
                 text: cell.text.clone(),
+                pictures: cell.pictures.clone(),
                 start_col: column,
                 col_span: span,
                 row_span: 1,
@@ -2907,6 +2942,13 @@ fn resolve_table(table: TableState) -> (usize, Vec<Vec<DocxCell>>) {
                     {
                         rows[o_row][o_cell].row_span = r - o_row + 1;
                         rows[r][c].covered = true;
+                        // A continuation is not a cell of the document: its
+                        // slots belong to the cell that opened the merge, and
+                        // so does a picture it states. Leaving the picture on a
+                        // covered cell would drop it, since only the opening
+                        // cell is written to the grid.
+                        let pictures = std::mem::take(&mut rows[r][c].pictures);
+                        rows[o_row][o_cell].pictures.extend(pictures);
                         chained.push((o_row, o_cell, o_col));
                     }
                 }
@@ -4226,13 +4268,13 @@ mod tests {
     const SVG: &[u8] =
         br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24"/></svg>"##;
 
-    /// A picture inside a table cell is still the document's picture. A cell of
-    /// this model holds words, not pictures, so the picture stands in the body
-    /// where the cell was read — before the table it belongs to — rather than
-    /// being dropped with the cell's paragraph: a picture the file states is not
-    /// one the file's reader may leave out.
+    /// A picture inside a table cell is the cell's picture. It is kept on the
+    /// cell it was read in rather than left in the body beside the table, so a
+    /// reader that needs to know which cell showed a picture can ask the cell,
+    /// and the body's order is the document's own: the words, the table, the
+    /// words. A cell that held nothing but the picture is still that cell.
     #[test]
-    fn a_picture_in_a_table_cell_stands_before_its_table() {
+    fn a_picture_in_a_table_cell_stays_in_its_cell() {
         let doc = format!(
             r#"<w:document {W} {V} xmlns:r="x"><w:body>
                  <w:p><w:r><w:t>Before.</w:t></w:r></w:p>
@@ -4258,7 +4300,62 @@ mod tests {
                 DocxItem::Formula { .. } => "formula",
             })
             .collect();
-        assert_eq!(items, vec!["Before.", "image/png", "table", "After."]);
+        assert_eq!(items, vec!["Before.", "table", "After."]);
+
+        let DocxItem::Table { rows, num_cols } = &parsed.items[1] else {
+            panic!("the table is not second: {items:?}");
+        };
+        assert_eq!(*num_cols, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 1);
+        let cell = &rows[0][0];
+        assert_eq!(cell.text, "", "a picture is not words");
+        assert_eq!(cell.pictures.len(), 1, "the cell's picture");
+        assert_eq!(cell.pictures[0].mime, "image/png");
+        assert_eq!(
+            cell.pictures[0].data, PNG,
+            "the part's own bytes, not a drawing of them"
+        );
+    }
+
+    /// A merged cell is one cell, however many rows state it: the row that
+    /// opened the merge holds the rows, and a picture a continuation states is
+    /// inside that cell. It travels to the cell that is written to the grid —
+    /// the continuation itself is covered, not a cell of the document — so a
+    /// picture the file states is not lost by being stated in the second row of
+    /// a merge.
+    #[test]
+    fn a_picture_in_a_merged_cell_belongs_to_the_cell_that_opens_it() {
+        let doc = format!(
+            r#"<w:document {W} {V} xmlns:r="x"><w:body>
+                 <w:tbl>
+                   <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p/></w:tc></w:tr>
+                   <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:pict>
+                     <v:shape style="width:40pt;height:24pt"><v:imagedata r:id="rId7"/></v:shape>
+                   </w:pict></w:r></w:p></w:tc></w:tr>
+                 </w:tbl>
+               </w:body></w:document>"#
+        );
+        let rels = r#"<Relationships xmlns="z">
+            <Relationship Id="rId7" Type="image" Target="media/image1.png"/>
+          </Relationships>"#;
+        let parsed =
+            DocxDocument::parse_bytes(&package(&doc, rels, &[("word/media/image1.png", PNG)]))
+                .expect("parse");
+        let DocxItem::Table { rows, .. } = &parsed.items[0] else {
+            panic!("the picture is not in a table: {:?}", parsed.items);
+        };
+        assert_eq!(rows.len(), 2);
+        let opening = &rows[0][0];
+        assert_eq!(opening.row_span, 2, "the merge is one cell");
+        assert!(!opening.covered, "the cell that opened the merge stands");
+        assert_eq!(opening.pictures.len(), 1, "the merged cell's picture");
+        assert_eq!(opening.pictures[0].data, PNG);
+        assert!(rows[1][0].covered, "the second row continues the merge");
+        assert!(
+            rows[1][0].pictures.is_empty(),
+            "the picture is not also left on a cell that is not written"
+        );
     }
 
     /// A picture stated twice the way a converter keeps an older reader happy:

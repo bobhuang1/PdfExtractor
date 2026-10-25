@@ -131,8 +131,10 @@ impl<'a> CompoundFile<'a> {
             u32_at(data, 64).unwrap_or(0) as usize * sector_size,
         );
         let mini_fat: Vec<u32> = mini_fat_bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect();
 
         let directory = read_chain(
@@ -253,7 +255,7 @@ fn read_chain(data: &[u8], sector_size: usize, fat: &[u32], start: u32, size: us
 /// the high half is only meaningful in a version-4 container.
 fn parse_directory(bytes: &[u8], v3: bool) -> Vec<Entry> {
     let mut out = Vec::new();
-    for chunk in bytes.chunks_exact(DIR_ENTRY_LEN) {
+    for chunk in bytes.as_chunks::<DIR_ENTRY_LEN>().0 {
         let kind = chunk[66];
         if kind == 0 {
             continue;
@@ -261,8 +263,10 @@ fn parse_directory(bytes: &[u8], v3: bool) -> Vec<Entry> {
         let name_len = u16_at(chunk, 64).unwrap_or(0) as usize;
         let raw = name_len.saturating_sub(2).min(64);
         let units: Vec<u16> = chunk[..raw]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         let name = String::from_utf16_lossy(&units);
         let size = if v3 {

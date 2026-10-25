@@ -27,9 +27,10 @@
 //! states. A GIF or a WebP arriving as the *input* is the whole animation,
 //! though, and each of its frames is a page a reader turns, so [`gif_frames`]
 //! and [`webp_frames`] return every one of them, composited on that screen. A
-//! TIFF is the same story in a different shape: its chain of image file
-//! directories is a batch of sheets, and [`tiff_frames`] returns every page at
-//! its own grid.
+//! WebP's orientation tag belongs to the file as its canvas does, so a caller
+//! turns every frame of an animation by it, never the first alone. A TIFF is the
+//! same story in a different shape: its chain of image file directories is a
+//! batch of sheets, and [`tiff_frames`] returns every page at its own grid.
 //!
 //! WebP and JPEG 2000 are carried by the document model but cannot be named in
 //! Docling's `ImageRef`, so a picture in either encoding is transcoded to PNG

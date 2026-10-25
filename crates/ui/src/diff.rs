@@ -2194,7 +2194,7 @@ fn best_place(block: &Block, candidates: &[(usize, &Block)]) -> Option<(f64, usi
         let score = overlap(place, other_place);
         // A tie keeps the first candidate, which is the one the document's own
         // order puts first.
-        if score >= PLACE_OVERLAP && best.map_or(true, |(best, _, _)| score > best) {
+        if score >= PLACE_OVERLAP && best.is_none_or(|(best, _, _)| score > best) {
             best = Some((score, *index, place.page));
         }
     }

@@ -122,6 +122,7 @@ pub fn render_with_images(
         description: doc.html_head.description.clone(),
         canonical: doc.html_head.canonical.clone(),
         social: doc.html_head.social.clone(),
+        doc,
     };
     walk_body_with(doc, include_notes, &mut renderer);
     renderer.finish()
@@ -172,7 +173,7 @@ pub fn export_to_file_with_images(
     Ok(())
 }
 
-struct Renderer {
+struct Renderer<'a> {
     /// One entry per rendered block, one per line of output.
     blocks: Vec<String>,
     /// The list being filled, if a list item is the last thing visited:
@@ -203,9 +204,12 @@ struct Renderer {
     /// it made them: a key and its content, written back under the attribute
     /// the key's vocabulary uses.
     social: Vec<(String, String)>,
+    /// The document being written, so a table cell can look up the pictures its
+    /// own `ref` names.
+    doc: &'a DoclingDocument,
 }
 
-impl Renderer {
+impl Renderer<'_> {
     fn block(&mut self, text: String) {
         if !text.trim().is_empty() {
             self.blocks.push(text);
@@ -344,16 +348,13 @@ impl Renderer {
         self.block(formula_html(text.trim()));
     }
 
-    fn picture(&mut self, item: &PictureItem) {
-        self.close_list();
+    /// One picture as an `<img>`, with no paragraph around it: a block wraps
+    /// this in `<p>`, a table cell puts it where the cell's words are.
+    fn picture_tag(&self, item: &PictureItem) -> Option<String> {
         match self.image_mode {
             ImageMode::Referenced => {
-                if let Some(uri) = item.image.as_ref().and_then(|image| image.uri.as_deref()) {
-                    self.block(format!(
-                        "<p><img src=\"{}\" alt=\"Image\"></p>",
-                        escape(uri)
-                    ));
-                }
+                let uri = item.image.as_ref().and_then(|image| image.uri.as_deref())?;
+                Some(format!("<img src=\"{}\" alt=\"Image\">", escape(uri)))
             }
             ImageMode::Embedded => {
                 let data = item
@@ -361,19 +362,42 @@ impl Renderer {
                     .as_ref()
                     .and_then(|image| image_data_uri(image, self.image_base.as_deref()));
                 match data {
-                    Some(uri) => self.block(format!(
-                        "<p><img src=\"{}\" alt=\"Image\"></p>",
-                        escape(&uri)
-                    )),
+                    Some(uri) => Some(format!("<img src=\"{}\" alt=\"Image\">", escape(&uri))),
                     // No image to carry: mark the spot, as the Markdown writer
                     // does, rather than emit an `<img>` with no source.
-                    None => self.block(IMAGE_PLACEHOLDER.to_string()),
+                    None => Some(IMAGE_PLACEHOLDER.to_string()),
                 }
             }
             // An HTML comment is invisible, which is what a placeholder is for:
             // the spot stays in the source, and no broken image reaches a page.
-            ImageMode::Placeholder => self.block(IMAGE_PLACEHOLDER.to_string()),
+            ImageMode::Placeholder => Some(IMAGE_PLACEHOLDER.to_string()),
         }
+    }
+
+    fn picture(&mut self, item: &PictureItem) {
+        self.close_list();
+        let Some(tag) = self.picture_tag(item) else {
+            return;
+        };
+        // A placeholder is an HTML comment, not an element: wrapping it in a
+        // paragraph would put a paragraph on the page that the page does not
+        // have, and the page would no longer re-render to its own bytes.
+        if tag.starts_with("<img") {
+            self.block(format!("<p>{tag}</p>"));
+        } else {
+            self.block(tag);
+        }
+    }
+
+    /// The pictures a table cell holds, as `<img>` elements in the cell's own
+    /// order. A Word cell's picture is the cell's, so it reads inside its
+    /// `<td>` rather than as a block beside the table.
+    fn cell_pictures(&self, cell: &pdfextractor_core::TableCell) -> String {
+        crate::cell_pictures(self.doc, cell)
+            .iter()
+            .filter_map(|picture| self.picture_tag(picture))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn list_item(&mut self, item: &TextItem) {
@@ -419,7 +443,8 @@ impl Renderer {
 
     fn table(&mut self, table: &TableItem) {
         self.close_list();
-        if let Some(html) = table_html(table) {
+        let rendered = table_html(table, |cell| self.cell_pictures(cell));
+        if let Some(html) = rendered {
             self.block(html);
         }
     }
@@ -479,7 +504,7 @@ impl Renderer {
     }
 }
 
-impl Visitor for Renderer {
+impl Visitor for Renderer<'_> {
     fn text(&mut self, _index: usize, item: &TextItem) {
         // A deck's remarks stay on the page when the reader asks for them, but
         // they are not the slide: an aside, labelled `Notes:`, is the document
@@ -531,7 +556,10 @@ impl Visitor for Renderer {
 ///
 /// `None` when the table has no rows or no columns: there is no grid to draw
 /// and an empty `<table>` on the page would be noise.
-fn table_html(table: &TableItem) -> Option<String> {
+fn table_html(
+    table: &TableItem,
+    extra: impl Fn(&pdfextractor_core::TableCell) -> String,
+) -> Option<String> {
     let rows = table.data.num_rows;
     let cols = table.data.num_cols;
     if rows == 0 || cols == 0 {
@@ -585,10 +613,15 @@ fn table_html(table: &TableItem) -> Option<String> {
             } else {
                 String::new()
             });
-            line.push_str(&format!(
-                "<{tag}{span}>{}</{tag}>",
-                inline_html_text(&flatten(&cell.text))
-            ));
+            let mut content = inline_html_text(&flatten(&cell.text));
+            let held = extra(cell);
+            if !held.is_empty() {
+                if !content.is_empty() {
+                    content.push(' ');
+                }
+                content.push_str(&held);
+            }
+            line.push_str(&format!("<{tag}{span}>{content}</{tag}>"));
         }
         line.push_str("</tr>");
         line
@@ -751,7 +784,7 @@ fn inline_pieces(text: &str) -> Vec<InlinePiece<'_>> {
 /// not inline math.
 fn inline_math_close(chars: &[(usize, char)], open: usize) -> Option<usize> {
     let first = open + 1;
-    if chars.get(first).map_or(true, |(_, c)| c.is_whitespace()) {
+    if chars.get(first).is_none_or(|(_, c)| c.is_whitespace()) {
         return None;
     }
 
@@ -1318,6 +1351,54 @@ mod tests {
         assert!(html.contains("<thead>"), "{html}");
     }
 
+    /// A cell a Word document fills with a picture holds it in the model, so the
+    /// page writes the `<img>` inside the cell. A writer that carried the picture
+    /// as a block of its own would put it beside the table, where the document
+    /// has none.
+    #[test]
+    fn a_picture_a_cell_holds_is_written_in_the_cell() {
+        let mut b = DocumentBuilder::new("demo");
+        b.add_table_grid(&GridTable {
+            num_rows: 1,
+            num_cols: 2,
+            cells: vec![
+                GridCell {
+                    text: "Before".into(),
+                    start_row: 0,
+                    start_col: 0,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                },
+                GridCell {
+                    text: String::new(),
+                    start_row: 0,
+                    start_col: 1,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: vec![PictureData {
+                        mimetype: "image/png".into(),
+                        width: Some(60),
+                        height: Some(36),
+                        dpi: Some(96),
+                        uri: "demo_images/pg1_1.png".into(),
+                    }],
+                },
+            ],
+        });
+        let html = render(&b.build());
+        assert_eq!(html.matches("<img ").count(), 1, "{html}");
+        assert!(
+            html.contains("<th>Before</th>")
+                && html.contains("<th><img src=\"demo_images/pg1_1.png\" alt=\"Image\"></th>"),
+            "the picture is not in its cell: {html}"
+        );
+    }
+
     #[test]
     fn a_table_without_a_header_gets_no_thead() {
         let doc: DoclingDocument = serde_json::from_str(
@@ -1376,6 +1457,7 @@ mod tests {
             col_span: span,
             column_header: header,
             row_header: false,
+            pictures: Vec::new(),
         };
         b.add_table_grid(&GridTable {
             num_rows: 3,

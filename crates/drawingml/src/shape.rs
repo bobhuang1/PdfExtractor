@@ -35,7 +35,9 @@ pub struct Picture {
     pub height_pt: f64,
 }
 
-/// The colours a package's theme declares, by slot (`dk1`, `lt1`, `accent1`, …).
+/// The colours a package's theme declares, by slot (`dk1`, `lt1`, `accent1`, …),
+/// and the adjustments each of its line styles applies to the colour a shape's
+/// `a:lnRef` names.
 ///
 /// A shape's fill is often `a:fillRef idx="1"` with an `a:schemeClr` child, so
 /// the file states a theme slot rather than a colour. An absent or unreadable
@@ -43,6 +45,10 @@ pub struct Picture {
 #[derive(Default, Debug)]
 pub struct Theme {
     colors: HashMap<String, Color>,
+    /// `a:lnStyleLst` in index order: the adjustments its colour states
+    /// (`shade`, `satMod`, …), which every application applies to a line that
+    /// takes its colour from `a:lnRef`.
+    lines: Vec<Vec<(String, f64)>>,
 }
 
 impl Theme {
@@ -61,7 +67,35 @@ impl Theme {
             };
             colors.insert(slot.name.clone(), color);
         }
-        Theme { colors }
+        let mut lines = Vec::new();
+        if let Some(styles) = find(&root, "lnStyleLst") {
+            for style in &styles.children {
+                let adjustments = style
+                    .child("solidFill")
+                    .and_then(|fill| fill.children.first())
+                    .map(|colour| colour.children.iter().filter_map(adjustment).collect())
+                    .unwrap_or_default();
+                lines.push(adjustments);
+            }
+        }
+        Theme { colors, lines }
+    }
+
+    /// The colour the theme's line style at `index` makes of `base`.
+    ///
+    /// The theme's own line styles are where a default shape's outline comes
+    /// from: the first shades the accent and lifts its saturation, so a line
+    /// of the accent's colour is not the fill's colour — which is what makes a
+    /// mark inside a shape visible against the shape itself.
+    fn line(&self, index: i32, base: Color) -> Color {
+        let Some(adjustments) = usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| self.lines.get(index))
+        else {
+            return base;
+        };
+        adjusted(base, adjustments)
     }
 
     fn scheme(&self, name: &str) -> Option<Color> {
@@ -624,12 +658,26 @@ fn plain_outline(name: &str, frame: Frame, adjust: &Adjustments) -> Option<Vec<C
         "ellipse" | "flowChartConnector" => vec![ellipse(frame)],
         "triangle" => vec![polygon(&[(x + w / 2.0, y), (x + w, y + h), (x, y + h)])],
         "rtTriangle" => vec![polygon(&[(x, y), (x + w, y + h), (x, y + h)])],
-        "diamond" | "flowChartDecision" | "flowChartSort" => vec![polygon(&[
+        "diamond" | "flowChartDecision" => vec![polygon(&[
             (x + w / 2.0, y),
             (x + w, y + h / 2.0),
             (x + w / 2.0, y + h),
             (x, y + h / 2.0),
         ])],
+        // A sort is a decision with a bar across its middle. The preset states
+        // that bar as a path of its own with no fill, so it is a line of the
+        // drawing: stroked in the shape's line colour and never painted in its
+        // fill, which would be a bar of the shape's own colour and so no bar at
+        // all — and would leave a sort looking exactly like a decision.
+        "flowChartSort" => vec![
+            polygon(&[
+                (x + w / 2.0, y),
+                (x + w, y + h / 2.0),
+                (x + w / 2.0, y + h),
+                (x, y + h / 2.0),
+            ]),
+            line(&[(x, y + h / 2.0), (x + w, y + h / 2.0)]),
+        ],
         "parallelogram" | "flowChartInputOutput" => {
             let slant = adjust.get(&["adj"], 0.25) * w.min(h);
             vec![polygon(&[
@@ -2688,10 +2736,21 @@ fn stroke(shape: &Node, sp_pr: &Node, theme: &Theme) -> Option<StrokeInk> {
         if line.child("noFill").is_some() {
             return None;
         }
+        // A colour the line states itself is used as written; one taken from
+        // the shape's `a:lnRef` is the theme's line style's colour, adjustments
+        // and all.
         let color = line
             .child("solidFill")
-            .and_then(|fill| first_color(fill, theme))
-            .or_else(|| style.and_then(|reference| first_color(reference, theme)));
+            .and_then(|fill| first_color(fill, theme));
+        let color = color.or_else(|| {
+            let reference = style?;
+            let base = first_color(reference, theme)?;
+            let index = reference
+                .attr("idx")
+                .and_then(|raw| raw.trim().parse::<i32>().ok())
+                .unwrap_or(0);
+            Some(theme.line(index, base))
+        });
         let width = line
             .attr("w")
             .and_then(|raw| raw.trim().parse::<f64>().ok())
@@ -2721,7 +2780,8 @@ fn stroke(shape: &Node, sp_pr: &Node, theme: &Theme) -> Option<StrokeInk> {
     if index <= 0 {
         return None;
     }
-    let color = first_color(reference, theme).or_else(|| theme.scheme("accent1"))?;
+    let base = first_color(reference, theme).or_else(|| theme.scheme("accent1"))?;
+    let color = theme.line(index, base);
     let width = style_width(Some(index)).unwrap_or(DEFAULT_STROKE_PT);
     Some(StrokeInk {
         color,
@@ -2799,23 +2859,81 @@ fn color(node: &Node, theme: Option<&Theme>) -> Option<Color> {
         "prstClr" => named_color(node.attr("val")?),
         _ => None,
     }?;
-    let mut color = base;
-    for adjustment in &node.children {
-        let Some(raw) = adjustment.attr("val") else {
-            continue;
-        };
-        let Ok(percent) = raw.trim().parse::<f64>() else {
-            continue;
-        };
-        let percent = (percent / 100000.0).clamp(0.0, 1.0);
-        color = match adjustment.name.as_str() {
-            // `shade` mixes toward black, `tint` toward white.
-            "shade" => scale(color, percent),
-            "tint" => blend(Color::WHITE, color, percent),
+    let adjustments: Vec<(String, f64)> = node.children.iter().filter_map(adjustment).collect();
+    Some(adjusted(base, &adjustments))
+}
+
+/// One adjustment of a colour element, as its name and the value it states
+/// (a percentage of 100000).
+fn adjustment(node: &Node) -> Option<(String, f64)> {
+    let raw = node.attr("val")?;
+    Some((node.name.clone(), raw.trim().parse::<f64>().ok()?))
+}
+
+/// `color` with a list of DrawingML adjustments applied, in order.
+///
+/// Only the ones this reader can state exactly are applied: `shade` mixes
+/// toward black, `tint` toward white, and `satMod` scales saturation in HSL —
+/// a theme's line style is where that last one appears, lifting an outline of
+/// the fill's own hue off the fill. An adjustment it does not know leaves the
+/// colour as it was rather than guessing.
+fn adjusted(color: Color, adjustments: &[(String, f64)]) -> Color {
+    adjustments.iter().fold(color, |color, (name, value)| {
+        let share = (value / 100000.0).clamp(0.0, 1.0);
+        match name.as_str() {
+            "shade" => scale(color, share),
+            "tint" => blend(Color::WHITE, color, share),
+            "satMod" => saturation(color, value / 100000.0),
             _ => color,
-        };
+        }
+    })
+}
+
+/// `color` with its HSL saturation multiplied by `factor`, its hue and
+/// lightness untouched.
+fn saturation(color: Color, factor: f64) -> Color {
+    let (r, g, b) = (
+        f64::from(color.r) / 255.0,
+        f64::from(color.g) / 255.0,
+        f64::from(color.b) / 255.0,
+    );
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (max + min) / 2.0;
+    let delta = max - min;
+    if delta <= f64::EPSILON {
+        return color;
     }
-    Some(color)
+    let saturation = if lightness > 0.5 {
+        delta / (2.0 - max - min)
+    } else {
+        delta / (max + min)
+    } * factor;
+    let saturation = saturation.clamp(0.0, 1.0);
+    let turn = if max == r {
+        ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    };
+    let hue = turn * 60.0;
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let second = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match hue {
+        h if h < 60.0 => (chroma, second, 0.0),
+        h if h < 120.0 => (second, chroma, 0.0),
+        h if h < 180.0 => (0.0, chroma, second),
+        h if h < 240.0 => (0.0, second, chroma),
+        h if h < 300.0 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let offset = lightness - chroma / 2.0;
+    let channel = |value: f64| ((value + offset) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color {
+        r: channel(r),
+        g: channel(g),
+        b: channel(b),
+    }
 }
 
 fn scale(color: Color, factor: f64) -> Color {
@@ -3494,6 +3612,35 @@ mod tests {
                 "{name} was filled as if it were a region"
             );
         }
+    }
+
+    /// A sort's bar is a path of the preset with no fill, so it is a line of
+    /// the drawing and takes the shape's line colour. That bar is the only
+    /// thing between a sort and a decision, which are otherwise the same
+    /// diamond filled the same way.
+    #[test]
+    fn a_flowchart_sort_draws_its_bar_in_the_line_colour() {
+        let flowchart = |name: &str| {
+            painted(&format!(
+                r##"<p:sp xmlns:p="p" xmlns:a="a"><p:spPr>
+                      <a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm>
+                      <a:prstGeom prst="{name}"><a:avLst/></a:prstGeom>
+                      <a:solidFill><a:srgbClr val="1f4e79"/></a:solidFill>
+                      <a:ln><a:solidFill><a:srgbClr val="c00000"/></a:solidFill></a:ln>
+                    </p:spPr></p:sp>"##
+            ))
+        };
+        const LINE: [u8; 4] = [192, 0, 0, 255];
+        let sort = flowchart("flowChartSort");
+        let decision = flowchart("flowChartDecision");
+        let (x, y) = (sort.width() / 2, sort.height() / 2);
+        assert_eq!(sort.get_pixel(x, y).0, LINE, "the bar across the middle");
+        assert_eq!(sort.get_pixel(x, y - 20).0, INK, "the fill above the bar");
+        assert_eq!(
+            decision.get_pixel(x, y).0,
+            INK,
+            "a decision has no bar in the middle of its diamond"
+        );
     }
 
     /// A donut is a ring: the inner contour is a hole under the alternate fill

@@ -674,6 +674,11 @@ function beginRun(started) {
   el("stop").textContent = "Stop";
   // What is being run, available while it runs rather than only once it is over.
   el("run-command").textContent = started.command;
+  // The binary this run was given, named on the line under the formats: the
+  // environment can move between the last ask and the click, and the event
+  // carries the path the run itself resolved, so the line names the binary this
+  // run is rather than the one a re-ask would find now.
+  showCliProgram(started.program);
   el("summary").textContent = "Running…";
 }
 
@@ -791,7 +796,18 @@ async function stop() {
 // The answer carries the families too, under the CLI's own names. Drawing them
 // here is what keeps the page's headings the chooser's headings rather than a
 // second grouping written on this side.
+//
+// The list sits folded under its own heading so the form stays short: the line
+// above already says how many formats there are, and the families are something
+// to open when a file is turned away, not something to read before choosing one.
+// It is left as the person left it across a re-ask — a list opened to compare
+// two binaries stays open for the second answer — and is shown only with rows in
+// it, so a CLI that could not be asked leaves no empty disclosure behind.
 function showFamilies(families) {
+  if (!families.length) {
+    clearFamilies();
+    return;
+  }
   const rows = document.createDocumentFragment();
   for (const family of families) {
     const row = document.createElement("div");
@@ -804,6 +820,13 @@ function showFamilies(families) {
     rows.append(row);
   }
   el("format-families").replaceChildren(rows);
+  el("format-details").classList.remove("hidden");
+}
+
+// An answer that names no family — or no answer at all — leaves nothing to open.
+function clearFamilies() {
+  el("format-families").replaceChildren();
+  el("format-details").classList.add("hidden");
 }
 
 // One function draws the answer for both asks, so the list on load and the list
@@ -826,7 +849,16 @@ function showFormatsProblem(error) {
   hint.textContent = `Could not ask the CLI which formats it reads: ${error}`;
   hint.dataset.count = "0";
   hint.classList.add("bad");
-  el("format-families").replaceChildren();
+  clearFamilies();
+}
+
+// One function names the binary on every path that learns a new one — the load,
+// a re-ask and the start of a run — so the line cannot be written two ways.
+function showCliProgram(path) {
+  const program = el("cli-program");
+  program.textContent = path;
+  program.title = path;
+  el("cli-line").classList.remove("bad");
 }
 
 // The binary the formats came from, named beside them. It is asked of the
@@ -834,17 +866,13 @@ function showFormatsProblem(error) {
 // format ask and this call; the backend resolves it again, so the line names the
 // path a run would start now rather than the one the window opened with.
 async function loadCliProgram() {
-  const line = el("cli-line");
-  const program = el("cli-program");
   try {
-    const path = await invoke("cli_program");
-    program.textContent = path;
-    program.title = path;
-    line.classList.remove("bad");
+    showCliProgram(await invoke("cli_program"));
   } catch (error) {
+    const program = el("cli-program");
     program.textContent = `could not resolve the binary: ${error}`;
     program.removeAttribute("title");
-    line.classList.add("bad");
+    el("cli-line").classList.add("bad");
   }
 }
 
@@ -867,7 +895,7 @@ async function reaskFormats() {
   button.disabled = true;
   el("formats").textContent = "Asking the CLI again which formats it reads…";
   el("formats").classList.remove("bad");
-  el("format-families").replaceChildren();
+  clearFamilies();
   try {
     showFormats(await invoke("refresh_input_formats"));
   } catch (error) {

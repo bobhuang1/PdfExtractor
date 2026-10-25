@@ -167,6 +167,38 @@ fn an_animated_webp_is_one_picture_per_frame() {
     assert!(webp_frames(b"not a picture").is_empty());
 }
 
+/// The orientation tag is the file's, not a frame's: `turning_turned.webp` is
+/// the same three pages stored a quarter turn anticlockwise — 160 x 480 — with
+/// EXIF orientation 6, "turn 90° clockwise to read". The reader reports the
+/// stored grid and the tag, so the page is 480 x 160 upright, and every frame is
+/// the stored grid. Turning is the caller's work, and the tag speaks for the
+/// animation, so the caller has to turn all three rather than the frame it
+/// happened to measure.
+#[test]
+fn an_animated_webp_reports_the_orientation_it_was_stored_in() {
+    let encoded = bytes("images/turning_turned.webp");
+    let document = ImageDocument::parse_bytes(&encoded).expect("the canvas reads");
+    assert_eq!(document.mimetype, "image/webp");
+    assert_eq!(
+        (document.width, document.height),
+        (160, 480),
+        "the animation is stored sideways"
+    );
+    assert_eq!(document.orientation, Orientation::Rotate90);
+    assert_eq!(document.orientation.exif(), 6);
+    assert_eq!(document.upright_size(), (480, 160));
+
+    let pages = webp_frames(&encoded);
+    assert_eq!(pages.len(), 3, "one page for every frame");
+    for page in &pages {
+        assert_eq!(
+            (page.width, page.height),
+            (160, 480),
+            "a frame is the stored grid, not the page's"
+        );
+    }
+}
+
 /// The page of a 150 dpi scan: 620 x 350 pixels, in points.
 const WIDTH_PT: f64 = 297.575;
 const HEIGHT_PT: f64 = 167.986;

@@ -129,7 +129,9 @@ impl Raster {
     /// what the callers use to tell "drew nothing" from "drew something".
     pub fn inked_pixels(&self) -> usize {
         self.pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] != 255 || px[1] != 255 || px[2] != 255)
             .count()
     }
