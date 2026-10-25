@@ -389,15 +389,46 @@ impl Renderer<'_> {
         }
     }
 
-    /// The pictures a table cell holds, as `<img>` elements in the cell's own
-    /// order. A Word cell's picture is the cell's, so it reads inside its
-    /// `<td>` rather than as a block beside the table.
-    fn cell_pictures(&self, cell: &pdfextractor_core::TableCell) -> String {
-        crate::cell_pictures(self.doc, cell)
+    /// What a table cell holds beyond its words, inside its own `<td>`, in the
+    /// cell's order: the pictures the cell states, and the words of any table
+    /// nested in it — which is the cell's content too, so it reads inside the
+    /// cell rather than as a block beside the table.
+    ///
+    /// The nested table's own cells are flattened into words rather than
+    /// written as a `<table>`: HTML has no nested table this reader could read
+    /// back as one — a `<table>` inside a `<td>` is read as rows of the table
+    /// around it — and a page that does not render back to the document it came
+    /// from is worth less than one that says the nested table's words in the
+    /// cell that holds them, which is also what the Markdown writer does. Their
+    /// pictures stay pictures, inside the outer cell.
+    fn cell_content(&self, cell: &pdfextractor_core::TableCell) -> String {
+        let mut held: Vec<String> = crate::cell_pictures(self.doc, cell)
             .iter()
             .filter_map(|picture| self.picture_tag(picture))
-            .collect::<Vec<_>>()
-            .join(" ")
+            .collect();
+        for table in crate::cell_tables(self.doc, cell) {
+            held.extend(self.nested_cells(table));
+        }
+        held.join(" ")
+    }
+
+    /// The cells of a table nested in another cell, in grid order, each as the
+    /// words it holds and then whatever else it holds.
+    fn nested_cells(&self, table: &TableItem) -> Vec<String> {
+        let mut cells: Vec<&pdfextractor_core::TableCell> = table.data.table_cells.iter().collect();
+        cells.sort_by_key(|cell| (cell.start_row_offset_idx, cell.start_col_offset_idx));
+        let mut held = Vec::new();
+        for cell in cells {
+            let text = escape(&flatten(&cell.text));
+            if !text.is_empty() {
+                held.push(text);
+            }
+            let rest = self.cell_content(cell);
+            if !rest.is_empty() {
+                held.push(rest);
+            }
+        }
+        held
     }
 
     fn list_item(&mut self, item: &TextItem) {
@@ -443,7 +474,7 @@ impl Renderer<'_> {
 
     fn table(&mut self, table: &TableItem) {
         self.close_list();
-        let rendered = table_html(table, |cell| self.cell_pictures(cell));
+        let rendered = table_html(table, |cell| self.cell_content(cell));
         if let Some(html) = rendered {
             self.block(html);
         }
@@ -1371,6 +1402,7 @@ mod tests {
                     column_header: true,
                     row_header: false,
                     pictures: Vec::new(),
+                    tables: Vec::new(),
                 },
                 GridCell {
                     text: String::new(),
@@ -1387,6 +1419,7 @@ mod tests {
                         dpi: Some(96),
                         uri: "demo_images/pg1_1.png".into(),
                     }],
+                    tables: Vec::new(),
                 },
             ],
         });
@@ -1397,6 +1430,64 @@ mod tests {
                 && html.contains("<th><img src=\"demo_images/pg1_1.png\" alt=\"Image\"></th>"),
             "the picture is not in its cell: {html}"
         );
+    }
+
+    /// A table written inside a cell is the cell's content, so the page writes
+    /// the nested `<table>` inside the cell — its cells, and the pictures they
+    /// hold, read where the document put them rather than beside the outer
+    /// table.
+    #[test]
+    fn a_table_a_cell_holds_is_written_in_the_cell() {
+        let mut b = DocumentBuilder::new("demo");
+        b.add_table_grid(&GridTable {
+            num_rows: 1,
+            num_cols: 2,
+            cells: vec![
+                GridCell {
+                    text: "Outer".into(),
+                    start_row: 0,
+                    start_col: 0,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                    tables: vec![GridTable {
+                        num_rows: 1,
+                        num_cols: 1,
+                        cells: vec![GridCell {
+                            text: "inner".into(),
+                            start_row: 0,
+                            start_col: 0,
+                            row_span: 1,
+                            col_span: 1,
+                            column_header: true,
+                            row_header: false,
+                            pictures: Vec::new(),
+                            tables: Vec::new(),
+                        }],
+                    }],
+                },
+                GridCell {
+                    text: "Right".into(),
+                    start_row: 0,
+                    start_col: 1,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                    tables: Vec::new(),
+                },
+            ],
+        });
+        let html = render(&b.build());
+        assert_eq!(html.matches("<table>").count(), 1, "{html}");
+        assert!(
+            html.contains("<th>Outer inner</th>"),
+            "the nested table's words are not in its cell: {html}"
+        );
+        assert!(html.contains("<th>Right</th>"), "{html}");
     }
 
     #[test]
@@ -1458,6 +1549,7 @@ mod tests {
             column_header: header,
             row_header: false,
             pictures: Vec::new(),
+            tables: Vec::new(),
         };
         b.add_table_grid(&GridTable {
             num_rows: 3,

@@ -178,7 +178,7 @@ fn labels_headings_lists_and_tables() {
     let tables = doc
         .items
         .iter()
-        .filter(|i| matches!(i, DocxItem::Table { .. }))
+        .filter(|i| matches!(i, DocxItem::Table(_)))
         .count();
     assert!(headers > 0, "no headings found");
     assert!(lists > 0, "no list items found");
@@ -189,7 +189,7 @@ fn labels_headings_lists_and_tables() {
         .items
         .iter()
         .find_map(|i| match i {
-            DocxItem::Table { rows, .. } => Some(rows),
+            DocxItem::Table(table) => Some(&table.rows),
             _ => None,
         })
         .expect("a table");
@@ -455,11 +455,29 @@ fn footnotes_and_endnotes_come_out_as_prose() {
 fn keeps_prose_alongside_tables() {
     let doc = parse("drawing.docx");
     let text = body_text(&doc);
-    let tables = doc
-        .items
-        .iter()
-        .filter(|i| matches!(i, DocxItem::Table { .. }))
-        .count();
+    let tables = count_tables(&doc.items);
     assert!(text.len() > 500, "expected prose, got {} chars", text.len());
     assert!(tables > 5, "expected many tables, got {tables}");
+}
+
+/// Every table the document states, counting the ones written inside a cell:
+/// a nested table is its cell's content rather than an item of the document,
+/// so counting the items alone would undercount what the file holds.
+fn count_tables(items: &[DocxItem]) -> usize {
+    fn in_cells(table: &pdfextractor_docx_parser::DocxTable) -> usize {
+        table
+            .rows
+            .iter()
+            .flatten()
+            .flat_map(|cell| &cell.tables)
+            .map(|nested| 1 + in_cells(nested))
+            .sum()
+    }
+    items
+        .iter()
+        .filter_map(|item| match item {
+            DocxItem::Table(table) => Some(1 + in_cells(table)),
+            _ => None,
+        })
+        .sum()
 }

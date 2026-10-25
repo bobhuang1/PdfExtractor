@@ -5,7 +5,7 @@ mod drawing;
 pub mod parser;
 mod vml;
 
-pub use parser::{DocxCell, DocxDocument, DocxItem, DocxPicture};
+pub use parser::{DocxCell, DocxDocument, DocxItem, DocxPicture, DocxTable};
 
 #[derive(Debug, Default)]
 pub struct DocxParser {}

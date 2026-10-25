@@ -65,7 +65,7 @@
       "placedBoxes": 0,
       "placedPagePictures": 0,
       "joined": 0,
-      "agreement": 0.9564336372847011
+      "agreement": 1.0
     },
     "VariousPictures": {
       "rows": 12,
@@ -113,19 +113,19 @@
       "agreement": 1.0
     },
     "calibre_demo": {
-      "rows": 123,
-      "same": 78,
+      "rows": 122,
+      "same": 79,
       "notation": 0,
       "differs": 3,
       "contained": 4,
-      "oursOnly": 13,
-      "theirsOnly": 25,
+      "oursOnly": 12,
+      "theirsOnly": 24,
       "placed": 0,
       "placedItems": 0,
       "placedBoxes": 0,
       "placedPagePictures": 0,
       "joined": 0,
-      "agreement": 0.9989216875589703
+      "agreement": 1.0
     },
     "chartex": {
       "rows": 19,
@@ -143,19 +143,19 @@
       "agreement": 1.0
     },
     "drawing": {
-      "rows": 271,
-      "same": 122,
+      "rows": 267,
+      "same": 126,
       "notation": 0,
       "differs": 22,
       "contained": 27,
-      "oursOnly": 29,
-      "theirsOnly": 71,
+      "oursOnly": 25,
+      "theirsOnly": 67,
       "placed": 0,
       "placedItems": 0,
       "placedBoxes": 0,
       "placedPagePictures": 0,
       "joined": 0,
-      "agreement": 0.9919242436664754
+      "agreement": 1.0
     },
     "dummy": {
       "rows": 1,
@@ -530,7 +530,22 @@
       "placedBoxes": 0,
       "placedPagePictures": 0,
       "joined": 0,
-      "agreement": 0.9534883720930233
+      "agreement": 1.0
+    },
+    "nested_table": {
+      "rows": 6,
+      "same": 4,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 2,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
     },
     "q3_review": {
       "rows": 20,

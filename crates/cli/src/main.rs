@@ -2004,6 +2004,7 @@ fn convert_xlsx(
                                 // A worksheet's cell holds text; its pictures
                                 // are anchored on the sheet, not drawn in it.
                                 pictures: Vec::new(),
+                                tables: Vec::new(),
                             })
                             .collect(),
                     };
@@ -2153,6 +2154,7 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
             column_header: true,
             row_header: false,
             pictures: Vec::new(),
+            tables: Vec::new(),
         });
     }
     for row in 1..=data_rows {
@@ -2173,6 +2175,7 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
                 column_header: false,
                 row_header: col == 0,
                 pictures: Vec::new(),
+                tables: Vec::new(),
             });
         }
     }
@@ -2325,6 +2328,7 @@ fn convert_pptx(
                                 // A slide's table cell holds text; a picture on
                                 // the slide is a shape of its own.
                                 pictures: Vec::new(),
+                                tables: Vec::new(),
                             })
                             .collect(),
                     };
@@ -3341,8 +3345,15 @@ fn emit_docx_item(
         DocxItem::Formula { text } => {
             builder.add_labeled_text(text, "formula");
         }
-        DocxItem::Table { rows, num_cols } => {
-            let grid = grid_table(rows, *num_cols, output_path, image_dir, image_seq, "pg1_");
+        DocxItem::Table(table) => {
+            let grid = grid_table(
+                &table.rows,
+                table.num_cols,
+                output_path,
+                image_dir,
+                image_seq,
+                "pg1_",
+            );
             builder.add_table_grid(&grid);
         }
         DocxItem::Picture {
@@ -3386,10 +3397,10 @@ fn emit_furniture_item(
             hyperlink: _,
         } => Some(builder.add_furniture_item(text, label, *level, marker.clone())),
         DocxItem::Formula { text } => Some(builder.add_furniture_text(text, "formula")),
-        DocxItem::Table { rows, num_cols } => {
+        DocxItem::Table(table) => {
             let grid = grid_table(
-                rows,
-                *num_cols,
+                &table.rows,
+                table.num_cols,
                 output_path,
                 image_dir,
                 image_seq,
@@ -3422,9 +3433,11 @@ fn emit_furniture_item(
 /// A cell that holds pictures has them written out as they are met, and gives
 /// them to the cell — the builder places them in a group under the table, so a
 /// picture inside a table cell stays the cell's rather than becoming an item of
-/// the body beside the table. `prefix` is what those files are named from, the
-/// body's `pg1_` or the furniture's `furniture_`, so a header's cell picture and
-/// one in the document do not collide in the image directory.
+/// the body beside the table. A table written inside a cell is read the same
+/// way, as the cell's own content, and so is the cell it holds in turn.
+/// `prefix` is what those files are named from, the body's `pg1_` or the
+/// furniture's `furniture_`, so a header's cell picture and one in the document
+/// do not collide in the image directory.
 fn grid_table(
     rows: &[Vec<pdfextractor_docx_parser::DocxCell>],
     num_cols: usize,
@@ -3456,6 +3469,20 @@ fn grid_table(
                     })
                 })
                 .collect();
+            let tables = cell
+                .tables
+                .iter()
+                .map(|nested| {
+                    grid_table(
+                        &nested.rows,
+                        nested.num_cols,
+                        output_path,
+                        image_dir,
+                        image_seq,
+                        prefix,
+                    )
+                })
+                .collect();
             cells.push(GridCell {
                 text: cell.text.clone(),
                 start_row: r,
@@ -3468,6 +3495,7 @@ fn grid_table(
                 // an XLSX table — which has no row headers — can say otherwise.
                 row_header: !cell.header && cell.start_col == 0 && r > 0,
                 pictures,
+                tables,
             });
         }
     }
@@ -3506,6 +3534,7 @@ fn flow_grid(grid: &pdfextractor_text_parser::TableGrid) -> GridTable {
                 column_header: grid.header_row(cell.row),
                 row_header: cell.col == 0 && cell.row > 0,
                 pictures: Vec::new(),
+                tables: Vec::new(),
             })
             .collect(),
     }

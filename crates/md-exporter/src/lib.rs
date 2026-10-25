@@ -515,24 +515,77 @@ impl Renderer<'_> {
         }
     }
 
-    /// The pictures a table cell holds, as inline Markdown, in the cell's own
-    /// order: a Word cell's picture is the cell's, and reads inside its pipe
-    /// cell rather than as a block beside the table.
-    fn cell_picture_markup(&self, cell: &pdfextractor_core::TableCell) -> String {
-        cell_pictures(self.doc, cell)
+    /// What a table cell holds beyond its words, as inline Markdown, in the
+    /// cell's own order: its pictures, and the tables nested in it. A Word
+    /// cell's picture is the cell's, so it reads inside its pipe cell rather
+    /// than as a block beside the table; a table written in the cell is the
+    /// cell's the same way, but Markdown has no table inside a cell, so it is
+    /// flattened into the cell — its cells' words in grid order, and what each
+    /// of those cells holds after them, which is what Docling's own Markdown
+    /// export does with it.
+    fn cell_markup(&self, cell: &pdfextractor_core::TableCell) -> String {
+        let mut held: Vec<String> = cell_pictures(self.doc, cell)
             .iter()
             .filter_map(|picture| self.picture_markup(picture))
+            .collect();
+        for table in cell_tables(self.doc, cell) {
+            held.extend(self.flattened_cells(table));
+        }
+        held.iter()
             .map(|markup| markup.replace('|', "\\|"))
             .collect::<Vec<_>>()
             .join(" ")
     }
 
+    /// The cells of a table nested in another cell, in grid order, each as the
+    /// words it holds and then whatever else it holds (a picture, a table of
+    /// its own).
+    fn flattened_cells(&self, table: &TableItem) -> Vec<String> {
+        let mut cells: Vec<&pdfextractor_core::TableCell> = table.data.table_cells.iter().collect();
+        cells.sort_by_key(|cell| (cell.start_row_offset_idx, cell.start_col_offset_idx));
+        let mut held = Vec::new();
+        for cell in cells {
+            let text = cell
+                .text
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !text.is_empty() {
+                held.push(text);
+            }
+            let rest = self.cell_markup(cell);
+            if !rest.is_empty() {
+                held.push(rest);
+            }
+        }
+        held
+    }
+
     fn table(&mut self, table: &TableItem) {
-        let rendered = pipe_table_with(table, |cell| self.cell_picture_markup(cell));
+        let rendered = pipe_table_with(table, |cell| self.cell_markup(cell));
         if let Some(block) = rendered {
             self.block(block);
         }
     }
+}
+
+/// The group a `ref` names, when it names one: the group a builder places a
+/// rich cell's content in. A `ref` that names an item directly (a picture, a
+/// table) names no group here, and the cell holds that item alone.
+fn group_at<'a>(doc: &'a DoclingDocument, path: &str) -> Option<&'a Group> {
+    path.strip_prefix("#/groups/")
+        .and_then(|index| index.parse::<usize>().ok())
+        .and_then(|index| doc.groups.get(index))
+}
+
+/// The index an item path names, when it names an item of `kind`.
+fn item_index(path: &str, kind: &str) -> Option<usize> {
+    path.strip_prefix("#/")?
+        .strip_prefix(kind)?
+        .strip_prefix('/')?
+        .parse()
+        .ok()
 }
 
 /// The pictures a table cell holds, resolved through the item its `ref` names.
@@ -552,25 +605,44 @@ pub(crate) fn cell_pictures<'a>(
     else {
         return Vec::new();
     };
-    let picture = |path: &str| {
-        path.strip_prefix("#/pictures/")
-            .and_then(|index| index.parse::<usize>().ok())
-    };
-    if let Some(index) = picture(path) {
-        return doc.pictures.get(index).into_iter().collect();
+    match group_at(doc, path) {
+        Some(group) => group
+            .children
+            .iter()
+            .filter_map(|child| doc.pictures.get(item_index(&child.ref_path, "pictures")?))
+            .collect(),
+        None => item_index(path, "pictures")
+            .and_then(|index| doc.pictures.get(index))
+            .into_iter()
+            .collect(),
     }
-    let Some(group) = path
-        .strip_prefix("#/groups/")
-        .and_then(|index| index.parse::<usize>().ok())
-        .and_then(|index| doc.groups.get(index))
+}
+
+/// The tables nested in a table cell, resolved the same way: a table written in
+/// a Word cell is the cell's content, one of the children of the group the cell
+/// references, rather than a table of the body beside the outer one.
+pub(crate) fn cell_tables<'a>(
+    doc: &'a DoclingDocument,
+    cell: &pdfextractor_core::TableCell,
+) -> Vec<&'a TableItem> {
+    let Some(path) = cell
+        .reference
+        .as_ref()
+        .map(|reference| reference.ref_path.as_str())
     else {
         return Vec::new();
     };
-    group
-        .children
-        .iter()
-        .filter_map(|child| doc.pictures.get(picture(&child.ref_path)?))
-        .collect()
+    match group_at(doc, path) {
+        Some(group) => group
+            .children
+            .iter()
+            .filter_map(|child| doc.tables.get(item_index(&child.ref_path, "tables")?))
+            .collect(),
+        None => item_index(path, "tables")
+            .and_then(|index| doc.tables.get(index))
+            .into_iter()
+            .collect(),
+    }
 }
 
 /// The `data:` URI carrying `image`'s bytes, when they can be reached.
@@ -601,13 +673,11 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
 /// The GitHub-flavoured pipe table for `table`, shared with the text writer:
 /// the two formats differ in every markup *around* a table but never in which
 /// cell holds what. A table with no rows or no columns has no table to write.
-pub(crate) fn pipe_table(table: &TableItem) -> Option<String> {
-    pipe_table_with(table, |_| String::new())
-}
-
-/// The same table, with whatever each cell holds besides its words written into
-/// the cell after them: a cell with pictures shows them inline, where a reader
-/// of the table meets them, rather than as blocks beside it.
+///
+/// `extra` writes whatever each cell holds besides its words into the cell after
+/// them — a picture where a reader of the table meets it rather than as a block
+/// beside the table, and a nested table's own cells, which neither format can
+/// put inside a cell as a table.
 pub(crate) fn pipe_table_with(
     table: &TableItem,
     extra: impl Fn(&pdfextractor_core::TableCell) -> String,
@@ -1207,6 +1277,7 @@ mod tests {
             column_header: header,
             row_header: false,
             pictures: Vec::new(),
+            tables: Vec::new(),
         };
         b.add_table_grid(&GridTable {
             num_rows: 3,
@@ -1287,6 +1358,7 @@ mod tests {
                     column_header: true,
                     row_header: false,
                     pictures: Vec::new(),
+                    tables: Vec::new(),
                 },
                 GridCell {
                     text: String::new(),
@@ -1303,6 +1375,7 @@ mod tests {
                         dpi: Some(96),
                         uri: "demo_images/pg1_1.png".into(),
                     }],
+                    tables: Vec::new(),
                 },
             ],
         });
@@ -1315,6 +1388,75 @@ mod tests {
         assert!(
             line.starts_with("| Before") && line.contains("![Image](demo_images/pg1_1.png)"),
             "the picture is not in its cell: {md}"
+        );
+    }
+
+    /// A table written inside a cell is the cell's content, so the cell holds
+    /// it — and Markdown, which has no table in a cell, flattens its cells'
+    /// words into the pipe cell after the cell's own, as Docling's export does,
+    /// rather than writing the nested table as a second table of the page.
+    #[test]
+    fn a_table_a_cell_holds_is_flattened_into_the_cell() {
+        let mut b = DocumentBuilder::new("demo");
+        b.add_table_grid(&GridTable {
+            num_rows: 1,
+            num_cols: 2,
+            cells: vec![
+                GridCell {
+                    text: "Outer".into(),
+                    start_row: 0,
+                    start_col: 0,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                    tables: vec![GridTable {
+                        num_rows: 1,
+                        num_cols: 2,
+                        cells: vec![
+                            GridCell {
+                                text: "inner one".into(),
+                                start_row: 0,
+                                start_col: 0,
+                                row_span: 1,
+                                col_span: 1,
+                                column_header: true,
+                                row_header: false,
+                                pictures: Vec::new(),
+                                tables: Vec::new(),
+                            },
+                            GridCell {
+                                text: "inner two".into(),
+                                start_row: 0,
+                                start_col: 1,
+                                row_span: 1,
+                                col_span: 1,
+                                column_header: true,
+                                row_header: false,
+                                pictures: Vec::new(),
+                                tables: Vec::new(),
+                            },
+                        ],
+                    }],
+                },
+                GridCell {
+                    text: "Right".into(),
+                    start_row: 0,
+                    start_col: 1,
+                    row_span: 1,
+                    col_span: 1,
+                    column_header: true,
+                    row_header: false,
+                    pictures: Vec::new(),
+                    tables: Vec::new(),
+                },
+            ],
+        });
+        let md = render(&b.build());
+        assert_eq!(
+            md, "| Outer inner one inner two | Right |\n|---------------------------|-------|\n",
+            "the nested table is not part of its cell"
         );
     }
 
