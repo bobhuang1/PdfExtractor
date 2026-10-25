@@ -17,6 +17,13 @@ holds, each in a paragraph of its own:
   angle, a `v:shadow on="t"` with an offset and an opacity, and a `v:stroke`
   `endarrow` on a `v:line` — the three ways an autoshape is more than the flat
   box a reader that stopped at `fillcolor` would paint;
+* a focused ramp, `120 × 60` pt, whose `focus="50%"` is VML's band: the second
+  colour sits at the middle of the blend and the first at both ends, which is
+  not the left-to-right ramp a reader that ignored `focus` would paint;
+* a focus-sized radial fill, `80 × 80` pt, whose `focussize="50%,50%"` holds the
+  first colour flat across a disc half the shape's width before the ramp runs
+  out to the far edge — a reader that only knew a point focus would blend every
+  pixel from the centre;
 * a Word horizontal rule (`o:hr`), which is a paragraph's line and not a
   picture, so the reader must leave it out;
 * the words before and after, so a test can hold the text to them.
@@ -38,9 +45,10 @@ to Word in the first place: a `v:textpath` with no shapetype behind it has no
 outline to run along, and a `v:group` whose children sit outside its
 `coordsize` is painted somewhere else.
 
-The rest of the package — styles, settings, font table, theme — is the export's,
-and the timestamps are fixed so a regenerated package is byte-for-byte the
-committed one.
+The rest of the package — styles, settings, font table, theme — is the export's;
+its timestamps are fixed and its document statistics dropped, since LibreOffice
+recounts them differently between runs of the same shapes, so a regenerated
+package is byte-for-byte the committed one.
 """
 
 from pathlib import Path
@@ -97,6 +105,27 @@ GRADIENT = """<w:pict>
       </v:rect>
     </w:pict>"""
 
+# A focused ramp: `focus` is a percentage of the blend's middle, so 50% puts the
+# second colour there and the first at both ends — a band, not a one-way ramp.
+FOCUSED_RAMP = """<w:pict>
+      <v:rect style="position:absolute;left:0;width:120pt;height:60pt"
+              stroked="f">
+        <v:fill type="gradient" color="#ff0000" color2="#0000ff" angle="0"
+                focus="50%"/>
+      </v:rect>
+    </w:pict>"""
+
+# A focus-sized radial fill: `focussize` is the region the first colour fills, as
+# a percentage of the shape, so 50% on this 80 pt box is a 40 pt disc of flat
+# colour and the ramp runs from its edge to the frame's.
+FOCUSED_RADIAL = """<w:pict>
+      <v:rect style="position:absolute;left:0;width:80pt;height:80pt"
+              stroked="f">
+        <v:fill type="gradientRadial" color="#c0392b" color2="#2f6db5"
+                focusposition="0.5,0.5" focussize="50%,50%"/>
+      </v:rect>
+    </w:pict>"""
+
 # A shadow: the shape's silhouette offset down and right and laid down under it.
 SHADOW = """<w:pict>
       <v:rect style="position:absolute;width:80pt;height:40pt"
@@ -148,6 +177,8 @@ def vml_document(document: str) -> str:
         paragraph(GRADIENT),
         paragraph(SHADOW),
         paragraph(ARROW),
+        paragraph(FOCUSED_RAMP),
+        paragraph(FOCUSED_RADIAL),
         paragraph(RULE),
         prose("After the shapes."),
         f"    {section}",
@@ -174,8 +205,27 @@ def main() -> None:
     parts["word/document.xml"] = vml_document(document).encode("utf-8")
 
     # A fixed timestamp keeps a regenerated package identical to the committed
-    # one, so a change in the file is a change in the fixture.
+    # one, so a change in the file is a change in the fixture. LibreOffice writes
+    # the save time into the core properties as well as the zip entries, so that
+    # is pinned to the same instant.
     stamp = (2020, 1, 1, 0, 0, 0)
+    core = parts["docProps/core.xml"].decode("utf-8")
+    core = re.sub(
+        r'(<dcterms:modified xsi:type="dcterms:W3CDTF">)[^<]*(</dcterms:modified>)',
+        r"\g<1>2020-01-01T00:00:00Z\g<2>",
+        core,
+    )
+    parts["docProps/core.xml"] = core.encode("utf-8")
+    # Its document statistics are not stable between exports of the same shapes,
+    # and nothing here reads them, so they are dropped rather than pinned to a
+    # number that would be a lie about the file.
+    app = parts["docProps/app.xml"].decode("utf-8")
+    app = re.sub(
+        r"<(Pages|Words|Characters|CharactersWithSpaces|Paragraphs)>[^<]*</\1>",
+        "",
+        app,
+    )
+    parts["docProps/app.xml"] = app.encode("utf-8")
     with zipfile.ZipFile(DOCX, "w", zipfile.ZIP_DEFLATED) as package:
         for name, data in parts.items():
             info = zipfile.ZipInfo(name, date_time=stamp)

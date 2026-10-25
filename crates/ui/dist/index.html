@@ -33,7 +33,9 @@
             <p class="hint" id="formats">Asking the CLI which formats it reads…</p>
             <!-- The binary those formats were asked of, resolved again with the
                  answer: a `PDFEXTRACTOR_CLI` pointed elsewhere is named here
-                 after "Ask again" rather than leaving the first path on screen. -->
+                 after "Ask again" rather than leaving the first path on screen.
+                 A run resolves it for itself too, and its start names that path
+                 here, so the line follows the binary the run was actually given. -->
             <p class="hint cli-line" id="cli-line">
               Binary <code id="cli-program">resolving…</code>
             </p>
@@ -47,12 +49,19 @@
           </button>
         </div>
         <!-- The same families the native File… chooser groups its filters by,
-             in the CLI's order. Filled from the answer above, never written here. -->
-        <dl
-          class="format-families"
-          id="format-families"
-          aria-label="Accepted formats by family"
-        ></dl>
+             in the CLI's order. Filled from the answer above, never written here.
+             Folded away so the form stays short — the line above already says how
+             many formats and families there are — and shown only once there is an
+             answer to open, since a disclosure with nothing under it is a heading
+             with no list behind it. -->
+        <details class="format-details hidden" id="format-details">
+          <summary>Formats by family</summary>
+          <dl
+            class="format-families"
+            id="format-families"
+            aria-label="Accepted formats by family"
+          ></dl>
+        </details>
       </section>
 
       <section class="field">

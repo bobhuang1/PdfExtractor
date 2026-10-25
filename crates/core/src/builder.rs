@@ -135,6 +135,13 @@ pub struct GridCell {
     /// deciding it, because the two sources disagree and both are right about
     /// themselves.
     pub row_header: bool,
+    /// The pictures the cell holds, in the order the source states them.
+    ///
+    /// A cell with any is a rich cell: its pictures are placed in a group under
+    /// the table (Docling's own shape for a cell that holds an item), and the
+    /// cell references it — so the pictures belong to the cell rather than
+    /// standing beside the table in the body.
+    pub pictures: Vec<PictureData>,
 }
 
 pub struct DocumentBuilder {
@@ -861,8 +868,11 @@ impl DocumentBuilder {
     ) -> Ref {
         let data = table_data(table);
         let idx = self.doc.tables.len();
+        let table_ref = Ref {
+            ref_path: format!("#/tables/{idx}"),
+        };
         self.doc.tables.push(TableItem {
-            self_ref: format!("#/tables/{idx}"),
+            self_ref: table_ref.ref_path.clone(),
             parent: Some(Ref {
                 ref_path: parent.to_string(),
             }),
@@ -872,8 +882,63 @@ impl DocumentBuilder {
             prov,
             data,
         });
-        Ref {
-            ref_path: format!("#/tables/{idx}"),
+        self.place_cell_pictures(idx, table, layer);
+        table_ref
+    }
+
+    /// Put the pictures a table's cells hold under the table, and make each of
+    /// those cells a rich cell that references them.
+    ///
+    /// Docling's `RichTableCell` references a document item, and its own ODF
+    /// reader answers with one `unspecified` group per rich cell holding that
+    /// cell's content — cumulative text and pictures alike. The same shape is
+    /// used here: the group's parent is the table and the table lists the group
+    /// as a child (Docling refuses a rich cell whose item has another parent or
+    /// is not one of the table's children), and every picture is a child of the
+    /// group with no provenance, because a Word cell is flow content with no
+    /// page rectangle of its own.
+    fn place_cell_pictures(&mut self, table_idx: usize, table: &GridTable, layer: &str) {
+        let table_ref = Ref {
+            ref_path: format!("#/tables/{table_idx}"),
+        };
+        for (cell_index, cell) in table.cells.iter().enumerate() {
+            if cell.pictures.is_empty() {
+                continue;
+            }
+            let group_index = self.doc.groups.len();
+            let group = Ref {
+                ref_path: format!("#/groups/{group_index}"),
+            };
+            self.doc.groups.push(Group {
+                self_ref: group.ref_path.clone(),
+                parent: Some(table_ref.clone()),
+                children: Vec::new(),
+                content_layer: layer.to_string(),
+                name: format!(
+                    "rich_cell_group_{table_idx}_{}_{}",
+                    cell.start_col, cell.start_row
+                ),
+                label: "unspecified".to_string(),
+            });
+            for data in &cell.pictures {
+                let picture = self.push_picture_at(
+                    "picture",
+                    Vec::new(),
+                    Some(data.clone()),
+                    layer,
+                    &group.ref_path,
+                );
+                self.doc.groups[group_index].children.push(picture);
+            }
+            // The table lists the group, which is what the cell references:
+            // Docling looks the cell's `ref` up among the table's own children
+            // and refuses the document when it is missing there.
+            if let Some(table) = self.doc.tables.get_mut(table_idx) {
+                table.children.push(group.clone());
+                if let Some(cell) = table.data.table_cells.get_mut(cell_index) {
+                    cell.reference = Some(group);
+                }
+            }
         }
     }
 
@@ -979,6 +1044,7 @@ fn grid_from_rows(rows: &[Vec<String>]) -> GridTable {
                 col_span: 1,
                 column_header: r == 0,
                 row_header: c == 0 && r > 0,
+                pictures: Vec::new(),
             });
         }
     }
@@ -1009,6 +1075,7 @@ fn table_data(table: &GridTable) -> TableData {
                 row_header: cell.row_header,
                 row_section: false,
                 bbox: None,
+                reference: None,
             }
         })
         .collect();

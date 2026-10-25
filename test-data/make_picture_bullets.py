@@ -27,8 +27,9 @@ drawn at the size of the line it opens.
 
 Neither office library can place a picture bullet, so both packages are written
 with the pictures in place and then completed by hand: the media parts, the
-relationships naming them, the content-type declaration for the drawing's
-extension, and the bullet element in the markup. Regenerate with:
+relationships naming them, the content-type declaration for each extension that
+is added (the deck the library writes declares no picture type it did not use),
+and the bullet element in the markup. Regenerate with:
 
     ~/.venvs/pdfextractor-docling/bin/python test-data/make_picture_bullets.py
 
@@ -221,12 +222,21 @@ def next_relationship_id(rels: str) -> str:
     return f"rId{max(used, default=0) + 1}"
 
 
-def declare_svg_type(parts: dict[str, bytes]) -> None:
+def declare_media_types(parts: dict[str, bytes]) -> None:
+    """Declare each extension the media parts added here are named by.
+
+    A part whose extension no `[Content_Types].xml` entry names has no media
+    type, and is a file in the ZIP rather than a picture the presentation holds,
+    however lenient a reader is about it. The deck the library writes declares
+    only the extensions it drew with, so both of these are added here.
+    """
     types = parts["[Content_Types].xml"].decode("utf-8")
-    if 'Extension="svg"' not in types:
-        types = types.replace(
-            "</Types>", '<Default Extension="svg" ContentType="image/svg+xml"/></Types>'
-        )
+    for extension, mime in (("png", "image/png"), ("svg", "image/svg+xml")):
+        if f'Extension="{extension}"' not in types:
+            types = types.replace(
+                "</Types>",
+                f'<Default Extension="{extension}" ContentType="{mime}"/></Types>',
+            )
     parts["[Content_Types].xml"] = types.encode("utf-8")
 
 
@@ -282,7 +292,7 @@ def write_pptx() -> None:
     parts["ppt/media/bullet-fallback.png"] = fallback_png()
     parts["ppt/media/bullet.svg"] = SVG.read_bytes()
     parts["ppt/media/star.png"] = raster_png()
-    declare_svg_type(parts)
+    declare_media_types(parts)
 
     drawn = (
         f'<a:buBlip><a:blip r:embed="{fallback_rel}"><a:extLst>'

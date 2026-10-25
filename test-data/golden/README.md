@@ -703,9 +703,6 @@ The comparison is about what the reference saw, so it does not force us to
   title under the `cx:` namespace; Docling reads `c:title` only. We read both,
   so `chartex.docx` reports its box-and-whisker and sunburst titles as captions
   and Docling does not. Removing them to match the reference would lose content.
-* **A `.doc`'s stored field results.** LibreOffice evaluates `PAGE` and `DATE`
-  while converting; we report what the file stores, so our footer says `Page 2`
-  where the reference says the page number of the rendering.
 * **Equations at the edge of a DOCX paragraph.** Docling splits them out and leaves an
   empty text item behind; we split them out and leave nothing (bug 47).
 * **A TeX font's glyph names.** The names a Computer Modern font uses (`nabla`,
@@ -716,6 +713,19 @@ The comparison is about what the reference saw, so it does not force us to
   page draws it with, so `math_gan.pdf` holds 13 `}` to the reference's 4.
 
 ## Known limits this comparison measures
+
+* **A `.doc`'s field results are the conversion's, not the file's.** A `.doc`
+  read through the bridge is a `.docx` LibreOffice wrote, and LibreOffice
+  evaluates the `PAGE`, `DATE` and `FILENAME` fields while it writes it, exactly
+  as Docling's own `.doc` conversion does. So the two readings agree about the
+  footer's page number and the document's name where the built-in reader (a
+  machine without LibreOffice) reports what the file stores instead — `Page 2`,
+  `4/26/2006`, the name the document was authored under. One consequence is
+  measured rather than asserted: the reference's footer holds the day *its*
+  conversion ran, so `FloatingPictures.doc`'s character agreement moves with the
+  calendar by up to 0.03pp (99.1620% on a day whose digits the reference also
+  has, 99.1475% on one that adds a `4`). See `progress.md` for the whole
+  accounting.
 
 * **TeX math glyphs in PDFs, and what the *reference* does with them.** The glyph codes
   are the font program's, and we read them (above) — which is also why agreement now

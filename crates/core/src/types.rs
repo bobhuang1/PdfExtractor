@@ -303,6 +303,16 @@ pub struct TableCell {
     pub row_section: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bbox: Option<BoundingBox>,
+    /// The item this cell holds when it holds more than words.
+    ///
+    /// Docling's `RichTableCell` is a cell that references a document item — a
+    /// group of pictures, a paragraph — instead of only carrying text, and the
+    /// field is how it says so. A Word cell with a picture in it is such a
+    /// cell: the picture is the cell's, held in a group under the table, rather
+    /// than an item of the body standing beside the table. A cell without one
+    /// writes no `ref` and reads back as the plain `TableCell` it is.
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Ref>,
 }
 
 /// Picture item

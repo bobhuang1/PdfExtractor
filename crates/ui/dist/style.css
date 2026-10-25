@@ -331,6 +331,19 @@ main.comparing {
   font-size: 12px;
 }
 
+/* The families folded away behind a disclosure, so the form stays short: the line
+   above says how many formats there are, and the list is a reference to open when
+   a file is turned away rather than something to scroll past before choosing one. */
+.format-details {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.format-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
 /* The formats under the same headings the native chooser groups by. The heading
    column is as wide as the longest family name, so the formats line up rather
    than each row finding its own left edge. */
@@ -338,7 +351,6 @@ main.comparing {
   display: grid;
   gap: 3px;
   margin: 6px 0 0;
-  font-size: 12px;
 }
 
 .format-family {

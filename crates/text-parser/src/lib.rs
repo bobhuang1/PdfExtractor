@@ -327,7 +327,7 @@ pub fn decode(bytes: &[u8]) -> String {
 /// UTF-16 with NULs in every other byte is common for Windows-generated files
 /// that carry no BOM.
 fn looks_like_utf16(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || bytes.len() % 2 != 0 {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
         return false;
     }
     let sample = &bytes[..bytes.len().min(64)];
@@ -337,12 +337,14 @@ fn looks_like_utf16(bytes: &[u8]) -> bool {
 
 fn utf16(bytes: &[u8], big_endian: bool) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| {
             if big_endian {
-                u16::from_be_bytes([c[0], c[1]])
+                u16::from_be_bytes(*c)
             } else {
-                u16::from_le_bytes([c[0], c[1]])
+                u16::from_le_bytes(*c)
             }
         })
         .collect();

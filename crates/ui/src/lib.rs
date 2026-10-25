@@ -505,6 +505,13 @@ pub fn outcome(cancelled: bool, status: Option<ExitStatus>) -> Outcome {
 #[serde(rename_all = "camelCase")]
 pub struct Started {
     pub run: u64,
+    /// The binary this run started: the path resolved when the run began.
+    ///
+    /// The line beside the formats names the binary a run would use now, and
+    /// the environment can have moved since the page loaded or last asked. A
+    /// run resolves it again, so this is the path it was actually given — what
+    /// the page names while the run is on screen.
+    pub program: String,
     /// The exact command line, so it can be reproduced by hand.
     pub command: String,
 }
@@ -1537,9 +1544,10 @@ mod tests {
 
         let started = Started {
             run: 1,
+            program: "pdfextractor-cli".to_string(),
             command: "pdfextractor-cli --input a".to_string(),
         };
-        assert_eq!(keys(&json(&started)), vec!["command", "run"]);
+        assert_eq!(keys(&json(&started)), vec!["command", "program", "run"]);
 
         let plan = PlanLine {
             run: 1,

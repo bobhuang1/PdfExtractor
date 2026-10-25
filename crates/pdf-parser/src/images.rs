@@ -42,7 +42,7 @@ pub fn encode_cmyk(width: u32, height: u32, samples: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in samples.chunks_exact(4).take(pixel_count) {
+    for chunk in samples.as_chunks::<4>().0.iter().take(pixel_count) {
         let (c, m, y, k) = (chunk[0], chunk[1], chunk[2], chunk[3]);
         // Naive CMYK -> RGB; PDF CMYK is device-dependent, so exactness is impossible.
         rgb.push(((255 - c) as u16 * (255 - k) as u16 / 255) as u8);

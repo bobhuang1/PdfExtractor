@@ -24,7 +24,7 @@ layout analysis, Docling export — is implemented here.
 | PDF pictures | ✅ raster images extracted with their true placement box; **vector-only figures** detected for papers that contain no image at all |
 | **OCR for scanned pages** | ✅ works (Tesseract, wired into the pipeline) — languages chosen with `--ocr-lang`, page segmentation with `--psm`, and a page's own **`/Rotate` honoured**: the bitmap is turned with the page before recognition, so a scan captured sideways comes back upright, with its boxes in the displayed page's space. A scan with **nothing saying which way up it is** — no `/Rotate`, no EXIF tag, merely pixels on their side — is **found and turned upright before recognition**: Tesseract reads the page in its stored, half and (when the stored reading is weak) quarter turns, and the page is turned only when the other reading is clearly better |
 | **Plain images** | ✅ works — one image is one page, in PNG, JPEG, TIFF, BMP, WebP, GIF or JPEG 2000. The page is the upright pixel grid at the resolution the file declares (PNG `pHYs`, JPEG JFIF/EXIF, TIFF `XResolution`, BMP pixels per metre; 72 dpi — one pixel per point — when it declares none, which is what a WebP gets, having no resolution field at all, and what a GIF gets, its descriptor stating a pixel aspect ratio rather than a density; a JP2 states its own in a capture-resolution box (`resc`, in samples per metre), and one that states none gets the same default; a bare JPEG 2000 codestream (`.j2c`, `.j2k`, `.jpc`, `.jpf`) has no container to hold one, so its page is the grid its `SIZ` marker states at that same 72 dpi default — and which spelling a JPEG 2000 is comes from its first bytes, a signature box or the codestream's start marker, so a `.jpf` holding a container is placed by the container's boxes), and `origin.mimetype` is the image's own type rather than a PDF's. A **GIF** or an **animated WebP** is a page per frame: the logical screen its descriptor states, or the `ANIM` canvas a WebP states, is the page's size, and every frame of an animation is a page a reader turns — a hundred-frame animation is a hundred pages, each frame decoded by this reader (composited on the screen the way a player shows it, and laid on white where it leaves the screen untouched) and recognised on its own. A **TIFF** is a page per image file directory, which is how a scanner writes a batch: a three-sheet scan is three pages, each measured from its own grid at the file's declared resolution — the sheets need not be the same size — turned upright by its own directory's orientation tag, so one sideways sheet does not turn the batch with it, and recognised on its own pixels. A camera's **EXIF orientation** is honoured: the page is the grid the tag describes and the pixels are turned before recognition, so a phone held sideways is read upright. A file with **no tag at all** is read to find its own orientation: a sideways or upside-down page is detected from the pixels and turned upright before recognition, and the page size and every line box are measured on the upright grid. An image has no text layer, so the page goes straight into OCR: Tesseract's lines are mapped from pixels into points and grouped by the same layout pass a scanned PDF uses. **A photographed-page corpus scores the reading** — eight synthetic photos (skew, uneven light, softness, one tagged sideways, one sideways and one upside down with no tag) with ground truth, scored by character and word accuracy and held to floors: see [OCR quality](#ocr-quality-on-photographed-pages) |
-| **DOCX** | ✅ works — paragraphs, headings, lists with their real bullet/number and level (`numbering.xml`, incl. `w:lvlOverride` restarts and relabels), table grids, embedded images (incl. headers/footers,and a picture inside a table cell, which stands just before the table it belongs to because the cell itself holds the words) — a PNG or a JPEG arriving as itself, and every other raster encoding a package can carry (BMP, TIFF, GIF, WebP, JPEG 2000) decoded and written out as PNG, which is the one type Docling's own Word reader ever leaves a picture in, an SVG **drawn into a PNG** at the frame the picture is placed in, because a drawing is not an encoding anyone downstream can show — fitted by the drawing's own `preserveAspectRatio` (by default `xMidYMid meet`, so a frame of other proportions keeps the drawing's shape with transparent margins rather than squashing it; `none` stretches, `slice` covers and crops, and every alignment is honoured) — and a picture Word states as an SVG beside a PNG fallback is taken from its `asvg:svgBlip` drawing, not the raster — a shape whose fill is a picture is that picture too, the drawing when its fill states one — **picture bullets** (`w:numPicBullet` named by `w:lvlPicBulletId`) are pictures of their own, ahead of the item they open and at the frame the list draws them in, the drawing played when the bullet states an SVG, and the item's words carry no glyph — with their **EXIF orientation** applied, **Office Math equations** (one item per equation), **chart titles as captions**, footnotes and endnotes, tabs, **vector EMF/WMF drawings played into PNGs** (Word's own metafiles and the previews of embedded objects), and **shapes painted into PNGs** — an autoshape, a group of them, a WordArt or a `wps:wsp` becomes a picture at the size the file gives it, whether the file states it in VML (`w:pict`) or in DrawingML (`w:drawing`), where the drawing has no image part behind it; a shape's colours come from the package's theme where it names a theme slot, its gradient fill is ramped across it (VML's `v:fill type="gradient"` or DrawingML's `a:gradFill`), its shadow lands under it, and a line's arrowheads are drawn at its ends |
+| **DOCX** | ✅ works — paragraphs, headings, lists with their real bullet/number and level (`numbering.xml`, incl. `w:lvlOverride` restarts and relabels), table grids, embedded images (incl. headers/footers, and a picture inside a table cell, which the cell holds: the cell becomes a Docling `RichTableCell` referencing a group under the table, and the group's picture is the cell's rather than an item standing beside the table) — a PNG or a JPEG arriving as itself, and every other raster encoding a package can carry (BMP, TIFF, GIF, WebP, JPEG 2000) decoded and written out as PNG, which is the one type Docling's own Word reader ever leaves a picture in, an SVG **drawn into a PNG** at the frame the picture is placed in, because a drawing is not an encoding anyone downstream can show — fitted by the drawing's own `preserveAspectRatio` (by default `xMidYMid meet`, so a frame of other proportions keeps the drawing's shape with transparent margins rather than squashing it; `none` stretches, `slice` covers and crops, and every alignment is honoured) — and a picture Word states as an SVG beside a PNG fallback is taken from its `asvg:svgBlip` drawing, not the raster — a shape whose fill is a picture is that picture too, the drawing when its fill states one — **picture bullets** (`w:numPicBullet` named by `w:lvlPicBulletId`) are pictures of their own, ahead of the item they open and at the frame the list draws them in, the drawing played when the bullet states an SVG, and the item's words carry no glyph — with their **EXIF orientation** applied, **Office Math equations** (one item per equation), **chart titles as captions**, footnotes and endnotes, tabs, **vector EMF/WMF drawings played into PNGs** (Word's own metafiles and the previews of embedded objects), and **shapes painted into PNGs** — an autoshape, a group of them, a WordArt or a `wps:wsp` becomes a picture at the size the file gives it, whether the file states it in VML (`w:pict`) or in DrawingML (`w:drawing`), where the drawing has no image part behind it; a shape's colours come from the package's theme where it names a theme slot, its gradient fill is ramped across it (VML's `v:fill type="gradient"` or DrawingML's `a:gradFill`), its shadow lands under it, and a line's arrowheads are drawn at its ends |
 | **XLSX** | ✅ works — a worksheet is a page whose units are cells, the shape Docling's own XLSX backend produces: a `sheet` group per worksheet holding the worksheet's tables (one per connected block of cells, an empty row or column separating two), **merged ranges** as `row_span`/`col_span` with the covered slots not written at all, shared and inline strings, numbers, booleans, cached formula results, and **dates as the text a reader sees** (a serial with a date format is `2024-03-05 00:00:00`, not `45356`) — plus the **pictures the sheet draws**: each worksheet's own drawing part is followed through its relationships to the media parts, and every picture is placed on the cells its anchor names and written beside the JSON under the same rule a Word or PowerPoint package's is (a PNG or a JPEG as itself, anything else re-encoded as PNG), and **the charts the sheet draws**: a chart's frame names a chart part, not a media part, so each chart is read as the data it plots — its family, the categories and series numbers, the title as a caption and no image — through the same reader a deck's charts go through, with a reference that carries no cache resolved against the workbook's own cells. A hidden worksheet stays on the `invisible` content layer |
 | **PPTX** | ✅ works — a slide is a page, measured in EMU at the deck's own size (`p:sldSz`), the shape Docling's own PPTX backend produces: a `chapter` group per slide holding the slide's items, each with the box its shape occupies — including **the shapes PowerPoint paints itself**: an autoshape, a connector or a group has no image part behind it, so it is drawn into a PNG at its own box, in the fill, line and theme colour the slide states (a text box with no fill and no line puts no ink down and is no picture, and a group is one picture rather than one per shape). The presets are the format's own library rather than a handful of boxes: the rounded and snipped rectangles, rings and frames, flowchart symbols, cylinders and cubes, arcs and brackets, and the bent and curved connectors are drawn from their stated geometry, with a **gradient fill** ramped across the shape, a **soft shadow** under it and an **arrowhead** of each kind at a line's ends. A text body is read paragraph by paragraph with its **runs** (bold, italic, underline, size), and a paragraph's bullet or number is resolved the way PowerPoint resolves it — paragraph, then shape, then layout, then master — so a body placeholder's lines are list items without anything being written on the slide, and an auto-numbered list counts itself. `graphicFrame` tables keep `gridSpan`/`rowSpan` with the covered slots not written at all, and a picture is the media part its slide's **relationship** names (not a guessed `image1.png`), written beside the JSON with its **EXIF orientation** applied, as PNG unless it is already a PNG or a JPEG — a BMP, a TIFF, a GIF, a WebP or a JPEG 2000 is decoded and re-encoded, and an SVG is drawn into a PNG at its frame — fitted by the drawing's own `preserveAspectRatio`, so the default `xMidYMid meet` letterboxes a frame of other proportions instead of stretching it, `none` stretches it, `slice` covers and crops it, and any alignment pins it — the `asvg:svgBlip` drawing when the picture carries one, which is how PowerPoint 2016 and later state it, rather than the PNG fallback beside it — and a shape **filled** with a picture is that picture too, at the shape's own frame, the drawing when its fill states one. A paragraph's **picture bullet** (`a:buBlip`) is a picture too: a square of the item's type size at the corner its words start from — a slide states no line boxes — with the drawing played when the bullet states one. A slide's **picture background** (`p:cSld/p:bg/p:bgPr/a:blipFill`) is not a shape in the tree and not a picture item: it is the page's `image`, written beside the JSON under the slide's name and covering the page, so a photographic backdrop is not lost with the shape tree. A hidden slide stays on the `invisible` content layer. A deck's own remarks are read too, on the **notes** layer rather than the slide's: its **speaker notes**, from the notes part the slide's relationship names (the body placeholder, read the way python-pptx reads a text frame), and its **comments**, each in a `comment_section` group of its own with the author, time and words the file records — the time read at PowerPoint's millisecond precision, so a bridged legacy deck and its native original state the same remark. A **chart** is read as the data it is: the chart part's caches are reconstructed into the picture's `tabular_chart` — series across the header row, categories down the first column, an omitted point left as a gap — classified by its family (`bar_chart`, `line_chart`, `pie_chart`, `scatter_chart`, `other_chart`), with the chart's title as its `caption` and no image, because a chart is a drawing of data rather than a picture file |
 | **Microsoft Works, WordPerfect, legacy Excel, legacy PowerPoint** (`.wps`, `.wp`, `.wks`, `.wdb`, `.wpd`, `.xls`, `.ppt`) | ✅ works when **LibreOffice** is installed — there is no published specification for the Works formats, so LibreOffice's own importer (libwps, libwpd) reads them and this tool reads what it writes (`.docx`/`.xlsx`/`.csv`/`.pptx`) with its own readers. A legacy `.ppt` is a compound file whose record stream nothing here reads; Impress writes the package the PPTX reader reads, so a legacy deck comes out as **slides, text, tables, pictures, speaker notes and comments**, with its media extracted beside the JSON like a native deck's and its comments saying exactly what the native deck's do (Impress writes their times with more fractional digits; the notes text does not notice). The fixture is the same deck as the native `q3_review.pptx`, and the test holds the **whole converted document** to the native one — pages, groups, every item, label, layer, word, table cell and picture, with only the package's own identity, Impress's re-laid-out boxes and its comment ids excluded, each for a stated reason. A second, one-slide pair (`comment_times.pptx` and `comment_times.ppt`) gives its comments **non-zero milliseconds**, so the notes layer's cut of a comment's time to PowerPoint's three fractional digits is proven through the bridge — the converted deck spells `09:15:12.125000000`, the native one `09:15:12.125`, and both must read the same — and that pair is held to the **same whole-document comparison**, by the same view: it is the second deck carried across the bridge field by field, so a difference the millisecond case would not notice (a title, a paragraph, a layer) fails there too. Either document keeps the **original file's name, MIME type and hash**: the conversion is how its words were reached, not what they are. A legacy `.xls` is bridged the same way, into the XLSX reader, and its pair (`ledger.xls` and `ledger.xlsx`, one workbook written as both) is held to the **same whole-document comparison**: every sheet, its layer, every table, cell, row and column span, cached formula result and date has to agree, with only the package's identity excluded — a workbook's geometry *is* its content, so the view removes nothing else. The hidden sheet crosses on the `invisible` layer, the merged ranges keep their spans with the slots they cover absent, and the formula's cached `15` is what a reader sees on both sides. Measured on libwps' own sample corpus: **38/40 Writer files, 24/26 spreadsheets, 2/2 databases**. Without LibreOffice the run stops with a message naming it and offering the re-save route |
@@ -108,7 +108,7 @@ on it.
 ```bash
 cargo build --workspace      # 0 warnings
 cargo test  --workspace      # 556 tests
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings   # no warnings
 
 # The compatibility suite, held to real Docling. The schema layer always runs;
 # pointing DOCLING_PY at a Python with docling-core installed adds the layer that
@@ -302,10 +302,15 @@ and so on. Both views are built from the answer's `families`, in the help's own
 order, so a reader added to the command line is offered and named by the window
 without an edit on that side. The chooser adds **All documents** first and then
 one filter per family, so a pick that knows what it wants is not scrolling one
-list of thirty-three extensions. The grouping is the CLI's own; the window
-invents no family name. A CLI older than the families prints only the flat list,
-and everything is shown and offered under one *Documents* heading rather than the
-window refusing what a run takes. A CLI that cannot be asked says why on that
+list of thirty-three extensions. The page's grouped list is folded under a
+*Formats by family* disclosure, so the form stays short — the line above already
+carries the count — and the families are there to open when a file is turned away
+rather than something to scroll past before choosing one. It appears only once
+the CLI has answered (a failure shows no empty disclosure), and a re-ask leaves
+it open or closed as the person left it. The grouping is the CLI's own; the
+window invents no family name. A CLI older than the families prints only the flat
+list, and everything is shown and offered under one *Documents* heading rather
+than the window refusing what a run takes. A CLI that cannot be asked says why on that
 same line, clears the old families with it, and leaves the chooser unfiltered,
 which is picking from no list rather than from a guessed one.
 
@@ -319,9 +324,12 @@ resolves the binary afresh — without reopening the window. The binary itself i
 named on the line under the formats (`Binary /path/to/pdfextractor-cli`, from
 `cli_program`), so a moved path is visible rather than inferred from a changed
 count; it is resolved with the same state the formats use and redrawn by the same
-re-ask. `--selftest` re-asks before it reports `formats=N`, `families="..."` and
-`cli="..."` — the *refresh's* count, headings and binary — so the round trip is
-checked end to end with the rest of the window.
+re-ask, and again when a run starts — the `conversion-started` event carries the
+path that run resolved for itself, so a binary moved since the last ask is named
+on the line rather than only in the command below it. `--selftest` re-asks before
+it reports `formats=N`, `families="..."` and `cli="..."` — the *refresh's* count,
+headings and binary, with the line then following the run's own start — so the
+round trip is checked end to end with the rest of the window.
 
 ### Markdown export
 
@@ -360,10 +368,13 @@ it (`--to md` alone writes no JSON) or on stdout with `-o -`. The rules:
   in a paragraph.
 - **Head facts become YAML front matter**: a page read from HTML keeps its
   description, canonical URL and Open Graph/Twitter cards beside the model; a
-  Markdown rendering of that page starts with `description`, `canonical` and a
-  `social` list of `key`/`content` records. The list, rather than a mapping, is
-  what keeps a repeated key and the order of an image and its width; the reader
-  puts those facts back beside the document, so writing it again keeps the head.
+  Markdown rendering of that page starts with a YAML front matter holding
+  whichever of them the page stated — `description`, `canonical`, and a `social`
+  list of `key`/`content` records — so a head that is cards alone gets cards
+  alone rather than an empty field invented for it. The list, rather than a
+  mapping, is what keeps a repeated key and the order of an image and its width;
+  the reader puts those facts back beside the document, so writing it again
+  keeps the head.
   A document with no head facts gets no front matter and its bytes are unchanged.
 - **Tables** are GitHub-flavoured pipe tables, padded to their columns. Merged
   cells are flattened — the spanning cell's text appears once, at its top-left
@@ -411,6 +422,10 @@ card line in order; the fixed-point gate reads it back and requires the same byt
 `images/Q3 chart & graph.gif`, the HTML golden writes
 `<img src="images/Q3 chart &amp; graph.gif">`, Markdown wraps the same path in `<…>`
 for the space, and the fixed-point gates re-read each spelling to the same name.
+Inside that wrapper the writer also escapes `<`, `>` and a backslash, which the
+angle form cannot hold otherwise; no golden carries a name with both a space and
+those characters, so a unit test in the writer
+(`a_picture_name_is_wrapped_and_escaped_at_once`) pins that spelling instead.
 A word processor's own file is pinned as
 well, in all four writers: `rtf_bitmap.rtf` is LibreOffice's export of a DOCX holding
 a small bitmap, so its heading, its paragraphs and the picture it embeds are held byte
@@ -938,17 +953,23 @@ test-data/
 ├── comment_times.pptx, comment_times.ppt    # comment-time bridge pair (make_comment_times.py)
 ├── ledger.xlsx, ledger.xls                  # workbook bridge pair (make_legacy_xls.py)
 ├── brief.docx, legacy_brief.doc             # document bridge pair (make_legacy_doc.py)
-├── vml_shapes.docx                          # VML shapes, WordArt, a gradient, a shadow, an arrow (make_vml_shapes.py)
+├── vml_shapes.docx                          # VML shapes, WordArt, gradients, a shadow, an
+│                                            #   arrow, and the focused and focus-sized fills
+│                                            #   (make_vml_shapes.py)
 ├── drawingml_shapes.docx                    # DrawingML shapes (make_drawingml_shapes.py)
 ├── shaded_deck.pptx                         # a gradient, a shadow and arrowheads
 │                                            #   (make_shaded_deck.py)
 ├── svg_blip_pictures.docx, .pptx            # an SVG stated as an svgBlip (make_svg_blip_pictures.py)
 ├── svg_embed_pictures.docx, .pptx           # the same document with the SVG as the picture's
 │                                            #   own part, LibreOffice's way (same script)
+├── svg_stretch_picture.docx                 # an SVG stating preserveAspectRatio="none" in a
+│                                            #   frame of other proportions (make_svg_stretch_docx.py)
 ├── mc_svg_pictures.docx, .pptx              # an SVG in an mc:Choice, VML/raster copy in
 │                                            #   mc:Fallback (make_mc_svg_pictures.py)
-├── mc_fallback_pictures.docx, .pptx         # pictures stated only in mc:Fallback, one in
-│                                            #   the body and one in a cell or group
+├── mc_fallback_pictures.docx, .pptx         # pictures stated only in mc:Fallback: the
+│                                            #   body's, a cell's, a nested table's cell's,
+│                                            #   a text box's and a header's in the DOCX,
+│                                            #   and the slide's and a group's in the PPTX
 │                                            #   (make_mc_fallback_pictures.py)
 ├── blip_fill_shapes.docx, .pptx             # shapes filled with a picture, SVG in the
 │                                            #   blip (make_blip_fill_shapes.py)
@@ -961,9 +982,14 @@ test-data/
 │                  #   the same bytes under the other name), the container under
 │                  #   `.jpf`, a three-frame
 │                  #   animation (`turning.gif`, make_animation_gif.py), the same
-│                  #   strip as an animated WebP (`turning.webp`,
-│                  #   make_animation_webp.py), and a three-sheet scanned batch
-│                  #   (`pages.tiff`, make_multipage_tiff.py)
+│                  #   strip as an animated WebP (`turning.webp`), the same
+│                  #   strip stored on its side with EXIF orientation 6
+│                  #   (`turning_turned.webp`, make_animation_webp.py), and two
+│                  #   three-sheet scanned
+│                  #   batches, upright and turned (`pages.tiff`,
+│                  #   `pages_turned.tiff`, make_multipage_tiff.py), and the
+│                  #   drawing the stretch fixture states (`stretch.svg`,
+│                  #   make_svg_stretch_docx.py)
 ├── real/          # corpus from other producers (see its README)
 └── golden/        # the docling-core schema, real Docling conversions, docling-core check
 docs/              # schema and format notes
@@ -1038,6 +1064,21 @@ Blocks are ordered top-to-bottom and, on a multi-column page, column by column. 
 real corpus this yields 2,180 text items and 66 tables, among them 8 titles, 183 section
 headers, 84 list items, 40 equations and 26 footnotes - where the parser alone produced one
 item per text run, in drawing order.
+
+A Word table cell can hold more than words. A picture a cell states is kept on the cell
+rather than left in the body beside the table: the builder places the cell's pictures in
+an `unspecified` group whose parent is the table, lists that group among the table's
+children, and points the cell's `ref` at it — Docling's own `RichTableCell`, the shape
+its ODF reader writes for a cell holding an item. A cell with no picture writes no `ref`
+and stays the plain `TableCell` it was. The picture has no provenance, because a Word
+cell is flow content with no page rectangle of its own. Both writers follow the cell:
+Markdown puts the image inside its pipe row and HTML inside its `<td>`/`<th>`, so a
+picture that is the cell's is not written as a block beside the table. A vertically
+merged cell is one cell: a picture its continuation row states travels to the cell that
+opened the merge, which is the cell written to the grid, so being stated in the second
+row of a merge does not lose it. A sheet's cell and a slide's table cell still hold text
+only — their pictures are anchored on the page, not drawn in a cell — so neither is a
+rich cell.
 
 ## Pictures and equations
 
@@ -1134,14 +1175,16 @@ for byte, the `asvg:svgBlip` extension naming it, and a raster it drew from the 
 beside it — both reached and declared. Its second picture, whose choice names a drawing
 the package does not hold, is dropped rather than shown from its orange fallback, so this
 re-save says nothing about the case a fallback exists for; the test states that, and
-fails if a later LibreOffice keeps it. The `mc_fallback_pictures` pair states two
-pictures only in an `mc:Fallback`, with no `mc:Choice` at all — one in the body, and one
-inside a container a reader has to walk into, a table's cell in the DOCX and a group on
-the slide — and the application reads both: its DOCX export keeps an `mc:Fallback` branch
-for each (now with a choice beside it) whose `v:imagedata` still names the picture, the
-cell's still written inside the cell, while its PPTX export writes each fallback as a
-`p:pic`, the group's inside its own `p:grpSp`. Either way both 60 × 36 orange rasters are
-in the re-saved package, declared and reached. The `svg_embed_pictures` pair says the same thing
+fails if a later LibreOffice keeps it. The `mc_fallback_pictures` pair states its
+pictures only in an `mc:Fallback`, with no `mc:Choice` at all — the body's, and in the
+DOCX a table's cell's, a cell's in a table nested in another cell, a text box's and a
+header's; the slide's and a group's in the PPTX — and the application reads all of them:
+its DOCX export keeps an `mc:Fallback` branch for each (now with a choice beside it)
+whose `v:imagedata` still names the picture, the cell's inside the cell and the text
+box's inside the box, and it writes the header's into the two header parts it makes for
+the section; its PPTX export writes each fallback as a `p:pic`, the group's inside its
+own `p:grpSp`. Either way the 60 × 36 orange rasters are in the re-saved package,
+declared and reached. The `svg_embed_pictures` pair says the same thing
 in the application's own spelling — the drawing is the picture's media part, its
 `r:embed`, with no raster beside it — and it comes back the same way: that drawing copied
 through byte for byte and a raster drawn from it beside it, both reached and declared.
@@ -1187,11 +1230,14 @@ under the PNG that replaces the WebP. The `mc_svg_pictures` pair comes back one 
 short too, for the application's own reason: the drawing is the picture before and after
 the re-save, the raster beside it a part rather than a second picture, and the picture
 whose choice named a missing part is gone with it. The `mc_fallback_pictures` pair comes
-back two pictures before and two after: the fallbacks' orange rasters, at their 60 × 36
-grid and with their pixels, whether the application kept them as fallback branches
-(DOCX, the cell's still in its cell) or as the slide's pictures (PPTX, the group's still
-in its group) — the picture inside the container is read by both, and the reader places
-it where the container stands, between the sentences that frame it. The `svg_embed_pictures` pair comes
+back picture for picture: the fallbacks' orange rasters at their 60 × 36 grid, with their
+pixels, whether the application kept them as fallback branches (DOCX, the cell's still in
+its cell, the text box's in its box) or as the slide's pictures (PPTX, the group's still
+in its group). The DOCX's header picture is the one exception, and it is the
+application's: LibreOffice writes the header into two header parts, so this reader takes
+the header's picture twice, and the test allows exactly that one copy and holds it to the
+picture the fixture states. Every other picture is read by both, and the reader places
+it where its container stands, between the sentences that frame it. The `svg_embed_pictures` pair comes
 back picture for picture: one drawing before and one after, at the same 144 × 86 frame
 with byte-identical pixels, the fallback the application adds beside it again a part
 rather than a second picture. The Word-spelled SVG pair comes back as the same one
@@ -1232,6 +1278,21 @@ and holds the two JSON documents to equality, and the two HTML renders too. The 
 `binary_hash` is the one field that must differ, because the bytes do: if it did not, the
 test would be comparing a package with itself.
 
+A drawing states its own viewport too, and a frame need not share its proportions. The
+root's `preserveAspectRatio` decides how the drawing meets a frame of another shape: the
+default `xMidYMid meet` scales both axes alike, centres the drawing and leaves the rest
+transparent, while `none` scales each axis on its own so the drawing fills the frame.
+Every other SVG fixture here states no attribute, so they all ask the default;
+`test-data/svg_stretch_picture.docx` asks `none`, placing a 40 × 24 drawing split red on
+the left and blue on the right in a 2.5 × 0.5 in frame — five times as wide as it is tall,
+where the drawing is five to three. Read as the default fit, the drawing would be a third
+of the frame's width with 120 pixels of transparent margin at either side; read
+as stated, it is the whole 360 × 72 frame, red on the left half and blue on the right. One
+end-to-end test first holds the package to a drawing that states the fit it is about — a
+fixture that lost the attribute would otherwise pass by looking like a default fit — then
+converts it and holds the written PNG, 360 × 72 at 144 dpi, to the ink at both margins
+and both corners, which only the stretch puts there.
+
 A converter that keeps an older Word or PowerPoint happy states the picture the other
 way round as well: the drawing in an `mc:AlternateContent`'s `mc:Choice`, and in
 `mc:Fallback` the copy that application would have shown — a `w:pict` with a VML
@@ -1249,14 +1310,19 @@ fallback's pixels as a PNG at 60 × 36, with the sentences around them read once
 A converter can also state the picture only for an older reader: `mc:AlternateContent`
 with no `mc:Choice`, only `mc:Fallback`. The fallback is then the picture, not a copy
 beside one. `test-data/mc_fallback_pictures.docx` and `mc_fallback_pictures.pptx` carry
-two 60 × 36 orange rasters that way, each with a sentence before and after it — one in the
-body, and one inside a container the reader has to walk into, a table's cell in the DOCX
-and a group on the slide. One end-to-end test holds each package to that shape — two
-alternate contents, two fallbacks, no choice, one of them in the body and one in the
-container — then converts it to the two orange rasters at 60 × 36, with the container's
-picture read where the container stands; the re-save test asks LibreOffice to open it and
-records that both fallbacks survive, as branches in the DOCX (the cell's still in its
-cell) and as the slide's pictures in the PPTX (the group's still in its group).
+60 × 36 orange rasters that way, each with a sentence before and after it: in the body,
+and in the DOCX inside a table's cell, a cell of a table nested in another table's cell, a
+VML text box, and a header part — the last read as furniture — and on the slide inside a
+group. One end-to-end test holds each package to that shape — the fallback branches and no
+choice, the body's picture outside every container, and each container's picture inside
+it — then converts it to the orange rasters at 60 × 36 with each one read where its
+container stands. The DOCX-specific test follows the same picture through the nested
+table, the text box and the header: the two tables' cells are rich cells whose groups
+hold their pictures, the text box's picture stands in the body between its sentences,
+and the header's is furniture after the header's words. The re-save test asks LibreOffice
+to open both packages and records that every fallback survives — as branches in the DOCX
+(the cells' still in their cells, the text box's in its box, the header's in a header
+part) and as the slide's pictures in the PPTX (the group's still in its group).
 
 A picture can also be a shape's fill rather than a picture of its own: an `a:blipFill` in
 a `p:sp`'s or a `wps:wsp`'s properties names its media with an `a:blip`, and an SVG in
@@ -1328,6 +1394,16 @@ CLI writes one page per frame at that canvas's size, 72 dpi because WebP states 
 resolution. A still WebP is the one page it always was.
 `test-data/images/turning.webp` is the three-frame fixture, and one end-to-end test
 holds its conversion to three pages with each page's own words and no other's.
+An animation can carry an EXIF orientation tag as a still can, and the tag belongs
+to the file as the `ANIM` canvas does: every frame was stored the same way, so
+`turning_turned.webp` — the same three pages stored a quarter turn anticlockwise on
+a 160 × 480 canvas, with tag 6 saying to turn them back — is three upright 480 × 160
+pages, each with its own words and no other's. A reader that applied the tag to the
+frame it measured and not to the rest would report page one upright and pages two
+and three on their side; a second end-to-end test holds every page to the upright
+grid, to its own lines and to line boxes that are horizontal, which only upright
+pixels give. The reader reports the stored grid and the tag, so the turn is applied
+to the whole strip by the caller rather than to one frame by the parser.
 
 A TIFF is the same story in the shape a scanner writes: its chain of image file
 directories is a batch of sheets, and `image-parser`'s `tiff_frames` walks it, giving
@@ -1341,7 +1417,12 @@ as stored, and the first sheet's tag is never applied to the rest.
 shape, each saying its own name; one end-to-end
 test holds the conversion to three pages at those three sizes with each page showing its
 own words and no other's, and a single-directory TIFF is still the one page it always
-was.
+was. `test-data/images/pages_turned.tiff` is the same batch fed the other way up: its
+directories are tagged 1, 6 and 8, so the second and third sheets are stored a quarter
+turn each way and are 160 × 480 until their own tag is applied — every page is 480 × 160
+once turned. A second end-to-end test converts it with the recogniser on and holds each
+page to the upright grid, to its own two lines (never another page's) and to line boxes
+that are horizontal and inside the page, which is what only upright pixels give.
 
 A WebP and a JPEG 2000 are the other way round: this project decodes both, but Docling
 cannot name either in an `image` reference, so a package embedding one has to hand on a
@@ -1432,7 +1513,9 @@ alike — from its `a:moveTo`, `a:lnTo`, `a:cubicBezTo` and `a:close` commands.
 The preset library is the one Office states rather than a handful of boxes: rounded and
 snipped rectangles whose corners are treated one by one, rings and frames (a hole is
 a contour inside another, under the alternate fill rule), the mathematical signs,
-brackets and braces, stars of 12 to 32 points, the flowchart symbols, cylinders,
+brackets and braces, stars of 12 to 32 points, the flowchart symbols — a sort is a
+decision's diamond with its bar drawn as a line of the drawing, in the shape's line
+colour rather than its fill, so the two presets are not the same picture — cylinders,
 cubes and bevels — whose rim and front edges are lines of the drawing, stroked but
 never filled — the arrows with a bend or a notch, the cloud, heart, moon, sun, smiley
 and tear, the arcs, pies, chords and block arcs, and the straight, bent and curved

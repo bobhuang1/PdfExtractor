@@ -83,8 +83,11 @@ fn the_presets_are_drawn_as_their_own_outlines() {
     let pictures = pictures(&deck);
     assert_eq!(pictures.len(), PICTURES);
 
-    // The theme's accent fills each shape; its `lnRef` draws the line.
+    // The theme's accent fills each shape; its `lnRef` draws the line — the
+    // accent as the theme's line style shades it, so the two are not the same
+    // colour and a line inside a shape stays visible against its fill.
     let accent = [0x4F, 0x81, 0xBD, 255];
+    let line = [0x48, 0x7B, 0xB7, 255];
 
     // `round1Rect` rounds one corner, the top right: the box is fill out to
     // its other three corners.
@@ -152,6 +155,13 @@ fn the_presets_are_drawn_as_their_own_outlines() {
         lowest(140)
     );
 
+    // A sort is a decision's diamond with a bar across its middle: the bar is
+    // a line of the drawing, so it is the theme's line colour rather than the
+    // fill, and the diamond shows it.
+    let sort = &pictures[43];
+    assert_eq!(sort.get_pixel(90, 50).0, line, "the bar across the sort");
+    assert_eq!(sort.get_pixel(90, 25).0, accent, "the fill above the bar");
+
     // The moon's bite leaves its right side empty and its left side full.
     let moon = &pictures[58];
     assert!(white(moon.get_pixel(170, 50).0), "the bite");
@@ -214,7 +224,7 @@ fn the_presets_are_drawn_as_their_own_outlines() {
 
     // A circular arrow is a band with a gap rather than a disc.
     let circular = &pictures[53];
-    assert_eq!(circular.get_pixel(90, 6).0, accent, "the band");
+    assert_eq!(circular.get_pixel(90, 6).0, line, "the band's edge");
     assert!(white(circular.get_pixel(90, 50).0), "the hole");
 
     // A swoosh leaves its tail at the bottom left and sweeps up into the head

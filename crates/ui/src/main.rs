@@ -11,7 +11,9 @@
 //! asks, and [`refresh_input_formats`] asks again — so a binary rebuilt or replaced while
 //! the window is open, or a `PDFEXTRACTOR_CLI` pointed at a new path, is picked
 //! up without reopening it. [`cli_program`] names the binary a refresh resolved,
-//! for the line beside the formats.
+//! for the line beside the formats, and the `conversion-started` event carries the
+//! path a run resolved for itself, so the line follows the binary a run was given
+//! when a start resolves a different one.
 //!
 //! The **Compare** mode is wired here too: when the form carries a reference,
 //! every document that finishes is compared with it and the result is sent to
@@ -190,9 +192,11 @@ fn start_conversion(
     };
 
     let run = state.next.fetch_add(1, Ordering::SeqCst) + 1;
+    let command = format!("{program} {}", args.join(" "));
     let started = Started {
         run,
-        command: format!("{program} {}", args.join(" ")),
+        program,
+        command,
     };
 
     // Announced before either reader thread exists, so the page has the run set

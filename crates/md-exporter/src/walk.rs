@@ -217,6 +217,14 @@ impl Order {
             if let Some(parent) = &mut item.parent {
                 parent.ref_path = remap(&parent.ref_path);
             }
+            // A rich cell references the group its pictures sit in. Pictures
+            // move with the walk, so the cell's pointer has to move with them
+            // or it would name the item that took the old slot.
+            for cell in &mut item.data.table_cells {
+                if let Some(reference) = &mut cell.reference {
+                    reference.ref_path = remap(&reference.ref_path);
+                }
+            }
         }
         for item in &mut out.pictures {
             refs(&mut item.children);

@@ -298,7 +298,7 @@ fn sample(
                 8 => line.get(column).copied().unwrap_or(0) as usize,
                 4 => {
                     let byte = line.get(column / 2).copied().unwrap_or(0);
-                    if column % 2 == 0 {
+                    if column.is_multiple_of(2) {
                         (byte >> 4) as usize
                     } else {
                         (byte & 0x0f) as usize

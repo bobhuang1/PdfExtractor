@@ -48,6 +48,15 @@
   // new place, which the page names beside the formats after asking again.
   let rebuilt = false;
 
+  // The binary a run would start, and the one its `conversion-started` event
+  // names. One function, so the line the page draws from the event cannot
+  // disagree with `cli_program`'s answer in the stand-in either.
+  function program() {
+    return rebuilt
+      ? "/opt/pdfextractor-dev/pdfextractor-cli"
+      : "/usr/local/bin/pdfextractor-cli";
+  }
+
   const block = (kind, label, text, page) => ({ kind, label, text, page });
 
   /// The comparison the backend would send for the first document: the same
@@ -229,11 +238,12 @@
     let failed = 0;
 
     // The backend announces a run before anything the CLI can have printed, and
-    // the page keys its whole state off this event.
-    emit("conversion-started", {
-      run: id,
-      command: `pdfextractor-cli --input ${input_path} --parallel 4 --recursive true --ocr auto --progress`,
-    });
+    // the page keys its whole state off this event. The binary is resolved for
+    // the run, as the backend does, and named in the event so the page's line
+    // shows the path this run was given rather than one an ask found earlier.
+    const binary = program();
+    const command = `${binary} --input ${input_path} --parallel 4 --recursive true --ocr auto --progress`;
+    emit("conversion-started", { run: id, program: binary, command });
     // Exactly what the backend forwards: it strips terminal colour before the
     // page sees a log line, so the stand-in does not put escapes in either.
     emit("conversion-log", {
@@ -268,7 +278,7 @@
       if (ok && comparing) emit("conversion-diff", diff(id, input));
     }, STEP_MS);
 
-    return id;
+    return { id, program: binary, command };
   }
 
   window.__TAURI__ = {
@@ -287,9 +297,7 @@
         // The path a run would start, which moves with the rebuilt binary the
         // refresh above stands for.
         if (command === "cli_program") {
-          return rebuilt
-            ? "/opt/pdfextractor-dev/pdfextractor-cli"
-            : "/usr/local/bin/pdfextractor-cli";
+          return program();
         }
         if (command === "pick_path") {
           if (args.kind === "folder") return "/golden/docling";
@@ -302,10 +310,11 @@
         }
         if (command === "start_conversion") {
           comparing = Boolean(args.settings.reference);
-          const id = start(args.settings.input);
+          const started = start(args.settings.input);
           return {
-            run: id,
-            command: `pdfextractor-cli --input ${args.settings.input} --parallel 4 --recursive true --ocr auto --progress`,
+            run: started.id,
+            program: started.program,
+            command: started.command,
           };
         }
         return null;
