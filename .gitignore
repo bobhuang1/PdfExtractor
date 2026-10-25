@@ -1,4 +1,11 @@
 /target
+# The local release bundle: installers and archives built on this machine, not
+# source. The anchor keeps `crates/ui/dist` — the window's frontend, which is
+# source — visible; ignoring the folder does not stop a build writing into it.
+/dist/
+# The bytecode a fixture generator leaves beside itself when it runs, not source:
+# `test-data/make_*.py` writes it into `test-data/__pycache__`.
+__pycache__/
 *.json
 !test-data/expected/*.json
 # The Compare mode's per-document numbers: a record, not an output, so it is kept.

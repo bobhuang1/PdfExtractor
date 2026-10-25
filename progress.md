@@ -11899,6 +11899,35 @@ suites pass: `pdfextractor-metafile` **18**, `pdfextractor-doc-parser` **16**,
 `pdfextractor-md-exporter` **99**, `pdfextractor-ui --lib` **102**, and the CLI's own
 **37** unit tests. `cargo fmt --all --check` and `git diff --check` clean.
 
+## The local release bundle stays out of `git status`
+
+**What was asked.** Keep the local release bundle out of git status while still letting
+it be rebuilt.
+
+**The rule.** [.gitignore](.gitignore) now ignores `/dist/`, anchored at the repository
+root. The folder holds what a local release build leaves behind — the CLI archive, the
+window's `.deb` and `.AppImage`, `release-v0.1.0/` and `SHA256SUMS.txt` — which is output,
+not source: the release workflow builds the same files in CI and would rebuild them here
+on the next local run. Nothing was deleted, and the anchor matters: `dist/` unanchored
+would also match `crates/ui/dist`, the window's plain-HTML frontend that
+`tauri.conf.json` names as its `frontendDist` and that is tracked source.
+
+**The generators' bytecode.** The same pass ignores `__pycache__/` at any depth, which is
+what `test-data/make_*.py` writes beside itself when it runs — the only entry left in
+`git status` once `/dist/` was anchored away. Nothing tracked matches it (`git ls-files`
+holds no `__pycache__`, so no file changes hands), and the folder stays on disk.
+
+**Verification.** Before, `git status --short` ended with `?? dist/`; after, the root
+entry is gone and `git status --ignored` reports `!! dist/`.
+`git check-ignore -v dist/pdf-extractor-v0.1.0-x86_64-unknown-linux-gnu.AppImage` names
+`.gitignore:5:/dist/`, while `git check-ignore crates/ui/dist/app.js` matches nothing and
+the four frontend files stay tracked. The bundle's five entries are still on disk,
+untouched, so a rebuild writes into the same ignored folder. For the bytecode, the same
+listing reports `!! test-data/__pycache__/`, and `git check-ignore -v
+test-data/__pycache__/make_mc_fallback_pictures.cpython-312.pyc` names
+`.gitignore:8:__pycache__/`. With both rules in place `git status --short` reports the
+working tree's edits and nothing else. `git diff --check` clean.
+
 ## The 0.1% `FloatingPictures` lost is the calendar, not the reading
 
 **What was asked.** Find why `FloatingPictures` lost 0.1% character agreement against
