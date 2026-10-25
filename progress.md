@@ -12186,3 +12186,50 @@ is there to prove.
 478.14 s; `cargo fmt --all --check` clean, and clippy reports nothing in the crates
 this change touched.
 
+## `FloatingPictures` reads the calendar no more
+
+**What was asked.** Make `FloatingPictures'` character agreement stop moving with the
+calendar, so the corpus ratchet cannot refuse an unchanged reading when the date changes.
+
+**Why it moved.** The document's footers end in a `DATE` field, and a `DATE` field holds
+no text of its own: Word, LibreOffice and Docling each write the day *their* run happened.
+`FloatingPictures.doc` is read through the bridge, so our reading holds today's date, and
+the committed reference holds 2026-10-12, the day Docling's conversion ran. Neither side
+holds what the file stores (`4/26/2006`), and the two can never agree. The metric is a
+multiset of alphanumerics, so the difference cost a digit or two out of 6921 — 0.991331
+today against 0.9914752 in the baseline, which is 1.4e-4 and far above `AGREEMENT_EPSILON`,
+so the ratchet refused a reading that had lost nothing.
+
+**The rule.** A calendar value written with numeric separators is left out of the
+character share on both sides (`without_calendar_values` in [diff.rs](crates/ui/src/diff.rs)):
+`a/b/c`, `a-b-c` or `a.b.c`, both separators the same, a four-digit year at one end and a
+month or day in the middle — `10/12/2026`, `4-26-2006`, `2026.10.12`. A four-digit year is
+required on purpose: `1.2.3` is a version as often as it is a date, and `10/12/26` is not
+the spelling a field writes. What is left out is the *value*, not the item: the footer
+still holds its date in the rows, so a reading that lost one is still a `differs` row or a
+`theirs_only` row, and both of those are ratcheted on their own.
+
+**Proof the figure no longer moves.** One reading of the document (`/tmp/ours.json`,
+footer `10/25/2026`), compared with two references that differ only in the footer's date —
+the committed `10/12/2026` and the same file with `1/9/1998`, a day sharing no digit with
+it. With the rule in place, both comparisons give **0.9927504712193708**, and every verdict
+count with it: 203 rows, 23 differ, 104 same, 70 only the reference. With the rule taken
+out again, the same pair of comparisons gives **0.9913307325530992** and
+**0.9914702905884054** — the swing the ratchet was reading. The same invariance is in the
+unit test `the_agreement_does_not_move_with_the_calendar`, beside the spellings the rule
+accepts and the ones it leaves alone.
+
+**The golden suite's copy.** `docling_golden_test.rs` carries its own copy of the metric
+(the CLI test crate does not depend on the panel), so the rule is mirrored there rather
+than left to drift; the two figures must say the same thing about the same document.
+
+**The baseline.** `test-data/golden/compare-baseline.json` now remembers 0.99275047 for
+`FloatingPictures`, which is what the document reads on any day. That is the file's only
+changed entry: the regeneration also offered `drawing`'s and `calibre_demo`'s better
+readings from the nested-table work, and those were put back rather than accepted here —
+a better reading is not a regression, and accepting one is its own argument.
+
+**Verification.** `cargo test -p pdfextractor-ui --no-default-features --lib` **104
+passed**; `--test corpus_report_test` **9 passed**, 41 documents compared, every one at or
+better than the baseline; `DOCLING_PY=… cargo test -p pdfextractor-cli --test
+docling_golden_test` **29 passed**. `cargo fmt --all --check` clean.

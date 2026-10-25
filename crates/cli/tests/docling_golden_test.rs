@@ -1209,14 +1209,13 @@ fn boxes_overlap(one: (i64, [f64; 4]), other: (i64, [f64; 4])) -> bool {
 ///
 /// Formula items are skipped because they are compared as notation separately;
 /// their LaTeX command letters are not words. Inline math between dollar signs
-/// in a table cell is removed for the same reason.
+/// in a table cell is removed for the same reason. A calendar value is removed
+/// too, for the reason `without_calendar_values` gives.
 fn characters(document: &Value) -> std::collections::BTreeMap<char, usize> {
     let mut counts = std::collections::BTreeMap::new();
     let mut add = |text: &str| {
-        for character in without_inline_math(text)
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-        {
+        let text = without_calendar_values(&without_inline_math(text));
+        for character in text.chars().filter(|c| c.is_alphanumeric()) {
             *counts.entry(character).or_insert(0usize) += 1;
         }
     };
@@ -1267,6 +1266,70 @@ fn without_inline_math(text: &str) -> String {
         }
     }
     out
+}
+
+/// `text` with every calendar value written with numeric separators removed.
+///
+/// The same rule as the panel's (`without_calendar_values` in
+/// `crates/ui/src/diff.rs`), carried here because this comparison has its own copy of
+/// the character metric and the two figures must not drift apart. A `DATE` field has
+/// no text of its own: a legacy `.doc` read through LibreOffice holds the day *that*
+/// conversion ran, the reference holds the day Docling's did, and counting the digits
+/// of the stamp made the figure a reading of the calendar rather than of the document.
+fn without_calendar_values(text: &str) -> String {
+    let characters: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < characters.len() {
+        match calendar_value(&characters, index) {
+            Some(end) => index = end,
+            None => {
+                out.push(characters[index]);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Where the calendar value that starts at `start` ends, or `None` when what starts
+/// there is not one. A run is `a/b/c` with both separators the same, a four-digit year
+/// at one end and a month or day in the middle (`10/12/2026`, `4-26-2006`,
+/// `2026.10.12`); a two-digit year is text, because `1.2.3` is a version as often as
+/// it is a date.
+fn calendar_value(characters: &[char], start: usize) -> Option<usize> {
+    let digit = |index: usize| characters.get(index).is_some_and(char::is_ascii_digit);
+    let separator = |index: usize| matches!(characters.get(index), Some('/' | '-' | '.'));
+    if start > 0 && digit(start - 1) {
+        return None;
+    }
+    let group = |index: usize| {
+        let mut end = index;
+        while digit(end) {
+            end += 1;
+        }
+        (index..end, end)
+    };
+    let (first, after_first) = group(start);
+    if first.is_empty() || first.len() > 4 || !separator(after_first) {
+        return None;
+    }
+    let (second, after_second) = group(after_first + 1);
+    if second.is_empty()
+        || second.len() > 2
+        || characters.get(after_first) != characters.get(after_second)
+        || !separator(after_second)
+    {
+        return None;
+    }
+    let (third, end) = group(after_second + 1);
+    if third.is_empty() || third.len() > 4 || digit(end) {
+        return None;
+    }
+    if first.len() != 4 && third.len() != 4 {
+        return None;
+    }
+    Some(end)
 }
 
 /// How many mislabelled headings and boundary-merged blocks each document is
