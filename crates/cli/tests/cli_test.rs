@@ -5694,8 +5694,9 @@ fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
 
 /// LibreOffice accepts the `worksheet_pictures` workbook, where each sheet's
 /// drawing names its own media. The workbook is the fixture of a second package
-/// format, and of five encodings in one package: a BMP, a GIF, a PNG, a JPEG and
-/// a bare JPEG 2000 codestream, with the BMP drawn on a second sheet as well.
+/// format, and of six encodings in one package: a BMP, a GIF, a PNG, a JPEG, a
+/// bare JPEG 2000 codestream and a JP2 container, with the BMP drawn on a second
+/// sheet as well.
 ///
 /// It opens the workbook and writes it back, and what it writes is held to
 ///
@@ -5703,9 +5704,10 @@ fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
 ///   GIF carried through, the PNG and JPEG likewise — so the application read
 ///   the four encodings it has filters for rather than dropping the ones it
 ///   cannot draw;
-/// * the fifth: the `.jpc` is nowhere in the re-saved package, which is the
-///   application's own limit rather than a failure of the workbook — LibreOffice
-///   has no JPEG 2000 import filter, so the picture is dropped whole;
+/// * the fifth and sixth: neither JPEG 2000 spelling is anywhere in the re-saved
+///   package, which is the application's own limit rather than a failure of the
+///   workbook — LibreOffice has no JPEG 2000 import filter, so a codestream and
+///   a container are both dropped whole;
 /// * each part declared its `image/…` type and reached by a relationship, so the
 ///   sheets hold them as pictures rather than leaving files in the package;
 /// * both sheets' drawings: `drawing1.xml` and `drawing2.xml` are still there, so
@@ -5732,18 +5734,20 @@ fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
     let before = pictures_the_reader_takes(&ws, file, &bytes, "before");
     assert_eq!(
         before.len(),
-        6,
-        "{file}: the fixture is not the six pictures this expects: {before:#?}"
+        7,
+        "{file}: the fixture is not the seven pictures this expects: {before:#?}"
     );
 
     let (resaved, parts) = resave_with_libreoffice(&soffice, &ws, file, &bytes);
-    let codestream = fixture("images/scan.jpc");
-    assert!(
-        parts
-            .iter()
-            .all(|(_, part)| part.as_slice() != codestream.as_slice()),
-        "{file}: a JPEG 2000 part survived, so this note is out of date"
-    );
+    let jpeg2000 = [fixture("images/scan.jpc"), fixture("images/scan.jp2")];
+    for part in &jpeg2000 {
+        assert!(
+            parts
+                .iter()
+                .all(|(_, data)| data.as_slice() != part.as_slice()),
+            "{file}: a JPEG 2000 part survived, so this note is out of date"
+        );
+    }
     for (data, mime) in &source {
         let kept: Vec<&String> = parts
             .iter()
@@ -5784,29 +5788,33 @@ fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
         );
     }
 
-    // The fifth picture of the fixture's reading is the codestream, identified
-    // by what the reader made of it rather than by its place in the list: the
-    // file written for it is the codestream's own pixels, at its own grid.
-    let codestream_read = pdfextractor_image_parser::transcode_to_png(&codestream)
-        .expect("the JPEG 2000 codestream decodes");
-    let as_read = ReadPicture {
-        mimetype: "image/png".to_string(),
-        size: (codestream_read.width as f64, codestream_read.height as f64),
-        bytes: codestream_read.data,
-    };
-    assert!(
-        the_same_picture(&before[4], &as_read),
-        "{file}: the fifth picture is not the JPEG 2000 this test drops: {:#?}",
-        before[4]
-    );
+    // The fifth and sixth pictures of the fixture's reading are the two JPEG
+    // 2000s, identified by what the reader made of them rather than by their
+    // place in the list: the file written for each is the pixels its part
+    // decodes to, at its own grid.
+    let dropped = [4usize, 5];
+    for (index, part) in dropped.iter().zip(&jpeg2000) {
+        let decoded =
+            pdfextractor_image_parser::transcode_to_png(part).expect("the JPEG 2000 decodes");
+        let as_read = ReadPicture {
+            mimetype: "image/png".to_string(),
+            size: (decoded.width as f64, decoded.height as f64),
+            bytes: decoded.data,
+        };
+        assert!(
+            the_same_picture(&before[*index], &as_read),
+            "{file}: picture {index} is not the JPEG 2000 this test drops: {:#?}",
+            before[*index]
+        );
+    }
 
-    // The re-saved workbook is the fixture's reading one picture short — the one
-    // the application has no filter for — and the five it kept are the fixture's
-    // own, at the same sizes and with the same pixels.
+    // The re-saved workbook is the fixture's reading two pictures short — the
+    // two the application has no filter for — and the five it kept are the
+    // fixture's own, at the same sizes and with the same pixels.
     let kept: Vec<ReadPicture> = before
         .into_iter()
         .enumerate()
-        .filter(|(index, _)| *index != 4)
+        .filter(|(index, _)| !dropped.contains(index))
         .map(|(_, picture)| picture)
         .collect();
     let after = pictures_the_reader_takes(&ws, file, &resaved, "after");
@@ -8020,17 +8028,20 @@ fn a_workbook_becomes_pages_groups_and_tables() {
 }
 
 /// A workbook's pictures are handed on the way a Word or PowerPoint package's
-/// are: a PNG and a JPEG travel untouched, and a BMP, a GIF and a bare JPEG 2000
-/// codestream — encodings Docling's own readers never keep — are decoded and
-/// written back as PNGs beside the JSON. Every picture is placed in cells on the
-/// sheet that draws it, and the render names each file.
+/// are: a PNG and a JPEG travel untouched, and a BMP, a GIF and both spellings of
+/// a JPEG 2000 — the bare `.jpc` codestream and the `.jp2` container around one —
+/// encodings Docling's own readers never keep, are decoded and written back as
+/// PNGs beside the JSON. Every picture is placed in cells on the sheet that
+/// draws it, and the render names each file.
 ///
 /// The written PNGs are held to the pixels of the parts they came from, not to
 /// their headers: a channel swap, a palette read wrong or a row order reversed
-/// would pass a size check and fails this one. The `.jpc` is the one whose bytes
-/// no picture crate reads unaided — a bare codestream has no container to hold
-/// its size — so a reader that merely named the part would place a box with no
-/// ink in it, and its pixels are what say the codestream was decoded.
+/// would pass a size check and fails this one. The two JPEG 2000s are the
+/// pictures whose bytes no picture crate reads unaided — a bare codestream states
+/// its grid in the stream's own `SIZ` marker and the container in its `jp2h`
+/// box, neither of which `image` opens — so a reader that merely named the part
+/// would place a box with no ink in it, and the pixels are what say each was
+/// decoded.
 #[test]
 fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
     let ws = Workspace::new("xlsx-pictures");
@@ -8054,7 +8065,7 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
 
     let doc = json_of(&output);
     let pictures = doc["pictures"].as_array().expect("a pictures list");
-    assert_eq!(pictures.len(), 6, "a picture was lost: {pictures:#?}");
+    assert_eq!(pictures.len(), 7, "a picture was lost: {pictures:#?}");
 
     // In the order the workbook draws them, each on its own sheet's page and in
     // the cells its anchor names — the BMP in the first column of row 9, the
@@ -8119,17 +8130,29 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
             ],
         ),
     );
-    close(placed[5], (2, [0.0, 2.0, 571_500.0 / 609_600.0, 3.8]));
+    close(
+        placed[5],
+        (
+            1,
+            [
+                5.0,
+                50.0,
+                11.0 + 121_920.0 / 609_600.0,
+                61.0 + 38_100.0 / 190_500.0,
+            ],
+        ),
+    );
+    close(placed[6], (2, [0.0, 2.0, 571_500.0 / 609_600.0, 3.8]));
 
     // The sheet's page is its own extent in cells, pictures included: the
-    // lowest drawing is the JPEG 2000, which ends at row 47.2.
+    // lowest drawing is the JP2 container, which ends at row 61.2.
     let size = &doc["pages"]["1"]["size"];
     assert!(
         (size["width"].as_f64().unwrap() - 11.2).abs() < 1e-9,
         "{size:#?}"
     );
     assert!(
-        (size["height"].as_f64().unwrap() - 47.2).abs() < 1e-9,
+        (size["height"].as_f64().unwrap() - 61.2).abs() < 1e-9,
         "{size:#?}"
     );
 
@@ -8147,12 +8170,17 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
     let jpc_png = pdfextractor_image_parser::transcode_to_png(&jpc)
         .expect("the JPEG 2000 codestream decodes")
         .data;
+    let jp2 = fixture("images/scan.jp2");
+    let jp2_png = pdfextractor_image_parser::transcode_to_png(&jp2)
+        .expect("the JP2 container decodes")
+        .data;
     for (picture, (source, pixels_from, mime, written_as)) in pictures.iter().zip([
         (bmp.as_slice(), bmp.as_slice(), "image/png", "png"),
         (gif.as_slice(), gif.as_slice(), "image/png", "png"),
         (png.as_slice(), png.as_slice(), "image/png", "png"),
         (jpeg.as_slice(), jpeg.as_slice(), "image/jpeg", "jpg"),
         (jpc.as_slice(), jpc_png.as_slice(), "image/png", "png"),
+        (jp2.as_slice(), jp2_png.as_slice(), "image/png", "png"),
         (bmp.as_slice(), bmp.as_slice(), "image/png", "png"),
     ]) {
         let image = &picture["image"];
@@ -8203,12 +8231,12 @@ fn a_workbook_that_draws_pictures_writes_them_beside_the_json() {
         "a PNG was decoded and re-encoded rather than carried through"
     );
 
-    // The render names all six files, so a picture the model holds is one a
+    // The render names all seven files, so a picture the model holds is one a
     // reader can see.
     let html = std::fs::read_to_string(output.with_extension("html")).expect("the HTML");
     assert_eq!(
         html.matches("<img src=\"").count(),
-        6,
+        7,
         "a picture is missing from the render:\n{html}"
     );
 }

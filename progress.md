@@ -12126,3 +12126,63 @@ reference's date. It is a reading gap of its own, not the 0.1%, and it is not fi
 40 documents compared, every document at or better than its baseline. The day-by-day
 table comes from the converted JSON with the footer date substituted, and the a956c51
 comparison from a worktree built at that commit. `git diff --check` clean.
+
+## A workbook's other JPEG 2000 spelling is read too
+
+**What was asked.** Add a `.jp2` container picture to the XLSX picture fixture
+beside the `.jpc` codestream, and check its pixels are read as a picture.
+
+**Why that picture.** A JPEG 2000 reaches a package under two spellings, and the
+workbook held only one of them: `scan.jpc`, a bare codestream with no container
+around it. A `.jp2` is the other — a tree of boxes whose `jp2h` states the grid
+and whose `jp2c` carries the codestream — and it is the spelling an encoder or a
+camera writes. The package says which is which only by the media part's
+extension, so the document can only hold the picture if the bytes are decoded:
+the codestream was already covered, the container beside it was not.
+
+**The fixture.** [make_pictures_xlsx.py](test-data/make_pictures_xlsx.py) writes
+the sixth anchor at F51 — fourteen rows below the codestream at F37 and in the
+same 620 × 350 box, from column 5 to column 11 with 121,920 EMU into the twelfth
+cell and from row 50 to row 61 with 38,100 into the next — with `rId6` naming
+`../media/image6.jp2` and a `<Default Extension="jp2" ContentType="image/jp2"/>`
+beside the codestream's `jpc`. `xlsxwriter` cannot place a format it has no size
+for, so the two anchors are written into the saved package by hand, and by one
+function over a two-row table of spellings: nothing differs between them but the
+part, the relationship and the row. The container is
+[images/scan.jp2](test-data/images/scan.jp2), 33,874 bytes, and its codestream
+[images/scan.jpc](test-data/images/scan.jpc), 33,789.
+
+**The tests.**
+- `each_sheet_draws_the_pictures_its_own_drawing_part_anchors` in
+  [fixture_test.rs](crates/xlsx-parser/tests/fixture_test.rs): the `Pictures`
+  sheet draws six, the sixth `image/jp2` in the rectangle its anchor names, and
+  its bytes the container's own rather than the codestream's — a reader that
+  took the two spellings for one part fails here on the bytes it carried.
+- `a_workbook_that_draws_pictures_writes_them_beside_the_json` in
+  [cli_test.rs](crates/cli/tests/cli_test.rs): seven pictures (the sheet's six and
+  the `Summary` sheet's BMP), the sixth placed at row 50 in the column-5 box, the
+  sheet's page grown to 61.2 rows, the PNG written for it held to the pixels
+  `scan.jp2` decodes to and to its 620 × 350 grid, and the render naming all
+  seven files.
+- `libreoffice_opens_and_resaves_the_worksheet_picture_fixture`: the workbook is
+  six encodings in one package now. Both spellings are dropped whole by the
+  application — there is no JPEG 2000 import filter, so a codestream and a
+  container go the same way — the four media parts it keeps are unchanged, and
+  this reader's reading of the re-saved workbook is the fixture's five pictures
+  the application kept.
+
+**Proof the gate bites.** Pointing the sixth anchor's `r:embed` at the
+codestream's relationship (`rId5`, not `rId6`) fails the parser test on the
+bytes it carried: the assertion that the sixth picture is the container reports
+the codestream's `FF 4F FF 51` stream where the container's boxes belong.
+Restored byte for byte, it passes again.
+
+**Docs.** The re-save paragraph of [README.md](README.md) now says both spellings
+are dropped, and the generator's docstring lists the sixth picture with what it
+is there to prove.
+
+**Verification.** `cargo test -p pdfextractor-xlsx-parser` **22 passed** (17 unit,
+5 fixture); `cargo test -p pdfextractor-cli --test cli_test` **125 passed** in
+478.14 s; `cargo fmt --all --check` clean, and clippy reports nothing in the crates
+this change touched.
+

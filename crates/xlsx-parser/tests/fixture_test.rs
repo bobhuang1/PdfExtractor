@@ -102,11 +102,11 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
                 .collect()
         })
         .collect();
-    // `Pictures` draws five, in the order its drawing part anchors them; each
+    // `Pictures` draws six, in the order its drawing part anchors them; each
     // box is the rectangle the anchor names, in cells, offsets inside a cell
     // included: the BMP spans one column less than the GIF starts at, and the
     // scans run into the column after their last one by 0.1995 of a cell.
-    assert_eq!(kinds[0].len(), 5, "{:#?}", kinds[0]);
+    assert_eq!(kinds[0].len(), 6, "{:#?}", kinds[0]);
     let expected = [
         (
             "image/bmp",
@@ -150,6 +150,18 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
                 47.0 + 38_100.0 / 190_500.0,
             ],
         ),
+        // And the container spelling of the same photograph: a JP2 states its
+        // grid in its own `jp2h` box, so its pixels come from a picture this
+        // package names only by `.jp2`.
+        (
+            "image/jp2",
+            [
+                5.0,
+                50.0,
+                11.0 + 121_920.0 / 609_600.0,
+                61.0 + 38_100.0 / 190_500.0,
+            ],
+        ),
     ];
     for (actual, (mime, bbox)) in kinds[0].iter().zip(expected) {
         assert_eq!(actual.0, mime, "{:#?}", kinds[0]);
@@ -175,6 +187,19 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
     .expect("the BMP fixture");
     assert_eq!(document.sheets[0].pictures[0].data, bmp);
     assert_eq!(document.sheets[1].pictures[0].data, bmp);
+
+    // The two JPEG 2000 spellings are the parts' own bytes: the container is
+    // carried as the file it is, its boxes and all, rather than as the
+    // codestream beside it.
+    let container = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/images/scan.jp2"),
+    )
+    .expect("the JP2 fixture");
+    assert_eq!(document.sheets[0].pictures[5].data, container);
+    assert_ne!(
+        document.sheets[0].pictures[4].data, document.sheets[0].pictures[5].data,
+        "the container and the codestream are different parts"
+    );
 
     // The cells are still a workbook's cells: two regions on the sheet, the
     // text and the small table above the pictures.
