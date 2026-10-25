@@ -700,6 +700,15 @@ fn a_word_processor_rtf_conforms_to_the_docling_schema() {
     assert_fixture_conforms("merged_table.rtf", "merged_table", "rtf-schema");
 }
 
+/// A table inside a table's cell: the nested `w:tbl` is part of the cell's
+/// content, so the document holds the cell's group with the nested table under
+/// it rather than a second table standing beside the outer one — the shape
+/// Docling gives the same file, and the one a rich cell's `ref` names.
+#[test]
+fn a_nested_table_docx_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("nested_table.docx", "nested_table", "docx-schema");
+}
+
 /// The format revision we write is the one the committed schema describes.
 #[test]
 fn the_document_version_is_the_one_the_schema_declares() {
@@ -1205,25 +1214,34 @@ fn boxes_overlap(one: (i64, [f64; 4]), other: (i64, [f64; 4])) -> bool {
         && other.1[1] < one.1[3]
 }
 
+/// How many groups a rich cell's content may descend through before this stops
+/// looking, so a reference that points back at a group above it adds nothing
+/// rather than looping.
+const RICH_CELL_DEPTH: usize = 8;
+
 /// The alphanumeric characters of a document, as a multiset.
 ///
 /// Formula items are skipped because they are compared as notation separately;
 /// their LaTeX command letters are not words. Inline math between dollar signs
 /// in a table cell is removed for the same reason. A calendar value is removed
 /// too, for the reason `without_calendar_values` gives.
+///
+/// A *rich* cell — one whose `ref` names a group of its own content — is counted
+/// once, not twice: Docling writes a cell that holds more than one block both as
+/// the cell's text (its paragraphs joined) and as the paragraphs themselves,
+/// which stand inside the cell's group, and a table nested in the cell is a block
+/// of its own beside them. What a rich cell's text contributes is therefore what
+/// its group's paragraphs do not already hold. Nothing is taken out for a table
+/// under the group: a cell's text is its own paragraphs, never a nested table's.
+/// The panel's comparison applies the same rule (`characters` in
+/// `crates/ui/src/diff.rs`), and the two figures must not drift apart.
 fn characters(document: &Value) -> std::collections::BTreeMap<char, usize> {
     let mut counts = std::collections::BTreeMap::new();
-    let mut add = |text: &str| {
-        let text = without_calendar_values(&without_inline_math(text));
-        for character in text.chars().filter(|c| c.is_alphanumeric()) {
-            *counts.entry(character).or_insert(0usize) += 1;
-        }
-    };
     for item in document["texts"].as_array().into_iter().flatten() {
         if item["label"].as_str() == Some("formula") {
             continue;
         }
-        add(item["text"].as_str().unwrap_or_default());
+        add_characters(&mut counts, item["text"].as_str().unwrap_or_default());
     }
     for table in document["tables"].as_array().into_iter().flatten() {
         for cell in table["data"]["table_cells"]
@@ -1231,10 +1249,90 @@ fn characters(document: &Value) -> std::collections::BTreeMap<char, usize> {
             .into_iter()
             .flatten()
         {
-            add(cell["text"].as_str().unwrap_or_default());
+            merge_characters(&mut counts, cell_characters(document, cell));
         }
     }
     counts
+}
+
+/// Add one text's alphanumerics to `counts`.
+fn add_characters(counts: &mut std::collections::BTreeMap<char, usize>, text: &str) {
+    let text = without_calendar_values(&without_inline_math(text));
+    for character in text.chars().filter(|c| c.is_alphanumeric()) {
+        *counts.entry(character).or_insert(0usize) += 1;
+    }
+}
+
+/// Add every character of `from` to `counts`.
+fn merge_characters(
+    counts: &mut std::collections::BTreeMap<char, usize>,
+    from: std::collections::BTreeMap<char, usize>,
+) {
+    for (character, count) in from {
+        *counts.entry(character).or_insert(0) += count;
+    }
+}
+
+/// What one table cell contributes: its text, less the paragraphs its rich-cell
+/// group already holds as items of their own.
+fn cell_characters(document: &Value, cell: &Value) -> std::collections::BTreeMap<char, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    add_characters(&mut counts, cell["text"].as_str().unwrap_or_default());
+    let Some(reference) = cell["ref"]["$ref"].as_str() else {
+        return counts;
+    };
+    for (character, count) in group_paragraphs(document, reference, 0) {
+        if let Some(left) = counts.get_mut(&character) {
+            *left = left.saturating_sub(count);
+            if *left == 0 {
+                counts.remove(&character);
+            }
+        }
+    }
+    counts
+}
+
+/// The characters the paragraphs under a rich-cell group hold.
+///
+/// Groups are descended through; tables are not. A paragraph under a group
+/// further in is the same paragraph the outer cell's text repeats, while a table
+/// nested in the cell is not part of that text at all.
+fn group_paragraphs(
+    document: &Value,
+    reference: &str,
+    depth: usize,
+) -> std::collections::BTreeMap<char, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    if depth > RICH_CELL_DEPTH {
+        return counts;
+    }
+    let Some(group) = item_with(document, "groups", reference) else {
+        return counts;
+    };
+    for child in group["children"].as_array().into_iter().flatten() {
+        let Some(reference) = child["$ref"].as_str() else {
+            continue;
+        };
+        match item_with(document, "texts", reference) {
+            Some(item) if item["label"].as_str() != Some("formula") => {
+                add_characters(&mut counts, item["text"].as_str().unwrap_or_default())
+            }
+            Some(_) => {}
+            None => merge_characters(
+                &mut counts,
+                group_paragraphs(document, reference, depth + 1),
+            ),
+        }
+    }
+    counts
+}
+
+/// The item a reference names, from one of a document's arrays.
+fn item_with<'a>(document: &'a Value, key: &str, reference: &str) -> Option<&'a Value> {
+    document[key]
+        .as_array()?
+        .iter()
+        .find(|item| item["self_ref"].as_str() == Some(reference))
 }
 
 /// `text` with Docling's `$...$` inline math removed.

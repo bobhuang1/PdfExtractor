@@ -5,7 +5,9 @@
 //!
 //! * paragraphs, labelled from their style (`Heading1` -> `section_header`,
 //!   numbering -> `list_item`),
-//! * tables, as a rectangular grid of cell text,
+//! * tables, as a rectangular grid of cell text whose cells also state what
+//!   they hold — a picture, and a table written inside the cell, which is the
+//!   cell's content rather than a table of the document beside the outer one,
 //! * embedded pictures from `word/media/`, placed in order via the drawing's
 //!   relationship id — including the preview of an embedded object (`w:object`,
 //!   a MathType equation or a pasted drawing), and including the vector
@@ -61,14 +63,7 @@ pub enum DocxItem {
     Formula {
         text: String,
     },
-    Table {
-        /// The table's rows; each cell knows its place in the layout grid and
-        /// the merges its markup declares.
-        rows: Vec<Vec<DocxCell>>,
-        /// The grid's width in columns: `w:tblGrid` when the document declares
-        /// one, else what the cells' positions and spans add up to.
-        num_cols: usize,
-    },
+    Table(DocxTable),
     Picture {
         mime: &'static str,
         data: Vec<u8>,
@@ -77,6 +72,21 @@ pub enum DocxItem {
         width_pt: Option<f64>,
         height_pt: Option<f64>,
     },
+}
+
+/// One table: its rows, and the width of the grid they are placed on.
+///
+/// A table is either an item of the document or the content of a `w:tc` — Word
+/// nests a table in a cell the way it nests paragraphs — and the same shape
+/// says both, because the rows are the table wherever it was written.
+#[derive(Debug, Clone, Default)]
+pub struct DocxTable {
+    /// The table's rows; each cell knows its place in the layout grid and the
+    /// merges its markup declares.
+    pub rows: Vec<Vec<DocxCell>>,
+    /// The grid's width in columns: `w:tblGrid` when the document declares one,
+    /// else what the cells' positions and spans add up to.
+    pub num_cols: usize,
 }
 
 /// A picture a cell holds: the media part's bytes, the type they are, and the
@@ -100,6 +110,10 @@ pub struct DocxCell {
     /// is a container of its own, and a picture in it belongs to the cell
     /// rather than to the table's neighbourhood in the body.
     pub pictures: Vec<DocxPicture>,
+    /// The tables nested in the cell, in the order it states them — the same
+    /// container: a `w:tbl` written in a cell is a block of that cell's
+    /// content, not a table of the document standing beside the outer one.
+    pub tables: Vec<DocxTable>,
     /// Grid column the cell starts at (0-based): `w:gridBefore` plus the
     /// spans of the cells before it in its row.
     pub start_col: usize,
@@ -127,6 +141,11 @@ struct TableState {
     /// The width `w:tblGrid` declares, counting `w:gridCol` elements as they
     /// are seen; `None` until one is.
     grid_cols: Option<usize>,
+    /// Where the table is written when it is nested in a cell of another
+    /// table: that table's place in the open stack, and the row and cell of
+    /// it. Recorded when the table opens, because once it is open it is what
+    /// the stack's top is — the outer cell is no longer reachable through it.
+    in_cell: Option<(usize, usize, usize)>,
 }
 
 /// One `w:tr` while it is being read.
@@ -148,6 +167,8 @@ struct CellRead {
     text: String,
     /// The pictures its paragraphs held, resolved to their media parts.
     pictures: Vec<DocxPicture>,
+    /// The tables written inside it, resolved when each closed.
+    tables: Vec<DocxTable>,
     /// `w:gridSpan`, one when unstated.
     col_span: usize,
     /// `w:vMerge`: a restart opens a vertical merge, anything else continues
@@ -1304,7 +1325,13 @@ impl<'a> Extractor<'a> {
                 self.hyperlink = attr(e, b"r:id").and_then(|id| self.rels.get(&id).cloned());
             }
             b"tbl" => {
-                self.tables.push(TableState::default());
+                // A table written in a cell is the cell's, so remember where
+                // it sits before it becomes the stack's top.
+                let in_cell = self.enclosing_cell();
+                self.tables.push(TableState {
+                    in_cell,
+                    ..Default::default()
+                });
             }
             b"tr" => {
                 if let Some(t) = self.tables.last_mut() {
@@ -1572,8 +1599,21 @@ impl<'a> Extractor<'a> {
             b"tbl" => {
                 if let Some(table) = self.tables.pop() {
                     if !table.rows.is_empty() {
+                        let in_cell = table.in_cell;
                         let (num_cols, rows) = resolve_table(table);
-                        self.items.push(DocxItem::Table { rows, num_cols });
+                        let table = DocxTable { rows, num_cols };
+                        // The cell it was written in, when it was: that cell
+                        // holds the table, and the document does not gain a
+                        // table beside the one the cell belongs to.
+                        let cell = in_cell.and_then(|(parent, row, column)| {
+                            let table = self.tables.get_mut(parent)?;
+                            let row = table.rows.get_mut(row)?;
+                            row.cells.get_mut(column)
+                        });
+                        match cell {
+                            Some(cell) => cell.tables.push(table),
+                            None => self.items.push(DocxItem::Table(table)),
+                        }
                     }
                 }
             }
@@ -1696,6 +1736,17 @@ impl<'a> Extractor<'a> {
     /// The `w:tc` being read, when there is one.
     fn current_cell_mut(&mut self) -> Option<&mut CellRead> {
         self.tables.last_mut()?.rows.last_mut()?.cells.last_mut()
+    }
+
+    /// The open cell a `w:tbl` would be written in, when one is open: the
+    /// innermost table's last row's last cell. A table between rows or outside
+    /// every cell is the document's own.
+    fn enclosing_cell(&self) -> Option<(usize, usize, usize)> {
+        let parent = self.tables.len().checked_sub(1)?;
+        let table = &self.tables[parent];
+        let row = table.rows.len().checked_sub(1)?;
+        let cell = table.rows[row].cells.len().checked_sub(1)?;
+        Some((parent, row, cell))
     }
 
     fn text(&mut self, t: &str) {
@@ -2889,6 +2940,9 @@ fn italic_letter(c: char) -> Option<char> {
 /// * **Headers**: the rows `w:tblHeader` marks; where no row is marked, the
 ///   first — the reading every unmarked table had before the marker was read
 ///   at all.
+/// * **Nesting**: a `w:tbl` is resolved when it closes, and the table it closes
+///   in decides where it goes — a cell of an open table holds it, and a table
+///   between rows or outside every cell is the document's own.
 ///
 /// The width is `w:tblGrid` when the document declares one, else what the
 /// rows add up to — never less than what the cells reach, so no cell can sit
@@ -2906,6 +2960,7 @@ fn resolve_table(table: TableState) -> (usize, Vec<Vec<DocxCell>>) {
             cells.push(DocxCell {
                 text: cell.text.clone(),
                 pictures: cell.pictures.clone(),
+                tables: cell.tables.clone(),
                 start_col: column,
                 col_span: span,
                 row_span: 1,
@@ -2944,11 +2999,13 @@ fn resolve_table(table: TableState) -> (usize, Vec<Vec<DocxCell>>) {
                         rows[r][c].covered = true;
                         // A continuation is not a cell of the document: its
                         // slots belong to the cell that opened the merge, and
-                        // so does a picture it states. Leaving the picture on a
-                        // covered cell would drop it, since only the opening
-                        // cell is written to the grid.
+                        // so does what it states — a picture or a table in it.
+                        // Leaving them on a covered cell would drop them,
+                        // since only the opening cell is written to the grid.
                         let pictures = std::mem::take(&mut rows[r][c].pictures);
                         rows[o_row][o_cell].pictures.extend(pictures);
+                        let tables = std::mem::take(&mut rows[r][c].tables);
+                        rows[o_row][o_cell].tables.extend(tables);
                         chained.push((o_row, o_cell, o_col));
                     }
                 }
@@ -3498,7 +3555,7 @@ mod tests {
         let pkg = package(&doc, "", &[]);
         let parsed = DocxDocument::parse_bytes(&pkg).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, num_cols } => {
+            DocxItem::Table(DocxTable { rows, num_cols }) => {
                 assert_eq!(rows.len(), 2);
                 assert_eq!(*num_cols, 2, "the grid is as wide as its widest row");
                 assert_eq!(texts_of(&rows[0]), ["a", "b"]);
@@ -3512,6 +3569,50 @@ mod tests {
             }
             other => panic!("expected table, got {other:?}"),
         }
+    }
+
+    /// A `w:tbl` written in a cell is a block of that cell's content, the way
+    /// a paragraph is: the cell holds the table, and the document does not
+    /// gain a second table standing beside the one the cell belongs to. A
+    /// paragraph after the nested table still belongs to the cell, and the
+    /// nested table's own words are its cells'.
+    #[test]
+    fn a_table_in_a_cell_belongs_to_the_cell() {
+        let doc = format!(
+            r#"<w:document {W}><w:body><w:tbl>
+                 <w:tr><w:tc><w:p><w:r><w:t>outer</w:t></w:r></w:p>
+                       <w:tbl>
+                         <w:tr><w:tc><w:p><w:r><w:t>inner one</w:t></w:r></w:p></w:tc>
+                               <w:tc><w:p><w:r><w:t>inner two</w:t></w:r></w:p></w:tc></w:tr>
+                       </w:tbl>
+                       <w:p><w:r><w:t>after</w:t></w:r></w:p></w:tc>
+                       <w:tc><w:p><w:r><w:t>right</w:t></w:r></w:p></w:tc></w:tr>
+               </w:tbl></w:body></w:document>"#
+        );
+        let parsed = DocxDocument::parse_bytes(&package(&doc, "", &[])).expect("parse");
+        assert_eq!(
+            parsed.items.len(),
+            1,
+            "the nested table was read as a table of the document"
+        );
+        let DocxItem::Table(DocxTable { rows, num_cols }) = &parsed.items[0] else {
+            panic!("expected table, got {:?}", parsed.items[0]);
+        };
+        assert_eq!(*num_cols, 2);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(texts_of(&rows[0]), ["outer after", "right"]);
+        assert_eq!(
+            rows[0][0].tables.len(),
+            1,
+            "the cell does not hold the table"
+        );
+        let inner = &rows[0][0].tables[0];
+        assert_eq!(inner.num_cols, 2);
+        assert_eq!(texts_of(&inner.rows[0]), ["inner one", "inner two"]);
+        assert!(
+            inner.rows[0].iter().all(|cell| cell.tables.is_empty()),
+            "the outer words were read into the nested table"
+        );
     }
 
     /// `w:gridSpan` widens its cell and pushes the cells after it onto their
@@ -3532,7 +3633,7 @@ mod tests {
         let pkg = package(&doc, "", &[]);
         let parsed = DocxDocument::parse_bytes(&pkg).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, num_cols } => {
+            DocxItem::Table(DocxTable { rows, num_cols }) => {
                 assert_eq!(*num_cols, 3, "the span counts as two columns");
                 assert_eq!(rows[0][0].start_col, 0);
                 assert_eq!((rows[0][1].start_col, rows[0][1].col_span), (1, 2));
@@ -3569,7 +3670,7 @@ mod tests {
         let pkg = package(&doc, "", &[]);
         let parsed = DocxDocument::parse_bytes(&pkg).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, .. } => {
+            DocxItem::Table(DocxTable { rows, .. }) => {
                 let opener = &rows[1][1];
                 assert_eq!(opener.text, "open");
                 assert_eq!(opener.row_span, 2, "the continuation did not extend it");
@@ -3598,7 +3699,7 @@ mod tests {
         );
         let parsed = DocxDocument::parse_bytes(&package(&marked, "", &[])).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, .. } => {
+            DocxItem::Table(DocxTable { rows, .. }) => {
                 assert!(!rows[0][0].header, "the fallback spoke over the marker");
                 assert!(rows[1][0].header, "the marked row is not a header");
             }
@@ -3613,7 +3714,7 @@ mod tests {
         );
         let parsed = DocxDocument::parse_bytes(&package(&unmarked, "", &[])).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, .. } => {
+            DocxItem::Table(DocxTable { rows, .. }) => {
                 assert!(rows[0][0].header);
                 assert!(!rows[1][0].header);
             }
@@ -3635,7 +3736,7 @@ mod tests {
         let pkg = package(&doc, "", &[]);
         let parsed = DocxDocument::parse_bytes(&pkg).expect("parse");
         match &parsed.items[0] {
-            DocxItem::Table { rows, num_cols } => {
+            DocxItem::Table(DocxTable { rows, num_cols }) => {
                 assert_eq!(rows[1][0].start_col, 1, "the row starts one column in");
                 assert_eq!(*num_cols, 3, "one before, one cell, one after");
             }
@@ -4295,14 +4396,14 @@ mod tests {
             .iter()
             .map(|item| match item {
                 DocxItem::Text { text, .. } => text.as_str(),
-                DocxItem::Table { .. } => "table",
+                DocxItem::Table(_) => "table",
                 DocxItem::Picture { mime, .. } => mime,
                 DocxItem::Formula { .. } => "formula",
             })
             .collect();
         assert_eq!(items, vec!["Before.", "table", "After."]);
 
-        let DocxItem::Table { rows, num_cols } = &parsed.items[1] else {
+        let DocxItem::Table(DocxTable { rows, num_cols }) = &parsed.items[1] else {
             panic!("the table is not second: {items:?}");
         };
         assert_eq!(*num_cols, 1);
@@ -4342,7 +4443,7 @@ mod tests {
         let parsed =
             DocxDocument::parse_bytes(&package(&doc, rels, &[("word/media/image1.png", PNG)]))
                 .expect("parse");
-        let DocxItem::Table { rows, .. } = &parsed.items[0] else {
+        let DocxItem::Table(DocxTable { rows, .. }) = &parsed.items[0] else {
             panic!("the picture is not in a table: {:?}", parsed.items);
         };
         assert_eq!(rows.len(), 2);

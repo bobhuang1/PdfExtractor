@@ -3569,10 +3569,11 @@ fn nth_element<'a>(xml: &'a str, open: &str, close: &str, ordinal: usize) -> &'a
 /// body, so the test can follow one picture through each container: the tables'
 /// cells become rich cells holding the picture in a group under the table, the
 /// text box's picture is read where the box stands in the body, and the header's
-/// is furniture. The outer table is the one whose cell holds the nested table —
-/// a Word cell is flow content, and a table in it is a block the reader reports
-/// in its own right — so its cell carries the words and the nested table follows
-/// it; the nested picture is the nested table's cell's.
+/// is furniture. The nested table is its cell's content — a Word cell is a
+/// container, so the table written in it is an item of that cell rather than a
+/// table of the body beside the outer one — which makes the outer table's own
+/// cell the rich cell that holds it, and the nested picture the nested table's
+/// cell's.
 #[test]
 fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
     let name = "mc_fallback_pictures.docx";
@@ -3705,7 +3706,7 @@ fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
     // what the fixture says it says.
     let tables = doc["tables"].as_array().expect("a table list");
     assert_eq!(tables.len(), 3, "{tables:#?}");
-    for (table_index, picture_index) in [(0usize, 1usize), (1, 2)] {
+    for (table_index, picture_index) in [(0usize, 1usize), (2, 2)] {
         let table = &tables[table_index];
         let group = doc["groups"]
             .as_array()
@@ -3745,16 +3746,46 @@ fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
             "the cell holding picture {picture_index} is not the empty cell it was"
         );
     }
-    let outer = &tables[2]["data"]["table_cells"];
+    // The outer table is the second: its one cell states its words and holds the
+    // nested table, so it is a rich cell referencing the group the nested table
+    // was placed in — the cell's content, not a table of the body.
+    let outer = &tables[1];
+    let cells = &outer["data"]["table_cells"];
     assert_eq!(
-        outer.as_array().map(Vec::len),
+        cells.as_array().map(Vec::len),
         Some(1),
         "the outer table is not the one-cell table it was"
     );
-    assert_eq!(outer[0]["text"], "The outer cell.", "{outer:#?}");
-    assert!(
-        outer[0].get("ref").is_none(),
-        "the outer cell holds a table, not a picture"
+    assert_eq!(cells[0]["text"], "The outer cell.", "{cells:#?}");
+    let held = cells[0]["ref"]["$ref"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the outer cell references nothing it holds: {cells:#?}"));
+    assert_eq!(
+        outer["children"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        [serde_json::json!({ "$ref": held })],
+        "the outer table does not list the group its cell references"
+    );
+    let group = doc["groups"]
+        .as_array()
+        .expect("a group list")
+        .iter()
+        .find(|group| group["self_ref"] == held)
+        .unwrap_or_else(|| panic!("no group {held}"));
+    assert_eq!(group["parent"]["$ref"], "#/tables/1");
+    assert_eq!(
+        group["children"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        [serde_json::json!({ "$ref": "#/tables/2" })],
+        "the outer cell does not hold the nested table"
+    );
+    assert_eq!(
+        tables[2]["parent"]["$ref"], held,
+        "the nested table is not in the group the outer cell holds"
     );
 
     // The text box's picture and the table that holds the nested one stand
@@ -3780,11 +3811,15 @@ fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
             && text_box < text_at("After the text box picture."),
         "the text box's picture is not read between the sentences around it"
     );
-    let nested_table = position("#/tables/1".to_string());
+    let outer_table = position("#/tables/1".to_string());
     assert!(
-        text_at("Before the nested table picture.") < nested_table
-            && nested_table < text_at("After the nested table picture."),
-        "the nested table's picture is not read between the sentences around it"
+        text_at("Before the nested table picture.") < outer_table
+            && outer_table < text_at("After the nested table picture."),
+        "the table holding the nested one is not read between the sentences around it"
+    );
+    assert!(
+        !order.iter().any(|item| item == "#/tables/2"),
+        "the nested table joined the body's readings rather than the cell's"
     );
 
     // The header's picture is furniture, after the header's own words — the
@@ -3823,6 +3858,12 @@ fn a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read() {
         html.matches("<img src=\"").count(),
         4,
         "the render does not show every body fallback:\n{html}"
+    );
+    // The nested table is the cell's, so the page says its words there: the
+    // outer cell carries the picture the nested table's cell holds.
+    assert!(
+        html.contains("The outer cell. <img"),
+        "the nested table's picture is not rendered inside the cell that holds it:\n{html}"
     );
 }
 

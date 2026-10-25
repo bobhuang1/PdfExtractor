@@ -12233,3 +12233,166 @@ a better reading is not a regression, and accepting one is its own argument.
 passed**; `--test corpus_report_test` **9 passed**, 41 documents compared, every one at or
 better than the baseline; `DOCLING_PY=… cargo test -p pdfextractor-cli --test
 docling_golden_test` **29 passed**. `cargo fmt --all --check` clean.
+
+## A table written in a cell is the cell's
+
+**What was wrong.** A `w:tbl` was read wherever it stood: opening one pushed a
+`TableState` onto the open-table stack, and closing it pushed a `DocxItem::Table` into
+the document. A table written inside a `w:tc` is therefore reported as a table of the
+body *before* the table it was written in — `tables/0` standing beside `tables/1` —
+and the outer cell keeps only the words around it. Docling reads that cell as a rich
+cell whose group holds the nested table, and `drawing.docx` states twelve tables, seven
+of them inside cells.
+
+**The reader.** `TableState` records `in_cell` when it opens — the enclosing table's
+place in the stack, and the row and cell of it — because once the table is open it is
+itself the stack's top, and the outer cell is no longer reachable through it. When it
+closes, `resolve_table` answers a `DocxTable` and the extractor either attaches it to
+that cell or, with no cell open, pushes it as the document's own table. `DocxCell`
+gains `tables: Vec<DocxTable>` beside `pictures`, and a `w:vMerge` continuation travels
+with what it states: its tables move to the cell that opened the merge, as its pictures
+already did. `DocxItem::Table` now holds the `DocxTable` itself, so a table's rows and
+grid width have one shape whether it is an item or a cell's content.
+
+**The model.** `GridCell.tables`, placed by `DocumentBuilder::place_cell_items` in the
+same group as the cell's pictures — the group the table lists as its child and the
+cell's `ref` names, the nested table's own cells becoming rich cells in turn — with no
+provenance, because a Word cell is flow content with no page rectangle of its own.
+
+**The writers.** All three fold the nested table's cells into the outer cell after its
+words: Markdown flattens them into the pipe cell the way Docling's own Markdown export
+does, and HTML and plain text say the same words rather than markup — HTML on purpose,
+since this reader reads a `<table>` inside a `<td>` as rows of the table around it, so
+writing one would be a page that does not read back to the document it came from.
+Pictures in those nested cells stay pictures, inside the outer cell.
+
+**Checked against the other tool.** Docling's reading of a two-by-two table whose
+bottom-left cell holds a two-by-two table (authored with python-docx) is one body
+table, its cell's `ref` naming a group, that group's only child the nested table, and
+the cell's text the newline of its empty paragraphs. Ours is the same shape — the cell's
+text `""` where its paragraphs say nothing, the group `rich_cell_group_0_0_1` holding
+`#/tables/1` — and Markdown reads `| Inner winter Inner spring Inner autumn Inner summer |`
+in that cell, which is the other tool's own Markdown, cell for cell.
+
+**Coverage.** [parser.rs](crates/docx-parser/src/parser.rs)'s
+`a_table_in_a_cell_belongs_to_the_cell` holds the reading itself: one item, the nested
+table in the cell, the words after it still the cell's, the outer words not read into
+the nested table. `real_docx_test`'s new `count_tables` counts a nested table wherever
+it is written, so `drawing.docx` still has the twelve it states.
+`a_fallback_only_picture_in_a_nested_table_a_text_box_and_a_header_is_read` is the
+end-to-end check on a real package: three tables, the nested one `#/tables/2` whose
+parent is the outer cell's group, the outer cell's `ref` naming that group — its words
+still in `text` — the nested table's picture inside the outer cell's `<th>`, and the
+nested table no longer in the body's reading order. Both writers have a unit test
+apiece (`a_table_a_cell_holds_is_flattened_into_the_cell`,
+`a_table_a_cell_holds_is_written_in_the_cell`).
+[calibre_demo.md](test-data/golden/markdown/calibre_demo.md) and its three siblings
+were regenerated: the nested table's words (`One Three Two Four`) now read in the outer
+cell instead of as a second table of the page, in all four renderings.
+
+**Verification.** `cargo test -p pdfextractor-docx-parser` **58 + 16 passed**;
+`-p pdfextractor-md-exporter` **101**; `-p pdfextractor-text-parser` **108 + 2**;
+`-p pdfextractor-cli --test cli_test` **125** in 453.46 s, `--test md_golden_test`
+**17**, `--test formats_golden_test` **11**, `--test compare_mode_test` **8**;
+`-p pdfextractor-ui --no-default-features` **102 + 5**.
+`DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p pdfextractor-cli
+--test docling_golden_test` **29 passed** in 262.37 s.
+`corpus_report_test` is **8 passed, 1 failed** as before this change — the
+`FloatingPictures` calendar drift, not this fixture — and `drawing.docx` reads *better*
+than its baseline now that its nested tables are cells rather than extra body rows:
+rows 271 → 267, same 122 → 126, one-sided 29/71 → 25/67, agreement 99.19% → 99.20%
+(not accepted into the baseline, since a better reading is not a regression; the
+ratchet only records what must not be lost). `cargo fmt --all --check`, `git diff
+--check` and `cargo clippy --workspace --all-targets` are clean.
+
+## A nested table is compared with Docling's own reading
+
+**What was asked.** Add a generator and Docling reference for a DOCX whose table sits
+inside a cell, so the comparison corpus covers nesting directly.
+
+**Why it was missing.** The reading landed for `calibre_demo.docx`'s calendar and its
+own nested table, and `test-data/make_mc_fallback_pictures.py` puts a picture in a
+nested cell, but no fixture was *built* to nest: the corpus covered the shape only
+inside a real document, with a merge and a picture in the same cell, and the
+comparison's own handling of a cell that holds a block had never been measured.
+
+**The fixture.** [make_nested_table_docx.py](test-data/make_nested_table_docx.py)
+writes `nested_table.docx` as WordprocessingML parts with fixed timestamps, the way
+`make_merged_cells_docx.py` writes its table, so regenerating it is byte for byte
+(the two runs give the same MD5). An outer table — a marked header row, then `Review`
+and `Publish` — has its detail cell holding two of the cell's own sentences around a
+table of its own: `Step`/`Who` over `Draft`/`Ana` and `Sign off`/`Ivo`. Nothing else
+in the package is a table, and the table is the last thing in the document: a closing
+paragraph gave the reference a second block to pair with the framing sentence, and the
+alignment then chose those two over the two readings of the outer table, which came
+out one-sided on both sides. Dropping it pairs the outer tables and leaves exactly the
+cell's sentences as the reference's own reading.
+
+**The reference.** `regenerate.py nested_table.docx` — docling 2.138.0 with
+docling-core 2.101.1 — wrote
+[docling/nested_table.json](test-data/golden/docling/nested_table.json): **no pages**,
+four text items and two tables. The items are the heading, the framing sentence and the
+cell's two sentences; the tables are the outer one, whose detail cell is a
+`RichTableCell` whose `ref` names `#/groups/1`, and the nested one under that group
+beside the two sentences. Our reading is that shape: the cell's `ref` names the group,
+the nested table is its child, and the cell's text is its two sentences.
+
+**The comparison found the metric counting a rich cell twice.** Before any comparison
+change, `nested_table` read **0.815** — below the 0.85 floor — although every
+character was held. The reference has the cell's sentences twice: once as text items
+inside the cell's group, once inside the cell's `text` (Docling joins a cell's
+paragraphs there). The character multiset has no way to know those are the same words,
+so a reading that folds them into the cell looked like a loss. Both copies of the
+metric — `characters` in [diff.rs](crates/ui/src/diff.rs) and in
+[docling_golden_test.rs](crates/cli/tests/docling_golden_test.rs) — now count a rich
+cell's text **less the paragraphs its group already holds**, groups descended through
+and tables not (a cell's text is its own paragraphs, never a nested table's). The same
+rule was already owed to the corpus: `README.md` 0.9564 → **1.000**, `merged_table.rtf`
+0.9535 → **1.000**, `calibre_demo.docx` 0.9989 → **1.000**, `drawing.docx` 0.9919 →
+**1.000** (its captions are the case where a cell's text is *longer* than the item made
+of it, and only the overlap is taken out). The corpus's agreement range moved from
+0.887–1.000 to **0.991–1.000**.
+
+**The check.** `our_output_agrees_with_real_docling_conversions` finds the fixture by
+stem beside the corpus and compares it: **0/0 pages, text agreement 1.000**, formulas
+0/0; labels **1 heading kept, 0 read as body text, 0 blocks merged, 2 table cells in a
+table / 0 read as prose / 0 uncovered**; nothing duplicated. (A third cell is the
+reference's, short enough that the comparison's twelve-character floor skips it.) The panel's comparison over
+the corpus makes six rows of it — the heading, the framing sentence, the outer table
+(ours and Docling's whitespace-collapsed text the same) and the nested table **same**,
+and the reference's two cell sentences **only the reference** — with agreement 1.000.
+They are one-sided because a reference *text* item inside one of our *tables* is not a
+containment: `comparable` asks both sides to be text, so the cell's sentences are not
+folded onto the table that holds them. That is the panel's existing rule rather than a
+defect this fixture introduced, and the row count (6: 4 same, 2 only the reference) is
+what the baseline records.
+
+**The ratchet.** `nested_table` is in
+[compare-baseline.json](test-data/golden/compare-baseline.json) with rows 6, same 4,
+`theirsOnly` 2 and agreement 1.0, so the report compares **41 documents** — the 42
+references less `invoice_scan.png`, whose text exists only through OCR — and a later
+reading that loses a row of the fixture fails. The update run also recorded the row
+improvements `drawing.docx` (271 → 267 rows) and `calibre_demo.docx` (123 → 122) had
+already earned from the table-in-a-cell reading in this tree, which the baseline had not
+been rewritten for; both are improvements, so the ratchet had not refused them.
+
+**The schema test.** `a_nested_table_docx_conforms_to_the_docling_schema` holds our
+output for the fixture to `DoclingDocument.json` field by field, like the workbook, the
+deck, the image and the RTF — it is beside the corpus, not in it, so
+the corpus-wide conformance test never sees it.
+
+**Docs.** [test-data/golden/README.md](test-data/golden/README.md) now says **42 in
+all** with five fixtures beside the corpus, describes this one's reference (four items,
+the rich cell, the nested table, 1.000), and states the rich-cell rule in the text
+bullet together with the corpus's new agreement range. The root README's compatibility
+row moves from 41 to 42 and the `test-data` tree lists the fixture.
+
+**Verification.** `DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p
+pdfextractor-cli --test docling_golden_test` **29 passed** in 256.14 s, the schema test,
+the fixture's conformance test and `docling_core_accepts_our_documents` among them;
+`cargo test -p pdfextractor-ui --test corpus_report_test` **9 passed**, 41 documents
+compared; `cargo test -p pdfextractor-ui --lib` **106 passed**, the two new metric tests
+(`a_rich_cells_paragraphs_are_counted_once`,
+`a_rich_cell_keeps_what_its_paragraphs_do_not_say`) among them;
+`cargo clippy -p pdfextractor-ui -p pdfextractor-cli --all-targets -- -D warnings`
+quiet; `cargo fmt --all --check` and `git diff --check` clean.

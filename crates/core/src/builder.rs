@@ -142,6 +142,13 @@ pub struct GridCell {
     /// cell references it — so the pictures belong to the cell rather than
     /// standing beside the table in the body.
     pub pictures: Vec<PictureData>,
+    /// The tables nested in the cell, in the order the source states them.
+    ///
+    /// A nested table is placed in the same group as the pictures, for the same
+    /// reason: a Word cell is a container, so a table written in it is its
+    /// content rather than a table of the body standing beside the outer one. A
+    /// cell that holds both lists its pictures before its tables.
+    pub tables: Vec<GridTable>,
 }
 
 pub struct DocumentBuilder {
@@ -882,27 +889,29 @@ impl DocumentBuilder {
             prov,
             data,
         });
-        self.place_cell_pictures(idx, table, layer);
+        self.place_cell_items(idx, table, layer);
         table_ref
     }
 
-    /// Put the pictures a table's cells hold under the table, and make each of
-    /// those cells a rich cell that references them.
+    /// Put what a table's cells hold under the table, and make each of those
+    /// cells a rich cell that references it.
     ///
     /// Docling's `RichTableCell` references a document item, and its own ODF
     /// reader answers with one `unspecified` group per rich cell holding that
-    /// cell's content — cumulative text and pictures alike. The same shape is
-    /// used here: the group's parent is the table and the table lists the group
-    /// as a child (Docling refuses a rich cell whose item has another parent or
-    /// is not one of the table's children), and every picture is a child of the
+    /// cell's content — cumulative text and items alike. The same shape is used
+    /// here: the group's parent is the table and the table lists the group as a
+    /// child (Docling refuses a rich cell whose item has another parent or is
+    /// not one of the table's children), and every picture is a child of the
     /// group with no provenance, because a Word cell is flow content with no
-    /// page rectangle of its own.
-    fn place_cell_pictures(&mut self, table_idx: usize, table: &GridTable, layer: &str) {
+    /// page rectangle of its own. A table nested in the cell is that group's
+    /// child too — placed where the cell stated it, not beside the outer table
+    /// in the body.
+    fn place_cell_items(&mut self, table_idx: usize, table: &GridTable, layer: &str) {
         let table_ref = Ref {
             ref_path: format!("#/tables/{table_idx}"),
         };
         for (cell_index, cell) in table.cells.iter().enumerate() {
-            if cell.pictures.is_empty() {
+            if cell.pictures.is_empty() && cell.tables.is_empty() {
                 continue;
             }
             let group_index = self.doc.groups.len();
@@ -929,6 +938,10 @@ impl DocumentBuilder {
                     &group.ref_path,
                 );
                 self.doc.groups[group_index].children.push(picture);
+            }
+            for nested in &cell.tables {
+                let nested = self.push_grid_table_at(nested, Vec::new(), layer, &group.ref_path);
+                self.doc.groups[group_index].children.push(nested);
             }
             // The table lists the group, which is what the cell references:
             // Docling looks the cell's `ref` up among the table's own children
@@ -1045,6 +1058,7 @@ fn grid_from_rows(rows: &[Vec<String>]) -> GridTable {
                 column_header: r == 0,
                 row_header: c == 0 && r > 0,
                 pictures: Vec::new(),
+                tables: Vec::new(),
             });
         }
     }

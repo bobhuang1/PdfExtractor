@@ -2592,22 +2592,32 @@ fn text_agreement(ours: &Value, reference: &Value) -> f64 {
     }
 }
 
+/// How many groups a rich cell's content may descend through before this stops
+/// looking. A cell can hold a table that holds a cell, and no document nests
+/// deeper than this; a reference that points back at a group above it adds
+/// nothing rather than looping.
+const RICH_CELL_DEPTH: usize = 8;
+
 /// The alphanumeric characters of a document's text items and table cells, as a
 /// multiset. Math and calendar values are excluded: see [`without_inline_math`]
 /// and [`without_calendar_values`].
+///
+/// A *rich* cell — one whose `ref` names a group of its own content — is counted
+/// once, not twice. A producer writes a cell that holds more than one block both
+/// as the cell's text (its paragraphs joined) and as the paragraphs themselves,
+/// which stand on their own as items inside the cell's group; the same words are
+/// then in both places, and a table nested in the cell is a block of its own
+/// beside them. So what a rich cell's text contributes is what its group's
+/// paragraphs do not already hold. Nothing is taken out for a table under the
+/// group: a cell's text is its own paragraphs, never the text of a table nested
+/// in it, and those cells are counted where the table stands.
 fn characters(document: &Value) -> BTreeMap<char, usize> {
     let mut counts = BTreeMap::new();
-    let mut add = |text: &str| {
-        let text = without_calendar_values(&without_inline_math(text));
-        for character in text.chars().filter(|character| character.is_alphanumeric()) {
-            *counts.entry(character).or_insert(0usize) += 1;
-        }
-    };
     for item in document["texts"].as_array().into_iter().flatten() {
         if item["label"].as_str() == Some("formula") {
             continue;
         }
-        add(item["text"].as_str().unwrap_or_default());
+        add_characters(&mut counts, item["text"].as_str().unwrap_or_default());
     }
     for table in document["tables"].as_array().into_iter().flatten() {
         for cell in table["data"]["table_cells"]
@@ -2615,10 +2625,83 @@ fn characters(document: &Value) -> BTreeMap<char, usize> {
             .into_iter()
             .flatten()
         {
-            add(cell["text"].as_str().unwrap_or_default());
+            merge_characters(&mut counts, cell_characters(document, cell));
         }
     }
     counts
+}
+
+/// Add one text's alphanumerics to `counts`, after the math and calendar rules.
+fn add_characters(counts: &mut BTreeMap<char, usize>, text: &str) {
+    let text = without_calendar_values(&without_inline_math(text));
+    for character in text.chars().filter(|character| character.is_alphanumeric()) {
+        *counts.entry(character).or_insert(0usize) += 1;
+    }
+}
+
+/// Add every character of `from` to `counts`.
+fn merge_characters(counts: &mut BTreeMap<char, usize>, from: BTreeMap<char, usize>) {
+    for (character, count) in from {
+        *counts.entry(character).or_insert(0) += count;
+    }
+}
+
+/// What one table cell contributes: its text, less the paragraphs its rich-cell
+/// group already holds as items of their own.
+fn cell_characters(document: &Value, cell: &Value) -> BTreeMap<char, usize> {
+    let mut counts = BTreeMap::new();
+    add_characters(&mut counts, cell["text"].as_str().unwrap_or_default());
+    let Some(reference) = cell["ref"]["$ref"].as_str() else {
+        return counts;
+    };
+    for (character, count) in group_paragraphs(document, reference, 0) {
+        if let Some(left) = counts.get_mut(&character) {
+            *left = left.saturating_sub(count);
+            if *left == 0 {
+                counts.remove(&character);
+            }
+        }
+    }
+    counts
+}
+
+/// The characters the paragraphs under a rich-cell group hold.
+///
+/// Groups are descended through; tables are not. A paragraph that stands under
+/// a group further in is the same paragraph the outer cell's text repeats, and a
+/// table nested in the cell is not part of that text at all.
+fn group_paragraphs(document: &Value, reference: &str, depth: usize) -> BTreeMap<char, usize> {
+    let mut counts = BTreeMap::new();
+    if depth > RICH_CELL_DEPTH {
+        return counts;
+    }
+    let Some(group) = item_with(document, "groups", reference) else {
+        return counts;
+    };
+    for child in group["children"].as_array().into_iter().flatten() {
+        let Some(reference) = child["$ref"].as_str() else {
+            continue;
+        };
+        match item_with(document, "texts", reference) {
+            Some(item) if item["label"].as_str() != Some("formula") => {
+                add_characters(&mut counts, item["text"].as_str().unwrap_or_default())
+            }
+            Some(_) => {}
+            None => merge_characters(
+                &mut counts,
+                group_paragraphs(document, reference, depth + 1),
+            ),
+        }
+    }
+    counts
+}
+
+/// The item a reference names, from one of a document's arrays.
+fn item_with<'a>(document: &'a Value, key: &str, reference: &str) -> Option<&'a Value> {
+    document[key]
+        .as_array()?
+        .iter()
+        .find(|item| item["self_ref"].as_str() == Some(reference))
 }
 
 /// `text` with Docling's `$...$` inline math removed.
@@ -4872,6 +4955,82 @@ mod tests {
         let ours = document(&[text("paragraph", "abcabc")]);
         let reference = document(&[text("paragraph", "abcabcabcabc")]);
         assert_eq!(summary(&ours, &reference).text_agreement, 0.5);
+    }
+
+    #[test]
+    fn a_rich_cells_paragraphs_are_counted_once() {
+        // What a reading of a table with a table inside a cell comes out as: the
+        // cell's text is its two paragraphs joined, and those paragraphs are items
+        // of their own inside the cell's group, beside the nested table. Counting
+        // the cell's text *and* its paragraphs says the reference holds the words
+        // twice, and a reading that holds them once then looks like a loss.
+        // Ours: the outer table, whose cell folds its paragraphs into one text,
+        // and the nested table as a table of its own under the cell's group.
+        let ours = document(&[
+            table(&[
+                &["Phase", "Detail"],
+                &["Review", "Before the table. After the table."],
+            ]),
+            table(&[&["Draft"]]),
+        ]);
+        let reference = json!({
+            "body": { "self_ref": "#/body", "children": [{ "$ref": "#/tables/0" }] },
+            "furniture": { "self_ref": "#/furniture", "children": [] },
+            "texts": [
+                { "self_ref": "#/texts/0", "label": "text", "text": "Before the table." },
+                { "self_ref": "#/texts/1", "label": "text", "text": "After the table." },
+            ],
+            "tables": [
+                { "self_ref": "#/tables/0", "label": "table", "data": { "table_cells": [
+                    { "text": "Phase", "start_row_offset_idx": 0, "start_col_offset_idx": 0 },
+                    { "text": "Detail", "start_row_offset_idx": 0, "start_col_offset_idx": 1 },
+                    { "text": "Review", "start_row_offset_idx": 1, "start_col_offset_idx": 0 },
+                    { "text": "Before the table.\nAfter the table.",
+                      "start_row_offset_idx": 1, "start_col_offset_idx": 1,
+                      "ref": { "$ref": "#/groups/0" } },
+                ] } },
+                { "self_ref": "#/tables/1", "label": "table", "data": { "table_cells": [
+                    { "text": "Draft", "start_row_offset_idx": 0, "start_col_offset_idx": 0 },
+                ] } },
+            ],
+            // The nested table is a child of the cell's group too, and it is *not*
+            // taken out of the cell's text: a cell's text is its own paragraphs.
+            "groups": [{ "self_ref": "#/groups/0", "children": [
+                { "$ref": "#/texts/0" },
+                { "$ref": "#/tables/1" },
+                { "$ref": "#/texts/1" },
+            ] }],
+            "pages": {},
+        });
+
+        assert_eq!(summary(&ours, &reference).text_agreement, 1.0);
+    }
+
+    #[test]
+    fn a_rich_cell_keeps_what_its_paragraphs_do_not_say() {
+        // A producer can write a cell's text longer than the item it made of the
+        // paragraph inside it (`drawing.docx`'s captions are this shape). Only what
+        // the paragraph already holds is taken out; the rest is still text the
+        // reference has and a reading has to hold.
+        let ours = document(&[table(&[&["Moody's rating cut to Aaa"]])]);
+        let reference = json!({
+            "body": { "self_ref": "#/body", "children": [{ "$ref": "#/tables/0" }] },
+            "furniture": { "self_ref": "#/furniture", "children": [] },
+            "texts": [{ "self_ref": "#/texts/0", "label": "text", "text": "Moody's rating cut to Aaa" }],
+            "tables": [{ "self_ref": "#/tables/0", "label": "table", "data": { "table_cells": [
+                { "text": "Moody's rating cut to Aaa today",
+                  "start_row_offset_idx": 0, "start_col_offset_idx": 0,
+                  "ref": { "$ref": "#/groups/0" } },
+            ] } }],
+            "groups": [{ "self_ref": "#/groups/0", "children": [{ "$ref": "#/texts/0" }] }],
+            "pages": {},
+        });
+
+        // The word the cell adds is not in this reading, and it is one loss — not
+        // nothing at all, which is what dropping the cell's whole text would say.
+        let compared = summary(&ours, &reference);
+        assert!(compared.text_agreement < 1.0, "{}", compared.text_agreement);
+        assert!(compared.text_agreement > 0.7, "{}", compared.text_agreement);
     }
 
     #[test]

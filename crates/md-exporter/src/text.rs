@@ -28,7 +28,7 @@
 //! pipeline that must see the source characters switches it off.
 
 use crate::walk::{walk_body_with, Visitor};
-use crate::{is_bullet_glyph, pipe_table};
+use crate::{cell_tables, is_bullet_glyph, pipe_table_with};
 use pdfextractor_core::{DoclingDocument, PictureItem, TableItem, TextItem};
 use std::path::Path;
 
@@ -48,6 +48,7 @@ pub fn render_with(doc: &DoclingDocument, dehyphenate: bool) -> String {
 /// a deck's speaker notes after their slide, its comments after the slides.
 pub fn render_with_notes(doc: &DoclingDocument, dehyphenate: bool, include_notes: bool) -> String {
     let mut renderer = Renderer {
+        doc,
         dehyphenate,
         blocks: Vec::new(),
     };
@@ -88,14 +89,15 @@ pub fn export_to_file_with_notes(
     Ok(())
 }
 
-struct Renderer {
+struct Renderer<'a> {
+    doc: &'a DoclingDocument,
     /// Whether line-end hyphens join the lines they broke.
     dehyphenate: bool,
     /// One entry per rendered block, joined by a blank line.
     blocks: Vec<String>,
 }
 
-impl Renderer {
+impl Renderer<'_> {
     fn block(&mut self, text: String) {
         if !text.trim().is_empty() {
             self.blocks.push(text);
@@ -123,7 +125,7 @@ impl Renderer {
     }
 }
 
-impl Visitor for Renderer {
+impl Visitor for Renderer<'_> {
     fn text(&mut self, _index: usize, item: &TextItem) {
         match item.label.as_str() {
             "title" | "section_header" => {
@@ -156,13 +158,46 @@ impl Visitor for Renderer {
         }
     }
     fn table(&mut self, _index: usize, table: &TableItem) {
-        if let Some(block) = pipe_table(table) {
+        if let Some(block) = pipe_table_with(table, |cell| self.nested_cell_words(cell)) {
             self.block(block);
         }
     }
     fn picture(&mut self, _index: usize, _picture: &PictureItem) {
         // A plain text file cannot show a picture, and its file path is not
         // something to read: the same walk reaches it, this writes nothing.
+    }
+}
+
+impl Renderer<'_> {
+    /// The words of the tables a cell holds, after the cell's own: plain text
+    /// cannot draw a table inside a cell, so a nested table's cells read where
+    /// the outer cell is — the same flattening Markdown writes, and no words
+    /// dropped for the sake of the shape.
+    fn nested_cell_words(&self, cell: &pdfextractor_core::TableCell) -> String {
+        let mut held: Vec<String> = Vec::new();
+        for table in cell_tables(self.doc, cell) {
+            held.extend(self.nested_table_words(table));
+        }
+        held.join(" ")
+    }
+
+    /// A nested table's cells in grid order, each as its words and then the
+    /// words of whatever it holds in turn.
+    fn nested_table_words(&self, table: &TableItem) -> Vec<String> {
+        let mut cells: Vec<&pdfextractor_core::TableCell> = table.data.table_cells.iter().collect();
+        cells.sort_by_key(|cell| (cell.start_row_offset_idx, cell.start_col_offset_idx));
+        let mut held = Vec::new();
+        for cell in cells {
+            let text = self.words(&cell.text);
+            if !text.is_empty() {
+                held.push(text);
+            }
+            let rest = self.nested_cell_words(cell);
+            if !rest.is_empty() {
+                held.push(rest);
+            }
+        }
+        held
     }
 }
 

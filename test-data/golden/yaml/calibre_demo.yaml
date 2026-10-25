@@ -24,9 +24,8 @@ body:
   - $ref: '#/texts/18'
   - $ref: '#/texts/19'
   - $ref: '#/tables/3'
-  - $ref: '#/tables/4'
   - $ref: '#/texts/20'
-  - $ref: '#/tables/5'
+  - $ref: '#/tables/4'
   - $ref: '#/texts/21'
   - $ref: '#/texts/22'
   - $ref: '#/texts/23'
@@ -108,7 +107,15 @@ furniture:
   label: unspecified
   name: _root_
   self_ref: '#/furniture'
-groups: []
+groups:
+- children:
+  - $ref: '#/tables/5'
+  content_layer: body
+  label: unspecified
+  name: rich_cell_group_3_0_0
+  parent:
+    $ref: '#/tables/3'
+  self_ref: '#/groups/0'
 key_value_items: []
 name: calibre_demo.docx
 origin:
@@ -1022,48 +1029,8 @@ tables:
     $ref: '#/body'
   prov: []
   self_ref: '#/tables/2'
-- children: []
-  content_layer: body
-  data:
-    num_cols: 2
-    num_rows: 2
-    table_cells:
-    - col_span: 1
-      column_header: true
-      end_col_offset_idx: 1
-      end_row_offset_idx: 2
-      row_header: false
-      row_section: false
-      row_span: 2
-      start_col_offset_idx: 0
-      start_row_offset_idx: 0
-      text: One Three
-    - col_span: 1
-      column_header: true
-      end_col_offset_idx: 2
-      end_row_offset_idx: 1
-      row_header: false
-      row_section: false
-      row_span: 1
-      start_col_offset_idx: 1
-      start_row_offset_idx: 0
-      text: Two
-    - col_span: 1
-      column_header: false
-      end_col_offset_idx: 2
-      end_row_offset_idx: 2
-      row_header: false
-      row_section: false
-      row_span: 1
-      start_col_offset_idx: 1
-      start_row_offset_idx: 1
-      text: Four
-  label: table
-  parent:
-    $ref: '#/body'
-  prov: []
-  self_ref: '#/tables/3'
-- children: []
+- children:
+  - $ref: '#/groups/0'
   content_layer: body
   data:
     num_cols: 2
@@ -1073,6 +1040,8 @@ tables:
       column_header: true
       end_col_offset_idx: 1
       end_row_offset_idx: 1
+      ref:
+        $ref: '#/groups/0'
       row_header: false
       row_section: false
       row_span: 1
@@ -1093,7 +1062,7 @@ tables:
   parent:
     $ref: '#/body'
   prov: []
-  self_ref: '#/tables/4'
+  self_ref: '#/tables/3'
 - children: []
   content_layer: body
   data:
@@ -2673,6 +2642,47 @@ tables:
   label: table
   parent:
     $ref: '#/body'
+  prov: []
+  self_ref: '#/tables/4'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 2
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: One Three
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Two
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Four
+  label: table
+  parent:
+    $ref: '#/groups/0'
   prov: []
   self_ref: '#/tables/5'
 texts:
