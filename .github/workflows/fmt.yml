@@ -1,0 +1,41 @@
+# The formatting gate, on every push: rustfmt's own reading of every crate.
+#
+# `cargo fmt --all --check` formats every package in the workspace in memory and
+# compares the result with what is committed. It writes nothing, exits non-zero
+# and names each file whose text differs, with the diff it would have made. So
+# drift — a file formatted by hand, a merge that kept both sides, an editor's
+# idea of where a line breaks — fails here rather than turning up as unrelated
+# noise inside the next feature change's diff. `--all` is the workspace, not
+# only the package at the root.
+#
+# The command is the one README's "Build and test" gives, run by hand the same
+# way:
+#
+#     cargo fmt --all --check
+#
+# Nothing is compiled, so this job installs no native libraries and wants no
+# cache: rustfmt reads the sources the checkout has already put there.
+
+name: the formatting gate
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  rustfmt:
+    name: every crate, formatted as rustfmt reads it
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # rustfmt is a toolchain component rather than a crate; a stable toolchain
+      # with it added is the whole of this job's setup.
+      - name: The stable toolchain, with rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: rustfmt, with drift refused
+        run: cargo fmt --all --check

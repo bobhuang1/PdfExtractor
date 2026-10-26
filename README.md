@@ -107,8 +107,9 @@ on it.
 
 ```bash
 cargo build --workspace      # 0 warnings
-cargo test  --workspace      # 556 tests
+cargo test  --workspace      # 970 tests
 cargo clippy --workspace --all-targets -- -D warnings   # no warnings
+cargo fmt --all --check      # formatted as rustfmt reads it
 
 # The compatibility suite, held to real Docling. The schema layer always runs;
 # pointing DOCLING_PY at a Python with docling-core installed adds the layer that
@@ -116,6 +117,22 @@ cargo clippy --workspace --all-targets -- -D warnings   # no warnings
 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python \
   cargo test -p pdfextractor-cli --test docling_golden_test
 ```
+
+Every push runs that clippy command in CI (`.github/workflows/clippy.yml`) with
+`--locked` added, over the whole workspace and every target: a lint, or a warning
+only a test target reaches, fails the build instead of scrolling past in a log.
+`cargo fmt --all --check` runs beside it (`.github/workflows/fmt.yml`), so formatting
+drift — a hand-formatted file, a merge that kept both sides — fails the build too
+instead of arriving inside the diff of whatever change comes next. And every push runs
+`cargo test --workspace --locked` (`.github/workflows/test.yml`) — the suite above with
+nothing filtered out: the unit tests, the corpus report, the golden suite and the
+command line's own integration tests, with the native libraries the workspace links and
+the OCR data the tests recognise with installed first, and LibreOffice deliberately left
+out. The suite is green without it — its bridge tests return early, the corpus report
+keeps the baseline entries of the legacy documents it could not measure, and the golden
+suite compares those four through the built-in reader — so the gate never puts the
+runner's LibreOffice build between the ratchet and the numbers the baseline was measured
+with. A run here is what a fresh checkout on a machine without LibreOffice gets.
 
 ### Compatibility with Docling
 

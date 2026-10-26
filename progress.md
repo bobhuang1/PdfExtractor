@@ -12521,3 +12521,130 @@ background-inheritance paragraph, beside the master fixture.
 them; `cargo fmt --all --check` clean and clippy quiet on the crates. Rerunning the
 generator writes the same parts, byte for byte; only the archive's own timestamps differ,
 which is what the docstring says the tests never pin.
+
+## The clippy gate in CI
+
+**The job.** [.github/workflows/clippy.yml](.github/workflows/clippy.yml) runs the
+command the README's "Build and test" already gave, with `--locked` added, on every
+push:
+
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+`-D warnings` is what makes it a gate: plain `cargo clippy` prints a lint and exits
+zero, so an unused import or a new dependency's lint could sit in the tree with
+nothing red. `--all-targets` puts the tests, examples and benches under the same
+reading as the libraries and binaries, so a warning only a test target reaches fails
+too — which is exactly the kind of warning this tree has had (the `pipe_table` left
+unused when the text writer grew a cell closure, found by the check before the
+workflow existed).
+
+**What it needs on the runner.** Clippy compiles every target before it lints it, so
+the job installs what the build scripts ask for, the same list the release workflow's
+Linux build uses: `libtesseract-dev libleptonica-dev libclang-dev` for the CLI (which
+links the Tesseract bindings even with OCR off, and builds those bindings with
+libclang) and `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+librsvg2-dev libxdo-dev` for the desktop shell's default features. Without them the
+job dies in a build script before a lint is asked. The build cache is the same
+`actions/cache` shape the other gate uses, keyed on `Cargo.lock` so `--locked` and the
+cache cannot disagree about what was built.
+
+**Verification.** The workflow parses as YAML with both triggers (`push`,
+`workflow_dispatch`), and the job's exact command was run locally against this tree:
+`cargo clippy --workspace --all-targets --locked -- -D warnings` exits **0** (clippy
+0.1.99, rustc 1.99.0). The workflow itself has not been executed — GitHub Actions
+cannot run here — so the first push is where the runner's toolchain, and the apt
+packages, are proven. The flag is what separates the two outcomes and that was seen
+on this tree: with `pipe_table` unused, `cargo clippy --workspace --all-targets`
+printed `function pipe_table is never used` and exited **0** (`-D warnings` is what
+turns that into a failed run); the function was removed and the gate's exact command
+now exits 0.
+
+## The formatting gate in CI
+
+**The job.** [.github/workflows/fmt.yml](.github/workflows/fmt.yml) runs rustfmt's
+check over the workspace on every push, beside the clippy gate:
+
+    cargo fmt --all --check
+
+`--check` writes nothing and exits non-zero naming each file whose text rustfmt would
+have changed, so drift — a hand-formatted file, a merge that kept both sides, an
+editor's idea of where a line breaks — fails the build rather than turning up as noise
+inside the diff of the next change. `--all` is every package in the workspace, not only
+the one at the root.
+
+**What it needs on the runner.** Nothing to compile and nothing to install: rustfmt is
+a toolchain component, so the job adds a stable toolchain with it
+(`dtolnay/rust-toolchain@stable`, `components: rustfmt`) and reads the checkout the
+same way the command does by hand. No `actions/cache` and none of the native libraries
+the clippy job needs, because no crate is built.
+
+**Verification.** The workflow parses as YAML with both triggers (`push`,
+`workflow_dispatch`) and one `rustfmt` job. The command is clean on this tree
+(`cargo fmt --all --check` exits **0**), and it bites: one badly spaced function added
+to `crates/core/src/lib.rs` made it exit **1** and print the diff rustfmt would have
+written (`fn  drift( )->u8{1}` → `fn drift() -> u8 { 1 }`, with the file named), after
+which the file was put back and the check passed again. The workflow itself has not
+been executed — GitHub Actions cannot run here — so the first push is where the
+runner's toolchain is proven; rustfmt 1.10.0-stable is what the local check ran.
+
+**Docs.** [README.md](README.md) lists `cargo fmt --all --check` in its "Build and
+test" snippet and says beside the clippy paragraph that the same pushes run the
+formatting gate.
+
+## The workspace suite in CI
+
+**The job.** [.github/workflows/test.yml](.github/workflows/test.yml) runs the command
+the README's "Build and test" already gave, on every push:
+
+    cargo test --workspace --locked
+
+Nothing is filtered: the unit tests, the corpus report, the golden suite and the CLI's
+own integration tests all run, and `--locked` makes a stale lockfile the same red build
+as a failing test. The Docling suite's schema layer runs as it does everywhere (its
+`docling-core` layer still needs `DOCLING_PY` and skips without it).
+
+**What it needs on the runner.** The suite compiles the desktop shell as well as the
+CLI, and OCR is a required capability, so the job installs the clippy gate's package
+list — `libtesseract-dev libleptonica-dev libclang-dev` for the bindings and the WebKitGTK
+and GTK development packages for the shell — plus `tesseract-ocr` and
+`tesseract-ocr-eng`, the language data the OCR tests recognise with. That is the same
+list the release workflow's Linux build installs.
+
+**LibreOffice is left out, and that is a measurement, not an assumption.** The gateway
+question is the golden suite, because it skips nothing: `our_output_agrees_with_real_
+docling_conversions` converts every corpus document and holds it to Docling's reference,
+and four of them are legacy `.doc` files (`equation.doc`, `FloatingPictures.doc`,
+`testPictures.doc`, `two_images.doc`) that the bridge would otherwise read. Run with an
+empty `PATH` — the honest simulation, since a `PDFE_SOFFICE` naming nothing falls through
+to `PATH` and finds this machine's `soffice` — all four still clear the 0.85 floor through
+the built-in reader: `equation` 1.000, `two_images` 1.000, `FloatingPictures` 0.971,
+`testPictures` 0.941, and the suite's **30 tests pass**. The other two surfaces behave as
+their code says: the CLI suite's bridge tests return early (`soffice_binary()`, **128
+passed**) and the corpus report keeps the four documents' baseline entries instead of
+recording a reading it did not make (**9 passed**).
+
+So the job installs no LibreOffice, and that is the safer gate as well as the smaller
+one: the bridge's readings depend on the installed build, so installing it would put the
+runner's version between the ratchet and the numbers the baseline was measured with —
+the reason the compare gate measures with `--ocr never`. A run here is what a fresh
+checkout on a machine without LibreOffice gets, and the bridge stays gated on the
+machines that have it. (The earlier note above claimed the golden suite would fall below
+the floor without the bridge; that was wrong, and the empty-`PATH` run is what settled
+it.)
+
+**Verification.** The workflow parses as YAML with both triggers (`push`,
+`workflow_dispatch`) and one `test` job whose step is the exact command. That command
+was run against this tree: **970 tests in 47 binaries passed, 0 failed**, exit **0**,
+with this machine's LibreOffice 24.2. Run again with `PATH` emptied so the bridge is
+absent — the CLI suite **128 passed** in 448.54 s, the corpus report **9 passed** in
+145.70 s, the Docling suite **30 passed** — every suite that touches the bridge is green
+without it. The workflow itself has not been executed — GitHub Actions cannot run
+here — so the first push is where the
+runner's packages, and the OCR floors against the runner's Tesseract build, are proven.
+The floors were written with a margin for another build
+(`crates/cli/tests/ocr_quality_test.rs` says so), but that is the one number in the suite
+that a different Tesseract can move.
+
+**Docs.** [README.md](README.md) says beside the clippy and formatting paragraphs that
+every push also runs the suite, and its "Build and test" count moves from 556 to 970 —
+what `cargo test --workspace` reports on this tree.
