@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the window may do. The app's own commands are always available; `core:default` adds the core permissions, of which `core:event:allow-listen` is the one that matters here — a conversion is streamed to the page as events, and without it the page cannot subscribe and nothing would ever be drawn.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
