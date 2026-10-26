@@ -12749,3 +12749,62 @@ fixture the golden suites read to the index — passes.
 
 **Docs.** The rule carries its reasoning in `.gitignore` itself; the README has no
 ignore-rule text to correct.
+
+## A cell's sentences are inside our table, not text we missed
+
+**What was asked.** Make a reference item that lies wholly inside one of our table blocks a
+contained row rather than one only the reference has, so a nested table's cell sentences
+are not reported as text we did not read.
+
+**What refused it.** Containment asked for text on both sides (`comparable` in
+[diff.rs](crates/ui/src/diff.rs)): a reference *text* item could lie inside a text block of
+ours and nowhere else. Our table's text is a rendering of its cells, so the rule could not
+see that the reference's items were words that rendering holds — `nested_table.docx`
+reported the cell's two sentences as two rows only the reference has, though the cell they
+belong to is ours and says them.
+
+**The change.** `comparable` now lets a reference text item lie inside a text block *or a
+table* of ours, by its words: a table's cells are words we read, joined, so an item whose
+letters run from one of their word boundaries to another is inside it. A table stays a
+holder only and never a piece of one — one table's rendering lying inside another's would
+mean nothing — and a formula is never inside anything. Two smaller rules keep the new arm
+honest: `differing_labels` says nothing about a table's labels (Docling writes a cell's
+paragraph as a `text` item, so "table vs text" is not a finding), and `letterless_in_place`
+stays text-only (a leader or a rule belongs to a line of prose, not to a table's area).
+`contained_runs` — the alignment's run arm — also stays text-only: letting a table consume a
+run there would let it reach forward over the items standing before it and leave the table
+they came with unpaired. The second step, `fold_contained`, is what takes them onto the
+table's row, which is the step the module note already describes for an item standing
+between two of our block's own.
+
+**What it measured.** The baseline moved on nine documents, and the direction of the big
+moves is what the request was for: `irs_f1040` rows 203 → 143 with `theirsOnly` 94 → 34
+(the form's lines are cells in our reading and per-line items in Docling's), `README` 196
+→ 144 with 96 → 44 (a Markdown table's cells), `drawing` 267 → 251 with 67 → 51,
+`math_layernorm` 373 → 364 with 63 → 54, `tracemonkey` 439 → 435 with 97 → 93,
+`merged_table` 12 → 10 with 5 → 3 and its first containment, `floatingtbl_with_formula`
+11 → 9 with 7 → 5, and `nested_table` 6 → 4 with `theirsOnly` 2 → 0 and `contained` 0 → 1
+— the case this was asked for.
+
+**What it cost, named rather than hidden.** Two documents lose one row apiece, and both are
+in the baseline at their new numbers: `README`'s `oursOnly` 24 → 25 and `math_seq2seq`'s
+`contained` 52 → 51, `oursOnly` 98 → 99. An item whose words stand in a table *and* in
+another block of ours is taken by the nearer holder, and with tables in the running it can
+be the table: on `README` the `.docx` item goes to the table row that lists it and the text
+block that used to take it stands alone; on `math_seq2seq` `RNNenc-30` is taken by the
+table whose cell is that name, leaving our line `5 RNNenc-50 RNNenc-30` ours-only. The
+ratchet holds both at the new figures, so a later run that loses another row on either still
+fails.
+
+**Docs.** The corpus README's `nested_table` paragraph now says its table's row is a
+containment — Docling's two items are the cell's sentences, the table holds their words —
+where it used to say two rows only the reference has.
+
+**Verification.** `cargo test -p pdfextractor-ui --no-default-features --lib` **108 passed**
+(the new `a_cells_sentences_the_reference_lists_separately_are_inside_our_table` among
+them); `--test corpus_report_test` **9 passed** in 147.60 s with 42 documents compared and
+every one at or better than the updated baseline; `--test compare_test --test formats_test
+--test job_test` **5 + 1 + 7 passed**; `cargo test -p pdfextractor-cli --test
+compare_mode_test` **8 passed**; `DOCLING_PY=… cargo test -p pdfextractor-cli --test
+docling_golden_test` **30 passed** in 237.80 s. `cargo fmt --all --check` clean and clippy
+with `-D warnings` quiet on the two crates.
