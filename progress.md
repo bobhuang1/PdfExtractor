@@ -12234,6 +12234,74 @@ passed**; `--test corpus_report_test` **9 passed**, 41 documents compared, every
 better than the baseline; `DOCLING_PY=… cargo test -p pdfextractor-cli --test
 docling_golden_test` **29 passed**. `cargo fmt --all --check` clean.
 
+## An HTML merged header is compared with Docling's own reading
+
+**What was asked.** Add the late merged-header fixture to the Docling comparison
+corpus with a reference conversion, and check it against it.
+
+**Why this fixture.** [late_merged_header.html](test-data/late_merged_header.html)
+is the page whose table states its header row after a `colspan="3"` caption, and
+whose header row itself merges (`<th>Region</th><th colspan="2">Totals</th>`).
+Its four render goldens pin what our writers do with that hoist; nothing held the
+*reading* to another tool's, and Docling reads HTML with a backend of its own, so
+the page could join the comparison without a format being written for it.
+
+**The reference.** `regenerate.py late_merged_header.html` — docling 2.138.0 with
+docling-core 2.101.1, the versions the committed copies were made with — wrote
+[docling/late_merged_header.json](test-data/golden/docling/late_merged_header.json):
+**no pages**, three text items and one table. The text items are a `title` for the
+page's `<title>` and another for its `<h1>`, both saying `Sales report`, and the
+paragraph as `text`. The table is nine cells in four rows: the caption at row 0
+spanning three columns, then `Region` and a `colspan="2"` `Totals` at row 1 with
+`column_header` set on both, then the two data rows.
+
+**The check.** `our_output_agrees_with_real_docling_conversions` finds the document
+by stem beside the corpus (`corpus_input` looks in `test-data/real` and then in
+`test-data/`), converts it with our CLI and compares it: **0/0 pages, text
+agreement 0.909**, formulas 0/0; labels **2 headings kept, 0 read as body text, 0
+blocks merged across a boundary, 1 table cell in a table / 0 read as prose / 0
+uncovered**; no block appears twice. Our table is Docling's row for row — the
+caption still first, the header row under it carrying `column_header` — so what the
+render goldens pin as a hoist is a writer's decision and the model keeps the source
+order, which is also how the other tool reads the page.
+
+**The 0.909 is a doubled title, not a lost word.** Docling names the page twice,
+once from the `<title>` in the head and once from the `<h1>` in the body. Our model
+holds one `title` item, so the reference's second `Sales report` is the one row only
+it has (the document's four rows are 3 same, 1 only the reference). Every other
+character the reference holds is in our output, and the comparison's floor is 0.85.
+
+**The ratchet.** The corpus report now compares **42 documents** — the 43 references
+less `invoice_scan.png`, whose text exists only through OCR and is measured by the
+golden suite instead — and `late_merged_header` is in
+[compare-baseline.json](test-data/golden/compare-baseline.json) with rows 4, same 3,
+`theirsOnly` 1 and agreement 0.9090909, so a later reading that loses a row of it
+fails the report. The update run also rewrote `FloatingPictures`' agreement (0.9914752
+→ 0.9913307), the calendar drift that work's entry predicts; that number was put back
+rather than accepted here, and the comparison is calendar-neutral now, so the file's
+diff is the new entry and nothing else.
+
+**The schema test.** `late_merged_header.html` is not in `test-data/real`, so
+`every_corpus_document_conforms_to_the_docling_schema` never sees it; a fixture beside
+the corpus is held to the schema by its own test, and
+`a_late_merged_header_html_conforms_to_the_docling_schema` is that test here — the
+document it converts is checked against `DoclingDocument.json` field by field, like
+the workbook, the deck, the image and the RTF.
+
+**Docs.** [test-data/golden/README.md](test-data/golden/README.md) now says **43 in
+all** with six fixtures beside the corpus, lists HTML among the formats Docling reads
+itself, and records this fixture's reference — its pages, its doubled title, its table
+— and the two figures the comparison prints for it. The root README's compatibility
+row moves from 42 to 43 the same way.
+
+**Verification.** `DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p
+pdfextractor-cli --test docling_golden_test a_late_merged_header_html_conforms_to_the_docling_schema`
+**1 passed**, and `our_output_agrees_with_real_docling_conversions` **1 passed** in
+162.71 s with every document compared; `cargo test -p pdfextractor-ui
+--no-default-features --test corpus_report_test` **9 passed** in 147.32 s, the corpus
+compared whole with the new entry and every reading at or better than its baseline.
+`cargo fmt --all --check` and `git diff --check` clean.
+
 ## A table written in a cell is the cell's
 
 **What was wrong.** A `w:tbl` was read wherever it stood: opening one pushed a
