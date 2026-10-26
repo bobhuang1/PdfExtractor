@@ -13107,3 +13107,69 @@ removed afterwards.
 passed** in 0.09 s on this tree and names nothing, and the probe run above is the failing
 side. `cargo fmt --all --check` clean and clippy over the CLI's targets with `-D warnings`
 quiet.
+
+## The gate says what it could not read, instead of reading it another way
+
+**What was asked.** Make the per-push compare gate able to pass on a runner without
+LibreOffice, so the legacy `.doc` documents stop reddening every push.
+
+**The failure it exists for.** `compare-gate.yml` runs on every push on a plain
+`ubuntu-latest`, which has no LibreOffice — and the corpus's four legacy `.doc` files are
+*read* through the bridge: Writer gives them their headings, their list markers, their
+merged tables and their pictures, and the memory beside their references was measured on
+Writer's reading of them. The runner compares the *built-in* reader's reading instead —
+a paragraph where a heading was, no marker on a list item, tabs where a table was — so all
+four fell below their floors and the job was red on every push, for a fact about the
+machine rather than about the reading. The scheduled bridge gate (`bridge.yml`) already
+installed LibreOffice for exactly these documents; the push gate was the one left asserting
+something it had no way to measure.
+
+**The rule.** Two small pieces. `formats::reads_through_libreoffice` answers the wider
+question than `is_bridged`: what a document *reads as* depends on the bridge, which is
+`Format::Doc` as well as the formats only the bridge can read at all — a `.doc` has a
+reader here and the two readers do not say the same thing about it. `compare::not_held_here`
+uses it per document: on a machine with no LibreOffice, a document whose reading goes
+through one is left out rather than held, and named on a line of its own together with the
+reason, with the count repeated at the end of the run — a gate that quietly held less than
+it claims to is worse than no gate at all. The format is detected from the bytes, not read
+off the file's name, because that is the question the run itself asked when it chose a
+reader: a DOCX called `report.doc`, or a `.wps` that is really a package, is read here
+exactly as it would be with the bridge installed, and so is held as usual.
+
+**Both halves in CI.** The push gate's header and job name now say *every document this
+runner reads* and explain the four that are not; `bridge.yml` gains a step running
+`compare_mode_test`, so the other half of the rule — those documents *held*, against the
+bridge's own numbers — is exercised where the bridge is.
+
+**The tests.** `compare_mode_test` gains both directions on the corpus's own
+`test-data/real/two_images.doc`, each with the same memory: every count remembered as none
+and the reference's characters as **200%** held, a floor above anything a comparison can
+report, so a run that holds the document is refused whatever this machine reads of it.
+`a_document_the_bridge_reads_is_not_held_on_a_machine_without_one` runs it with
+`PDFE_SOFFICE` naming a path that is not a file — the only way to say "no LibreOffice" on a
+machine whose `PATH` holds one — and asserts the run passes, the document named as left out
+with the reason, the count at the end, and *no* floor refusal anywhere.
+`the_same_document_is_held_when_the_bridge_is_here` is its control: the same document, the
+same memory, the machine's real `soffice`, and the run refused by the floor. That is what
+makes the first test about the bridge rather than about a floor that happened to be out of
+reach; it returns without asserting where no LibreOffice is installed, as the other bridge
+tests do. `formats` gains `what_the_bridge_reads_is_more_than_what_only_it_can_read`: a
+`.doc` is `Doc`, not bridged, and still reads through one; a Works file is bridged; a PDF,
+an HTML page and a DOCX are neither.
+
+**Docs.** The root README's test-gate paragraph now lists the compare gate among the things
+the suite does without LibreOffice, and the bridge gate among the four suites whose readings
+change when it is there; the compare-gate section gains a paragraph on the four documents
+that are left out, quoting the line they are left out with.
+
+**Verification.** Over the whole corpus with the bridge absent
+(`PDFE_SOFFICE=/nowhere/soffice`), the gate is **exit 0** in 2 m 55 s at `--parallel 4`: the
+four `.doc` files named and counted (`compare: 4 document(s) not held: this machine has no
+LibreOffice, and they are read through it`) and **33** documents at or above the whole
+ratchet; with LibreOffice on `PATH` the same command is **exit 0** in 2 m 55 s with **37**
+held, **no** line saying anything was left out, and the four `.doc` documents held on their
+own numbers (`FloatingPictures.doc` 203 rows at 99.4%, the other three at 100.0%). `cargo
+test -p pdfextractor-cli --test compare_mode_test` is **10 passed** (both new tests ran —
+this machine has LibreOffice, so the control asserted rather than skipped), the formats unit
+test **1 passed**, `cargo fmt --all --check` clean and clippy over the CLI's targets with
+`-D warnings` quiet.

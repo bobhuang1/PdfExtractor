@@ -24,6 +24,13 @@
 //!   the counts measuring how two readings agree.
 //! * A document the memory does not know stands under no floor, exactly as in the
 //!   window: there is nothing for it to fall from.
+//! * A document whose reading goes through LibreOffice — a legacy `.doc`, or a
+//!   family the bridge is the only reader for — is **not held** on a machine
+//!   without one. The memory's numbers are Writer's reading of that file and what
+//!   this run compared is the built-in reader's, and the two say different things
+//!   about the same document, so neither can be held to the other's numbers. Such
+//!   a document is said on a line of its own and counted at the end, because a
+//!   gate that quietly held less than it claims to is worse than no gate at all.
 //! * A document that **cannot be compared** — no reference for it, an unreadable
 //!   output — and a reference whose memory is there but cannot be read are failures
 //!   rather than silences, and a reference path that is not there is refused before
@@ -33,6 +40,7 @@
 //! With no memory beside the reference — every comparison against a document of
 //! your own — the comparisons are still printed and no floor can fire.
 
+use crate::formats;
 use pdfextractor_ui::diff;
 use pdfextractor_ui::gate;
 use std::path::{Path, PathBuf};
@@ -44,20 +52,46 @@ pub fn open(reference: &Path, ocr: &str) -> anyhow::Result<gate::Session> {
     gate::Session::open(reference, diff::Measurement::from_ocr(ocr)).map_err(anyhow::Error::msg)
 }
 
+/// Why this document is not held by this run, when it is not: it is read through
+/// LibreOffice and this machine has none, so what the run compared is another
+/// reader's reading of it.
+///
+/// The format is detected rather than read off the file's name, because that is
+/// the question the run itself asked when it chose a reader: a DOCX called
+/// `report.doc`, or a `.wps` that is really a package, is read here exactly as it
+/// would be with the bridge installed, and so is held as usual.
+fn not_held_here(input: &Path) -> Option<&'static str> {
+    if formats::libreoffice().is_some() {
+        return None;
+    }
+    let format = formats::detect(input).ok()?;
+    formats::reads_through_libreoffice(format).then_some(
+        "read through LibreOffice, and this machine has none — a reading made \
+         without it is not the reading the memory remembers",
+    )
+}
+
 /// Compare every document the run finished, print one line per document, and
 /// answer with every reason the run must fail: a document below its floor, or one
 /// that could not be compared at all. A conversion that failed has no output to
 /// compare and is already a failure of the run, so it is left to the run's own
-/// tally rather than reported twice.
+/// tally rather than reported twice. A document this machine cannot read the way
+/// the memory's numbers were read is left out rather than held ([`not_held_here`]).
 pub fn check(
     session: &gate::Session,
     results: &[(PathBuf, anyhow::Result<PathBuf>)],
 ) -> Vec<String> {
     let mut refused = Vec::new();
+    let mut left_out = 0usize;
     for (input, result) in results {
         let Ok(output) = result else {
             continue;
         };
+        if let Some(why) = not_held_here(input) {
+            eprintln!("compare: {}: not held · {why}", input.display());
+            left_out += 1;
+            continue;
+        }
         let report = session.compare(&input.to_string_lossy(), output);
 
         // A document the comparison could not make: the line names the reason,
@@ -82,6 +116,15 @@ pub fn check(
             input.display(),
             report.summary.rows,
             report.summary.text_agreement * 100.0
+        );
+    }
+    // Said once at the end as well as on the document's own line: a run whose
+    // log is read by somebody scanning for what a build did should not have to
+    // notice an absence.
+    if left_out > 0 {
+        eprintln!(
+            "compare: {left_out} document(s) not held: this machine has no LibreOffice, and \
+             they are read through it"
         );
     }
     refused

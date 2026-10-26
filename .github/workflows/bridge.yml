@@ -23,6 +23,9 @@
 # * `docling_golden_test` — the same four are compared with Docling's references
 #   through the bridge, so the agreement figures are the ones LibreOffice's
 #   reading produces.
+# * `compare_mode_test` — the command line's `--compare` gate holds such a document
+#   to its memory here, instead of leaving it to the bridge as it does on the
+#   per-push runner (`compare-gate.yml`), which is the other half of that rule.
 #
 # The other suites are not repeated here: `test.yml` has just run them without the
 # bridge, and the only difference this job makes is the bridge's presence.
@@ -86,3 +89,8 @@ jobs:
       # And the same four against Docling's own conversion of them.
       - name: The corpus comparison through the bridge
         run: cargo test -p pdfextractor-cli --test docling_golden_test --locked
+
+      # The compare gate over a legacy `.doc`, which the push gate leaves to this
+      # job rather than holding without the bridge.
+      - name: The compare gate through the bridge
+        run: cargo test -p pdfextractor-cli --test compare_mode_test --locked
