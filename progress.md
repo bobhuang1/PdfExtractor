@@ -12648,3 +12648,104 @@ that a different Tesseract can move.
 **Docs.** [README.md](README.md) says beside the clippy and formatting paragraphs that
 every push also runs the suite, and its "Build and test" count moves from 556 to 970 —
 what `cargo test --workspace` reports on this tree.
+
+## An audit of what the tree leaves untracked
+
+**What was asked.** Audit `git status` for other generated artifacts in the tree that
+should be ignored.
+
+**What it found.** Three things, of which one is the reverse of the question:
+
+* **`crates/ui/capabilities/default.json` is source, and `*.json` was hiding it.** It
+  is the window's Tauri capability — the permissions the page is granted — written by
+  hand, with a description of its own. It was untracked and ignored, so a fresh
+  checkout had no capability at all. That was checked by taking the file away and
+  building the shell: `tauri-build` does not recreate it, and
+  `crates/ui/gen/schemas/capabilities.json` came out `{}` — no `core:default`, hence
+  no `core:event:allow-listen`, and a window whose page could not subscribe to the
+  events a conversion is streamed as. The rule that was hiding it — `*.json`, applied to
+  the whole repository — is what this audit had narrowed by the end (source JSON tracked
+  by default, only a conversion's own output ignored; the note further on has the rule),
+  so the capability file needs no exception at all and shows as untracked, ready to be
+  committed.
+* **`crates/ui/gen/` was ignored only by accident.** The schemas and ACL manifests
+  there are `tauri-build`'s output, rebuilt whenever the capabilities change; they
+  stayed out of the tree because of the repository-wide `*.json`, which said nothing
+  about them and would have stopped covering any file the build wrote that was not
+  JSON. They have their own rule now, `/crates/ui/gen/`.
+* **`test-data/real/mathtype_images/pg1_1.png` was tracked litter.** It is what a
+  hand-run conversion wrote beside the corpus — the very thing
+  `Settings::selftest`'s comment and the corpus notes call litter, and nothing in the
+  tree names it. The image came with the initial commit; it is now removed from the
+  working tree and from tracking, which also takes it out of the documents the golden
+  suite walks: the `docling-core` oracle reports **40/40** accepted where it reported
+  41/41 with the stray image among them.
+
+**The rule for the next one.** The JSON rule covers the file a conversion writes among
+the fixtures, and the directory beside it needs its own, so `*_images/` is ignored too —
+`pdfextractor-cli -i
+doc.docx` with no `-o` writes `doc.json` and `doc_images/` next to the document. The
+goldens' image directories are fixtures their own pages name
+(`test-data/golden/markdown/calibre_demo_images/`, `.../rtf_bitmap_images/`), so they are
+excepted with `!test-data/golden/**/*_images/`. Probed both ways: a stray
+`test-data/hello_images_probe_images/x.png` is ignored, and a new file in a golden's
+image directory is not.
+
+**What the rest of the tree holds.** No tracked archives, installers, logs, caches or
+build outputs; the only ignored directories present are `target/`, `dist/`,
+`test-data/__pycache__/` and now `crates/ui/gen/`, each for a stated reason. Every
+untracked file is a source, a generator, a fixture or a golden reference — the three CI
+workflows, the layout-background and nested-table generators with their fixtures, the
+two new Docling references, and `crates/ui/capabilities/default.json`.
+
+**Verification.** `git ls-files -ci --exclude-standard` is empty — no tracked file is
+caught by an ignore rule — and `git check-ignore -v` names the rule for each path that
+should be ignored and none for the capability file or the golden image directories. The
+suites that walk those directories still pass: `docling_golden_test` **30 passed**
+(245.77 s, with `DOCLING_PY`; the oracle's 40/40 above), `pdfextractor-ui --lib` **106
+passed**, `corpus_report_test` **9 passed** over the 42 documents it compares.
+
+## `*.json` hides only a conversion's output now
+
+**What was asked.** Narrow the repository-wide `*.json` ignore rule so source JSON is
+tracked by default and only conversion output is ignored.
+
+**What the blanket rule cost.** It could not tell a conversion's write from a file
+somebody wrote on purpose, so every source JSON in the tree needed an un-ignore line
+beside it: Docling's schema, the 43 golden references, the compare baseline, the
+photographed corpus's ground truth, the window's configuration. That list had to grow
+with each new source file, and a file added without its line was silently absent from a
+fresh checkout — which is exactly how `crates/ui/capabilities/default.json` went missing
+until the audit found it. An ignore rule that has to enumerate the source it must not
+hide is doing the opposite of its job.
+
+**The rule.** A conversion writes its JSON beside the document it read: `-i doc.docx`
+with no `-o` writes `doc.json` next to `doc.docx`. In this tree that litter can only
+land among the fixtures, so the rule names those two folders and nothing else:
+
+    /test-data/*.json
+    /test-data/real/*.json
+
+Everything else is source and is tracked without an exception: the seven `!` lines and
+their comments are gone (`test-data/expected/*.json`, `compare-baseline.json`, the
+`docling/*.json` references, `DoclingDocument.json`, `photos/corpus.json`,
+`tauri.conf.json`, `capabilities/*.json`). The other two rules in that block are kept and
+say why they are not by extension: `*_images/` with its golden exception, and
+`/crates/ui/gen/`, which `tauri-build` writes whole.
+
+**Verification.** `git check-ignore -v` puts the split where it should: a
+`test-data/real/foo.json` or `test-data/foo.json` is ignored by the new rule, while
+`test-data/photos/corpus.json`, `test-data/golden/compare-baseline.json`,
+`test-data/golden/docling/README.json`, `crates/ui/tauri.conf.json` and
+`crates/ui/capabilities/default.json` are not ignored at all — each needed a negated
+line before and needs none now. `crates/ui/gen/schemas/*.json` is still ignored, by the
+directory rule. `git status` shows no JSON that was hidden before and is not hidden now,
+so nothing had been suppressed by the old rule beyond what the exceptions already
+recovered, and `git ls-files --others` is unchanged. The one tracked-but-ignored path is
+`test-data/real/mathtype_images/pg1_1.png`, which is a pending deletion matching
+`*_images/` and has nothing to do with this change.
+`cargo test -p pdfextractor-cli --test tracked_fixtures_test` — the test that holds every
+fixture the golden suites read to the index — passes.
+
+**Docs.** The rule carries its reasoning in `.gitignore` itself; the README has no
+ignore-rule text to correct.

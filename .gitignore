@@ -9,17 +9,25 @@
 # itself leaves a `*.pyc` next to the source instead. Neither is ever committed.
 __pycache__/
 *.pyc
-*.json
-!test-data/expected/*.json
-# The Compare mode's per-document numbers: a record, not an output, so it is kept.
-!test-data/golden/compare-baseline.json
-# Real Docling conversions: golden references, not conversions of ours.
-!test-data/golden/docling/*.json
-# Docling's own schema, generated from its model: the contract the conformance
-# tests read, not an output of ours — a fresh checkout has to carry it.
-!test-data/golden/DoclingDocument.json
-# The photographed corpus's ground truth: written with the images, not an output.
-!test-data/photos/corpus.json
-# The window's bundle configuration — source, not output: the release
-# workflow builds the installers from it.
-!crates/ui/tauri.conf.json
+# What a conversion writes beside the document it read: `pdfextractor-cli -i
+# doc.docx` with no `-o` writes `doc.json` and a `doc_images/` directory next to
+# the document, so a hand-run over `test-data/` leaves JSON and images beside a
+# fixture — the litter that left `test-data/real/mathtype_images/` in the corpus.
+# The goldens' own image directories are fixtures their pages name, so those are
+# kept.
+#
+# The JSON rule names the two folders that litter can land in rather than every
+# `*.json` in the repository. A repository-wide `*.json` also swallowed source —
+# the window's capabilities, the golden references, Docling's schema — so each one
+# needed an exception, and the list grew with every source file; a file added
+# without its exception (`crates/ui/capabilities/default.json`) was silently absent
+# from a fresh checkout. Source JSON is tracked by default now, and only a
+# conversion's own output is ignored.
+/test-data/*.json
+/test-data/real/*.json
+*_images/
+!test-data/golden/**/*_images/
+# What `tauri-build` writes out of the window's capabilities: schema and ACL
+# manifests, rebuilt by the build script whenever they change, never edited by
+# hand. Ignored as the directory it is, not by extension.
+/crates/ui/gen/
