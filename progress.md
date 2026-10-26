@@ -12913,3 +12913,48 @@ compared, every one at or better than the updated baseline;
 in 233.41 s; `cargo test -p pdfextractor-cli --test cli_test` **128 passed** in 429.00 s,
 the new test among them. `cargo fmt --all --check` clean and clippy with `-D warnings`
 quiet on both crates.
+
+## A scheduled job carries the bridge
+
+**What was asked.** Install LibreOffice in a separate scheduled CI job so the legacy
+bridge's tests are exercised too, without reddening the per-push gate.
+
+**The job.** [.github/workflows/bridge.yml](.github/workflows/bridge.yml) is the only gate
+that does not run on a push: `schedule` (Mondays, 06:17 UTC) and `workflow_dispatch`. It
+installs `libreoffice-writer libreoffice-calc libreoffice-impress` — which bring `soffice` —
+beside the libraries and OCR data `test.yml` lists, and then runs the three suites whose
+readings change when the bridge exists:
+
+    cargo test -p pdfextractor-cli --test cli_test --locked
+    cargo test -p pdfextractor-ui --test corpus_report_test --locked
+    cargo test -p pdfextractor-cli --test docling_golden_test --locked
+
+Each for its own reason: the re-save tests open a fixture with `soffice` and hold the
+re-saved package to the fixture's reading, and return early without it; the corpus report
+measures the four legacy `.doc` documents through the bridge instead of keeping the
+baseline entries they were given when none could be found; the Docling comparison holds
+the same four to Docling's references through it. Nothing else is repeated — `test.yml`
+has just run every other suite without the bridge, and the bridge's presence is the only
+difference this job makes.
+
+**Two things keep it from lying.** A step runs `soffice --version` before any test, because
+a run that lost LibreOffice would still pass with thirteen re-save tests skipping — the
+one outcome this job must not report as success. And the image is pinned at
+`ubuntu-24.04`, not `ubuntu-latest`: the bridge's readings are produced by a particular
+LibreOffice build, 24.2.7 on that image and here, and `ubuntu-latest` moving to a newer one
+would make the ratchet refuse unchanged readings by itself. Bumping the image is a change
+that says so, and the baseline it moves goes in the same commit.
+
+**Verification.** The workflow parses with the schedule and `workflow_dispatch` triggers
+and one `bridge` job. Its three commands were run against this tree with this machine's
+LibreOffice 24.2.7 on `PATH`: the CLI suite **128 passed** in 439.88 s, the corpus report
+**9 passed** in 147.45 s, the Docling comparison **30 passed** in 179.19 s, every exit
+**0**. That the bridge was the branch taken shows in a single test as well —
+`libreoffice_opens_and_resaves_the_picture_background_deck` finished in 2.54 s and printed
+no `no soffice on PATH; skipping` line, which is what it prints when the bridge is absent.
+The workflow itself has not been executed — GitHub Actions cannot run here — so the first
+scheduled run is where the runner's LibreOffice packages, and the ratchet against that
+build, are proven.
+
+**Docs.** [README.md](README.md) says beside the per-push gate that the bridge is not left
+untested for it, names this workflow, and says why the image is pinned.

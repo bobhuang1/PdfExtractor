@@ -1,0 +1,88 @@
+# The bridge gate: LibreOffice installed, so the tests that read a document
+# through it run instead of returning early.
+#
+# The per-push gate leaves LibreOffice out — `test.yml` says why, and it is
+# measured rather than assumed — which leaves one thing unproven on every push:
+# whether a `.doc` the CLI bridges, or a package it opens and saves with
+# `soffice`, still reads the way the fixture and the baseline say it does. Those
+# tests still exist and still pass on a machine that has LibreOffice; this job is
+# where they are exercised in CI.
+#
+# It runs on a schedule and by hand, never on a push: a failure here is a signal
+# that the bridge's readings moved, not a reason to hold up a merge — the
+# per-push gate is the one that has to be green to land a change.
+#
+# What it runs, and what each one needs the bridge for:
+#
+# * `cli_test` — the re-save tests open a fixture with `soffice`, save it back and
+#   require the re-saved package to read the same as the fixture did. Without
+#   LibreOffice every one of them returns early having asserted nothing.
+# * `corpus_report_test` — the corpus's four legacy `.doc` documents are read
+#   through the bridge and held to the ratchet's baseline, rather than keeping the
+#   entries they were given when no bridge could be found.
+# * `docling_golden_test` — the same four are compared with Docling's references
+#   through the bridge, so the agreement figures are the ones LibreOffice's
+#   reading produces.
+#
+# The other suites are not repeated here: `test.yml` has just run them without the
+# bridge, and the only difference this job makes is the bridge's presence.
+#
+# The runner image is pinned rather than `ubuntu-latest`, because these readings
+# depend on the LibreOffice build that writes them: 24.2 on the 24.04 image, the
+# version the baseline was measured with (LibreOffice 24.2.7 here). A newer image
+# would change the numbers under the ratchet by itself, so moving it is a change
+# that says so — and the baseline it moves goes in the same commit.
+
+name: the bridge gate
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bridge:
+    name: the tests that need LibreOffice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The bridge itself — the Writer, Calc and Impress filters bring `soffice`
+      # — beside the libraries and OCR data the tests need with or without it.
+      - name: LibreOffice, the native libraries and the OCR data
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libreoffice-writer libreoffice-calc libreoffice-impress \
+            libtesseract-dev libleptonica-dev libclang-dev \
+            tesseract-ocr tesseract-ocr-eng \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev
+
+      # A run that lost LibreOffice would pass with the bridge's tests skipped,
+      # which is the one outcome this job must not report as success.
+      - name: The bridge is there
+        run: soffice --version
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bridge-${{ hashFiles('**/Cargo.lock') }}
+
+      # The fixture packages the CLI opens and saves again, held to the readings
+      # their fixtures gave.
+      - name: The re-save tests
+        run: cargo test -p pdfextractor-cli --test cli_test --locked
+
+      # The four legacy `.doc` documents, read through the bridge and ratcheted.
+      - name: The corpus report through the bridge
+        run: cargo test -p pdfextractor-ui --test corpus_report_test --locked
+
+      # And the same four against Docling's own conversion of them.
+      - name: The corpus comparison through the bridge
+        run: cargo test -p pdfextractor-cli --test docling_golden_test --locked

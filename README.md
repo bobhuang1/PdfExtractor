@@ -132,7 +132,12 @@ out. The suite is green without it — its bridge tests return early, the corpus
 keeps the baseline entries of the legacy documents it could not measure, and the golden
 suite compares those four through the built-in reader — so the gate never puts the
 runner's LibreOffice build between the ratchet and the numbers the baseline was measured
-with. A run here is what a fresh checkout on a machine without LibreOffice gets.
+with. A run here is what a fresh checkout on a machine without LibreOffice gets. The
+bridge is not left untested for it: `.github/workflows/bridge.yml` runs weekly with
+LibreOffice installed — the re-save tests, the corpus report and the corpus comparison,
+the three suites whose readings change when the bridge is there — on a pinned
+`ubuntu-24.04` image, because those readings depend on the LibreOffice build that writes
+them and `ubuntu-latest` would move it under the ratchet by itself.
 
 ### Compatibility with Docling
 
