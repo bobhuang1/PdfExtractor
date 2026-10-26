@@ -12396,3 +12396,60 @@ compared; `cargo test -p pdfextractor-ui --lib` **106 passed**, the two new metr
 `a_rich_cell_keeps_what_its_paragraphs_do_not_say`) among them;
 `cargo clippy -p pdfextractor-ui -p pdfextractor-cli --all-targets -- -D warnings`
 quiet; `cargo fmt --all --check` and `git diff --check` clean.
+
+## The middle of the background chain has a fixture
+
+**What was asked.** Add a fixture and test where a slide background comes from its layout
+rather than the master, so the middle of the inheritance chain is covered.
+
+**Why the middle needed one.** The reading resolves slide → layout → master and takes the
+first background one of them states. The two decks that existed held the ends of that
+chain: `background_deck.pptx` states a picture on the slide itself, and
+`master_background_deck.pptx` states one on the master while its blank layout is silent.
+Nothing stated one on a *layout*, so a change that dropped the layout level from the chain
+— a single `or_else` in `slide_background` — would have passed every test in the tree.
+
+**The fixture.** [make_layout_background_deck.py](test-data/make_layout_background_deck.py)
+writes `layout_background_deck.pptx`: three slides on the blank layout, and a picture at
+*both* levels — the master's `p:bg` replaced with `ppt/media/master_backdrop.webp`
+(`images/scan.webp`) through the master's own relationships, and the blank layout's `p:bg`
+inserted with `media/layout_backdrop.jpeg` (`images/scan.jpg`) through the layout's. The
+two are the same scan in two encodings on purpose: a reading that reached straight through
+to the master would carry the other bytes and the other media type. The first two slides
+state nothing — they are backed by the layout's JPEG — and the third states an
+`accent2` colour, where the inheritance stops before either picture. python-pptx can
+author neither background, so both are written into the saved package by hand; the parts
+that answer are found by reading the package's own relationships (slide 1's
+`/slideLayout`, that layout's `/slideMaster`) rather than assumed from the writer's
+numbering, and the insertion finds the `p:cSld` opening tag because the blank layout's is
+`<p:cSld name="Blank">` rather than `<p:cSld>`.
+
+**The test.** `a_picture_background_the_layout_states_is_the_slides_before_the_masters` in
+[background_test.rs](crates/pptx-parser/tests/background_test.rs) holds the first two
+pages to the layout's `image/jpeg` bytes at the full slide box, with the master's WebP
+present in the same package as the thing that must *not* answer, one shape apiece and that
+shape the sentence; and the third page to no background at all, since a colour is not
+either picture. It first asserts the two pictures differ, so the check cannot pass by
+accident.
+
+The end-to-end test is `a_layouts_picture_background_is_the_pages_image` in
+[cli_test.rs](crates/cli/tests/cli_test.rs): it converts the deck through the binary and
+holds the first two pages' `image` to the layout's `image/jpeg` at the 620 x 350 grid and
+the 62 dpi its 620 pixels across the 10-inch page imply, the file written beside the JSON
+to the layout's own bytes, the third page to no image and `pictures` to none, with each
+slide's sentence still its text.
+
+**Proof it bites.** With the layout level taken out of `slide_background` the test fails on
+the media type — `left: "image/webp" right: "image/jpeg"`, slide 1 — which is the master's
+picture arriving where the layout's belongs. The end-to-end test fails the same way, on
+page 1: the master's WebP is re-encoded as PNG by the writer, so the page image is
+`image/png` where the layout's `image/jpeg` belongs. Restored, both pass.
+
+**Docs.** The root README lists the deck in the `test-data` tree and names it in the
+background-inheritance paragraph, beside the master fixture.
+
+**Verification.** `cargo test -p pdfextractor-pptx-parser` **26 + 4 + 2 + 2 passed**;
+`cargo test -p pdfextractor-cli --test cli_test` **126 passed**, the end-to-end test among
+them; `cargo fmt --all --check` clean and clippy quiet on the crates. Rerunning the
+generator writes the same parts, byte for byte; only the archive's own timestamps differ,
+which is what the docstring says the tests never pin.

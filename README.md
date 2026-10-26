@@ -956,6 +956,9 @@ test-data/
 ├── background_deck.pptx                     # a slide with a picture background (make_background_deck.py)
 ├── master_background_deck.pptx              # a picture background the slide master states
 │                                            #   (make_master_background_deck.py)
+├── layout_background_deck.pptx              # a picture background the slide layout states,
+│                                            #   with the master's own beside it
+│                                            #   (make_layout_background_deck.py)
 ├── preset_deck.pptx                         # one shape per preset outline (make_preset_deck.py)
 ├── q3_review.pptx                           # deck fixture (make_deck_pptx.py)
 ├── legacy_deck.ppt                          # legacy deck fixture (make_legacy_ppt.py)
@@ -1426,6 +1429,18 @@ chain stops there rather than reaching past it to a picture behind.
 the master, the first two slides stating nothing of their own, the third a colour — held
 by one test of the parser and one end-to-end test to the first two pages' 620 × 350
 image and the third page's none, with no picture item anywhere.
+
+`test-data/layout_background_deck.pptx` asks the question in the middle of that chain:
+the master states one photograph (`images/scan.webp`) and the blank layout states
+another (`images/scan.jpg`), so its first two slides, which state nothing, are backed by
+the layout's JPEG rather than the master's WebP — the nearer level is the one behind the
+page — and the third, which states a colour, by neither. The two pictures are the same
+scan in two encodings on purpose: a reading that reached straight through to the master
+would carry the other bytes and the other media type. One test of the parser holds the
+first two slides to the layout's bytes at the full slide box and the third to no
+background, and one end-to-end test holds the first two pages' page images to the same
+620 × 350 `image/jpeg` at 62 dpi with the layout's own bytes written beside the JSON and
+the third page's to nothing, no picture item anywhere.
 
 A GIF arriving as the input file is an animation rather than one picture, and every
 frame of it is a page: `image-parser`'s `gif_frames` decodes them all, compositing each

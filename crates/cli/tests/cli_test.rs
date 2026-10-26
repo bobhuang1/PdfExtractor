@@ -7746,6 +7746,99 @@ fn a_slides_picture_background_is_the_pages_image() {
     }
 }
 
+/// A picture background a slide's *layout* states is the page's image too.
+///
+/// `layout_background_deck.pptx` states a photograph at both inherited levels —
+/// `images/scan.webp` in the master, `images/scan.jpg` in the blank layout — and
+/// neither of its first two slides states a `p:bg` of its own. The nearer level
+/// answers, so the two pages are backed by the layout's JPEG: the media type, the
+/// 620 × 350 grid and the 62 dpi its 620 pixels across the 10-inch page imply are
+/// all the layout's, and the file written beside the JSON is the layout's own
+/// bytes rather than the master's WebP, which sits in the same package as the
+/// thing that must not answer. The third slide states a colour background, where
+/// the inheritance stops before either picture, so its page has no image. A
+/// backdrop is behind the page rather than a block on it, so `pictures` stays
+/// empty, and each slide's sentence is still its text.
+#[test]
+fn a_layouts_picture_background_is_the_pages_image() {
+    let ws = Workspace::new("layout-background-deck");
+    let input = repository_root().join("test-data/layout_background_deck.pptx");
+    let output = ws.join("layout.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--ocr",
+        "never",
+    ]);
+
+    let layout_picture = fixture("images/scan.jpg");
+    let master_picture = fixture("images/scan.webp");
+    assert_ne!(
+        layout_picture, master_picture,
+        "the two levels state different pictures, or the page could not tell them apart"
+    );
+
+    let doc = json_of(&output);
+    let pages = doc["pages"].as_object().expect("a pages map");
+    for page in ["1", "2"] {
+        let image = &pages[page]["image"];
+        assert_eq!(
+            image["mimetype"], "image/jpeg",
+            "page {page}: the layout's media type, not the master's"
+        );
+        assert_eq!(
+            image["dpi"].as_u64(),
+            Some(62),
+            "page {page}: 620 pixels across 720 pt is 62 dpi"
+        );
+        assert_eq!(image["size"]["width"].as_f64(), Some(620.0), "page {page}");
+        assert_eq!(image["size"]["height"].as_f64(), Some(350.0), "page {page}");
+        let uri = image["uri"].as_str().expect("the backdrop's file");
+        assert!(
+            uri.ends_with(&format!("slide{page}_background.jpg")),
+            "page {page}: the page image is not named for the slide it backs: {uri}"
+        );
+        assert_eq!(
+            std::fs::read(ws.join(uri)).expect("the backdrop written beside the JSON"),
+            layout_picture,
+            "page {page}: the page image is not the layout's own JPEG bytes"
+        );
+    }
+
+    assert_eq!(
+        pages["3"].get("image"),
+        None,
+        "a slide that states its own colour was given the layout's picture"
+    );
+    assert_eq!(
+        doc["pictures"].as_array().expect("a pictures list").len(),
+        0,
+        "the inherited backdrop was reported as a picture item as well as the page's image"
+    );
+
+    let words = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .map(|item| item["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for sentence in [
+        "A photograph behind these words.",
+        "The same photograph behind these words.",
+        "A colour behind these words.",
+    ] {
+        assert!(
+            words.contains(sentence),
+            "{sentence} did not survive: {words}"
+        );
+    }
+}
+
 /// `--ocr-lang` and `--psm` are checked before work starts, and a real mode
 /// still recognises a real scan.
 #[test]
