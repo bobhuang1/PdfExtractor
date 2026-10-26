@@ -94,6 +94,13 @@
 //! in the same place then the joining by position is what pairs them, and says on the
 //! row that the boxes are what paired them.
 //!
+//! A table of ours holds a reference item the same way, by its cells' words: a cell's
+//! paragraphs are words we read, joined into the row's text, and Docling writes each of
+//! them as an item of its own, so a nested table's cell sentences are a containment in the
+//! table rather than text we are said not to have read. A table is a holder only and never
+//! a piece of one: its text is a rendering this project invented, and one table lying
+//! inside another would mean nothing.
+//!
 //! What that leaves is the rest of a form's dotted leaders: items with no letters in
 //! them at all that no block of ours holds and none stands under — lines our reading
 //! produced no block for, and rules we did not read as anything. Nothing can be compared
@@ -1478,7 +1485,13 @@ fn contained_runs(
 ) -> Vec<usize> {
     let mut runs = vec![0usize; theirs.len() + 1];
     for j in 1..=theirs.len() {
-        if words_contained(ours, ours_key, &theirs[j - 1], &theirs_keys[j - 1]) {
+        // Text blocks only: the fold below is what takes a cell's paragraphs onto the
+        // table they belong to, and letting the alignment consume them as a run instead
+        // would let a table reach forward over the items standing before it and leave
+        // the table they came with unpaired.
+        if ours.kind == Kind::Text
+            && words_contained(ours, ours_key, &theirs[j - 1], &theirs_keys[j - 1])
+        {
             runs[j] = runs[j - 1] + 1;
         }
     }
@@ -1612,6 +1625,12 @@ fn containment_counts(ours: &Block, theirs: &[Block]) -> (usize, usize) {
 /// The labels a run of the reference's items carries that ours does not agree
 /// with, once each and in a stable order.
 fn differing_labels(ours: &Block, theirs: &[Block]) -> Vec<String> {
+    // A table is not labelled the way the paragraphs inside it are: Docling writes a
+    // cell's paragraph as a `text` item, and "table vs text" is not a disagreement a
+    // reader would report — the cell is part of the table by construction.
+    if ours.kind == Kind::Table {
+        return Vec::new();
+    }
     let mut labels: Vec<String> = theirs
         .iter()
         .map(|block| block.label.clone())
@@ -2411,14 +2430,20 @@ fn words_contained(ours: &Block, ours_key: &Key, theirs: &Block, theirs_key: &Ke
     comparable(ours, theirs) && run_of_words(ours_key, theirs_key)
 }
 
-/// Whether the two blocks are the kind of thing one can lie inside the other: text on
-/// both sides, an equation on neither.
+/// Whether the reference's item can lie inside one of our blocks: it has to be a
+/// *text* item — words a producer wrote — and ours a text block or a table, whose
+/// cells are the words we read, joined; an equation is never inside anything.
 ///
-/// Tables and pictures are left out: their "text" is a rendering this project
-/// invented (cells joined, a media type and a size) rather than words a producer
-/// wrote, and one being a piece of another would mean nothing.
+/// A table is a holder only, never a piece of one: its "text" is a rendering this
+/// project invented (cells joined, a media type and a size) rather than words a
+/// producer wrote, so one table lying inside another would mean nothing. A reference
+/// *text item* inside a table of ours is another matter — a cell holds paragraphs of
+/// its own, a nested table's cell holds the sentences around the table it holds, and
+/// Docling writes each of them as an item of its own — so the cell's words are what
+/// let such an item be contained (see `nested_table.docx`). Pictures are left out on
+/// both sides.
 fn comparable(ours: &Block, theirs: &Block) -> bool {
-    ours.kind == Kind::Text
+    matches!(ours.kind, Kind::Text | Kind::Table)
         && theirs.kind == Kind::Text
         && ours.label != "formula"
         && theirs.label != "formula"
@@ -2426,8 +2451,14 @@ fn comparable(ours: &Block, theirs: &Block) -> bool {
 
 /// Whether an item the reference wrote with no letters in it at all lies inside one
 /// of our blocks by where it sits, which is all there is to go on.
+///
+/// Only a text block takes one this way. A table's rendering is not a line of prose for
+/// a leader to stand along — the leadered lines a form has are prose, not cells — so
+/// where the words cannot say it, a table does not claim it.
 fn letterless_in_place(ours: &Block, theirs: &Block, theirs_key: &Key) -> bool {
-    theirs_key.anchor.is_empty() && place_agreement(ours, theirs) == Some(true)
+    ours.kind == Kind::Text
+        && theirs_key.anchor.is_empty()
+        && place_agreement(ours, theirs) == Some(true)
 }
 
 /// Whether the reference's text is a run of our words: its letters, in order, are
@@ -3219,6 +3250,91 @@ mod tests {
         );
         assert_eq!(compared.ours_only, 0);
         assert_eq!(compared.rows, 2);
+    }
+
+    #[test]
+    fn a_cells_sentences_the_reference_lists_separately_are_inside_our_table() {
+        // `nested_table.docx`: our reading writes the outer table with each cell's words
+        // on its own line, and Docling writes that table *and* an item for each paragraph
+        // in the cell — the sentences around the nested table it holds. By content alone
+        // those items are text only the reference has; by the cell they lie in, they are
+        // words we read.
+        let ours = document(&[table(&[
+            &["Phase", "Detail"],
+            &[
+                "Review",
+                "The checklist below is a table inside this cell. Those steps are this cell's content too.",
+            ],
+        ])]);
+        let mut first = text("text", "The checklist below is a table inside this cell.");
+        first["self_ref"] = json!("#/texts/0");
+        let mut second = text("text", "Those steps are this cell's content too.");
+        second["self_ref"] = json!("#/texts/1");
+        let mut reference = document(&[
+            first,
+            second,
+            table(&[
+                &["Phase", "Detail"],
+                &[
+                    "Review",
+                    "The checklist below is a table inside this cell. Those steps are this cell's content too.",
+                ],
+            ]),
+        ]);
+        // The shape Docling writes: the cell is a *rich* cell naming the group its
+        // paragraphs stand in, which is why the character share counts those words once.
+        reference["groups"] = json!([{
+            "self_ref": "#/groups/0",
+            "children": [{ "$ref": "#/texts/0" }, { "$ref": "#/texts/1" }],
+        }]);
+        reference["tables"][0]["data"]["table_cells"][3]["ref"] = json!({ "$ref": "#/groups/0" });
+
+        let found = rows(&ours, &reference);
+        assert_eq!(verdicts(&found), vec![Verdict::Contained], "{found:#?}");
+        assert_eq!(found[0].kind, Kind::Table, "the row is the table's");
+        assert_eq!(
+            found[0].theirs.len(),
+            3,
+            "the table and both items: {found:#?}"
+        );
+        assert_eq!(
+            found[0].note.as_deref(),
+            Some("2 of the reference's items are wholly inside ours")
+        );
+
+        let compared = summary(&ours, &reference);
+        assert_eq!(compared.contained, 1);
+        assert_eq!(compared.theirs_only, 0, "the cell's sentences are ours");
+        assert_eq!(compared.rows, 1);
+        assert_eq!(compared.text_agreement, 1.0);
+
+        // A sentence the cell does not hold is still text we did not read: a table holds
+        // what its cells say, not whatever stands near it.
+        let reference = document(&[
+            text("text", "The checklist below is a table inside this cell."),
+            text("text", "A sentence the cell never held."),
+            table(&[
+                &["Phase", "Detail"],
+                &[
+                    "Review",
+                    "The checklist below is a table inside this cell. Those steps are this cell's content too.",
+                ],
+            ]),
+        ]);
+        let found = rows(&ours, &reference);
+        assert_eq!(
+            verdicts(&found),
+            vec![Verdict::TheirsOnly, Verdict::Contained],
+            "{found:#?}"
+        );
+        assert!(found[0].theirs[0].text.contains("never held"));
+        assert_eq!(
+            found[1].note.as_deref(),
+            Some("the reference's item is wholly inside ours")
+        );
+        let compared = summary(&ours, &reference);
+        assert_eq!(compared.contained, 1);
+        assert_eq!(compared.theirs_only, 1);
     }
 
     #[test]

@@ -195,9 +195,12 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
   those two sentences and the nested table, and the nested one under that group. Our
   reading is the same shape: the cell's `ref` names the group, the nested table is its
   child there, and the cell's text is its two sentences. The comparison reports **0/0
-  pages and text agreement 1.000**, with two rows only the reference has — the cell's
-  two sentences, which we hold inside the cell rather than as items beside it (Docling's
-  rich cell is the subject of the text bullet below).
+  pages and text agreement 1.000** in four rows, and the table's row is a **containment**:
+  Docling writes the cell's two sentences as items of their own, our table holds their
+  words in its cell, and a reference text item inside a table of ours is a containment
+  rather than text we are said not to have read — which is the whole of what this fixture
+  had to say, where it used to say two rows only the reference has (Docling's rich cell is
+  the subject of the text bullet below).
   `a_nested_table_docx_conforms_to_the_docling_schema` holds our output for it to the
   schema like every other fixture here.
   `invoice_scan.png` is written by `test-data/make_scan_images.py`: a clean printed
