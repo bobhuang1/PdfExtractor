@@ -129,13 +129,15 @@ nothing filtered out: the unit tests, the corpus report, the golden suite and th
 command line's own integration tests, with the native libraries the workspace links and
 the OCR data the tests recognise with installed first, and LibreOffice deliberately left
 out. The suite is green without it — its bridge tests return early, the corpus report
-keeps the baseline entries of the legacy documents it could not measure, and the golden
-suite compares those four through the built-in reader — so the gate never puts the
+keeps the baseline entries of the legacy documents it could not measure, the compare gate
+does not hold those documents to the bridge's numbers, and the golden suite compares
+those four through the built-in reader — so the gate never puts the
 runner's LibreOffice build between the ratchet and the numbers the baseline was measured
 with. A run here is what a fresh checkout on a machine without LibreOffice gets. The
 bridge is not left untested for it: `.github/workflows/bridge.yml` runs weekly with
-LibreOffice installed — the re-save tests, the corpus report and the corpus comparison,
-the three suites whose readings change when the bridge is there — on a pinned
+LibreOffice installed — the re-save tests, the corpus report, the corpus comparison and
+the compare gate over a legacy `.doc`, the four suites whose readings change when the
+bridge is there — on a pinned
 `ubuntu-24.04` image, because those readings depend on the LibreOffice build that writes
 them and `ubuntu-latest` would move it under the ratchet by itself.
 
@@ -827,6 +829,15 @@ Every push runs that gate over the corpus in CI
 (`.github/workflows/compare-gate.yml`): the same command over `test-data/real`,
 measured `--ocr never` so every rule of the ratchet applies — a document that falls
 below its floor fails the build with its name and its count in the job's log.
+
+A document whose reading goes through the bridge is not held by a run on a machine
+without one — the corpus's four legacy `.doc` files, on that runner — because the
+numbers the baseline remembers are Writer's reading of those files and what the run
+compared is the built-in reader's. Each is named on a line of its own and counted at the end
+(`not held · read through LibreOffice, and this machine has none — a reading made
+without it is not the reading the memory remembers`), so the log says what was held and
+what was left out rather than quietly holding less than the gate claims; the weekly
+bridge gate above is where those documents are held, with LibreOffice installed.
 
 ### Smoke-testing the whole stack without a human
 

@@ -1,7 +1,7 @@
-# The compare gate, on every push: convert the corpus and hold every document to
-# the memory beside its reference. A document that falls below the floor the
-# baseline remembers fails the run — and this job — naming itself and what fell,
-# so a fallen panel fails a build and not only a window.
+# The compare gate, on every push: convert the corpus and hold every document it
+# can read to the memory beside its reference. A document that falls below the
+# floor the baseline remembers fails the run — and this job — naming itself and
+# what fell, so a fallen panel fails a build and not only a window.
 #
 # Two jobs run it. The first is the command line's own gate; the second is the
 # corpus report, which holds the same documents through the same Session and can
@@ -19,6 +19,18 @@
 # The holding itself is the library's (`crates/ui/src/gate.rs`), the same
 # Session the window's Compare panel and the corpus report hold their documents
 # through; what runs here is the command line's face on it.
+#
+# LibreOffice is not installed here, and the gate says so rather than measuring
+# something else. A document whose *reading* goes through the bridge — the
+# corpus's four legacy `.doc` files — is not held: the numbers the baseline
+# remembers are Writer's reading of those files, and the reading this runner
+# compares is the built-in reader's, which says different things about the same
+# document. Each one is named on a line of its own and counted at the end, so the
+# log says what was held and what was left out; the scheduled bridge gate
+# (`bridge.yml`) is where they are held, with LibreOffice installed. Installing it
+# here instead would put the runner's LibreOffice build between the ratchet and
+# the numbers the baseline was measured with, which is what `test.yml` explains
+# the per-push gates do not do.
 
 name: the compare gate
 
@@ -28,7 +40,7 @@ on:
 
 jobs:
   corpus:
-    name: every corpus document at or above the whole ratchet
+    name: every document this runner reads, at or above the whole ratchet
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,9 +69,10 @@ jobs:
 
       # The gate itself. Every document of `test-data/real` is converted once,
       # into a directory of its own rather than beside the corpus, and held to
-      # the memory beside `test-data/golden/docling`. The exit code is the
-      # verdict, and one line per document is printed either way — a passing run
-      # shows what was held rather than silence.
+      # the memory beside `test-data/golden/docling` — every document the bridge
+      # reads excepted, and said so on its own line (see the header). The exit
+      # code is the verdict, and one line per document is printed either way — a
+      # passing run shows what was held rather than silence.
       - name: Hold the corpus to the memory beside its references
         run: |
           ./target/debug/pdfextractor-cli \

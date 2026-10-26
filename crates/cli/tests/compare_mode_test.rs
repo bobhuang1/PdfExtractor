@@ -14,11 +14,26 @@
 //! its one row: `differs: 1`, `agreement: 1.0`, nothing placed. Each test writes
 //! its own memory into a scratch folder beside a copy of that reference, so the
 //! corpus's real baseline is never touched.
+//!
+//! The corpus's legacy `.doc` is the second fixture, for the one document whose
+//! *reading* depends on the machine: Writer reads it where LibreOffice is
+//! installed and the built-in reader reads it where it is not, and the two do not
+//! say the same thing about the same file. The memory beside its reference was
+//! measured with the bridge, so a run without one leaves the document to the
+//! bridge rather than holding it to numbers another reader never produced — and
+//! `PDFE_SOFFICE` is how these tests say which machine they are.
 
 use pdfextractor_ui::diff::{Measurement, Memory, Numbers};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+
+/// The corpus's legacy `.doc`: read through LibreOffice where there is one, by
+/// the built-in reader where there is not.
+const LEGACY_DOC: &str = "test-data/real/two_images.doc";
+/// Its committed reference, and the stem the memory remembers it under.
+const LEGACY_REFERENCE: &str = "two_images.json";
+const LEGACY_STEM: &str = "two_images";
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -29,6 +44,28 @@ fn run(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("run the CLI binary")
+}
+
+/// Run the CLI with `PDFE_SOFFICE` naming the LibreOffice this machine has.
+///
+/// The override is how a run is given a bridge, and a path that is not a file is
+/// how it is told there is none — which is the only way to say "no LibreOffice"
+/// on a machine whose `PATH` holds one.
+fn run_with_soffice(args: &[&str], soffice: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+        .args(args)
+        .env("PDFE_SOFFICE", soffice)
+        .output()
+        .expect("run the CLI binary")
+}
+
+/// LibreOffice on this machine, by the lookup the CLI does when `PDFE_SOFFICE`
+/// says nothing.
+fn soffice_on_path() -> Option<PathBuf> {
+    let search = std::env::var_os("PATH")?;
+    std::env::split_paths(&search)
+        .flat_map(|directory| ["soffice", "libreoffice"].map(|name| directory.join(name)))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Everything the process said, wherever it said it.
@@ -44,14 +81,22 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(tag: &str) -> Scratch {
+        Scratch::holding(tag, "dummy.json")
+    }
+
+    /// A scratch folder holding one committed reference of `docling/`, under its
+    /// own name — what the run compares a document of the same stem against.
+    fn holding(tag: &str, reference: &str) -> Scratch {
         let path =
             std::env::temp_dir().join(format!("pdfe-cli-compare-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         let references = path.join("docling");
         std::fs::create_dir_all(&references).expect("create the scratch folder");
         std::fs::copy(
-            repository_root().join("test-data/golden/docling/dummy.json"),
-            references.join("dummy.json"),
+            repository_root()
+                .join("test-data/golden/docling")
+                .join(reference),
+            references.join(reference),
         )
         .expect("copy the reference");
         Scratch(path)
@@ -84,11 +129,61 @@ impl Scratch {
             self.reference().to_str().expect("utf-8 reference path"),
         ])
     }
+
+    /// Convert the corpus's legacy `.doc` and compare it with the reference this
+    /// scratch holds, on the machine whose LibreOffice is `soffice`.
+    fn compare_the_legacy_doc(&self, soffice: &str) -> Output {
+        let input = repository_root().join(LEGACY_DOC);
+        let output = self.0.join("out.json");
+        run_with_soffice(
+            &[
+                "--input",
+                input.to_str().expect("utf-8 input path"),
+                "--output",
+                output.to_str().expect("utf-8 output path"),
+                "--ocr",
+                "never",
+                "--compare",
+                self.reference().to_str().expect("utf-8 reference path"),
+            ],
+            soffice,
+        )
+    }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A memory no reading of the legacy `.doc` can stand under: every count
+/// remembered as none, and the reference's characters as 200% held — a share
+/// above anything a comparison can report. Whatever this machine reads of the
+/// document, a run that holds it is refused, so the test below cannot pass by the
+/// floor happening to be out of reach.
+fn a_memory_no_reading_can_meet() -> Memory {
+    Memory {
+        note: "a floor no reading reaches, written by the compare mode's test".to_string(),
+        measured: Measurement::from_ocr("never"),
+        documents: BTreeMap::from([(
+            LEGACY_STEM.to_string(),
+            Numbers {
+                rows: 0,
+                same: 0,
+                notation: 0,
+                differs: 0,
+                contained: 0,
+                ours_only: 0,
+                theirs_only: 0,
+                placed: 0,
+                placed_items: 0,
+                placed_boxes: 0,
+                placed_page_pictures: 0,
+                joined: 0,
+                agreement: 2.0,
+            },
+        )]),
     }
 }
 
@@ -320,5 +415,69 @@ fn a_document_with_no_reference_fails_the_comparison() {
     assert!(
         logs.contains("no reference for this document"),
         "the reason was not named: {logs}"
+    );
+}
+
+/// A document the bridge reads is **not held** on a machine without one: the
+/// numbers the memory remembers are Writer's reading of that file, and what this
+/// run compared is the built-in reader's, so holding one to the other would refuse
+/// a document for a fact about the machine. The run passes, says which document it
+/// left out and why, and counts them — the scheduled bridge gate
+/// (`.github/workflows/bridge.yml`) is where such a document is held.
+#[test]
+fn a_document_the_bridge_reads_is_not_held_on_a_machine_without_one() {
+    let scratch = Scratch::holding("unbridged", LEGACY_REFERENCE);
+    scratch.remember(&a_memory_no_reading_can_meet());
+
+    let output = scratch.compare_the_legacy_doc("/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a document left to the bridge failed the run: {logs}"
+    );
+    assert!(
+        logs.contains("not held · read through LibreOffice"),
+        "the document was not said to be left out, nor why: {logs}"
+    );
+    assert!(
+        logs.contains("1 document(s) not held"),
+        "the run did not count what it left out: {logs}"
+    );
+    assert!(
+        !logs.contains("below the floor"),
+        "it was held to a floor another reader's numbers set: {logs}"
+    );
+}
+
+/// The control for the test above: the same document, the same memory, on a
+/// machine that has the bridge. Read through Writer, it *is* held — and refused,
+/// because the memory is one no reading can reach. That is what makes the test
+/// above about the bridge rather than about a floor that happened to be
+/// unreachable. Returns without asserting where no LibreOffice is installed, as
+/// the other bridge tests do.
+#[test]
+fn the_same_document_is_held_when_the_bridge_is_here() {
+    let Some(soffice) = soffice_on_path() else {
+        println!("skipped: no LibreOffice here, so there is no bridge to hold it to");
+        return;
+    };
+    let scratch = Scratch::holding("bridged", LEGACY_REFERENCE);
+    scratch.remember(&a_memory_no_reading_can_meet());
+
+    let output = scratch.compare_the_legacy_doc(soffice.to_str().expect("a UTF-8 path"));
+    let logs = logs_of(&output);
+
+    assert!(
+        !output.status.success(),
+        "a document the bridge read was not held: {logs}"
+    );
+    assert!(
+        logs.contains("below the floor"),
+        "the refusal was not the floor: {logs}"
+    );
+    assert!(
+        !logs.contains("not held"),
+        "a machine with the bridge left the document out: {logs}"
     );
 }

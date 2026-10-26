@@ -329,6 +329,20 @@ pub fn is_bridged(extension: &str) -> bool {
     matches!(by_extension(extension), Some(Format::Bridge { .. }))
 }
 
+/// Whether what a document *reads as* depends on LibreOffice having read it.
+///
+/// The wider question, and not the same one as [`is_bridged`]: a legacy `.doc`
+/// has a reader here, so it is not bridged — and the two readers do not make the
+/// same reading of it. Writer gives the headings, the list markers, the merged
+/// tables and the pictures; the built-in reader gives the container's words, with
+/// a paragraph where a heading was, no marker on a list item, and tabs where a
+/// table was. A caller holding a reading against numbers that were measured
+/// somewhere else therefore has to know about both: what only the bridge can read
+/// at all, and what it reads another way.
+pub fn reads_through_libreoffice(format: Format) -> bool {
+    matches!(format, Format::Bridge { .. } | Format::Doc)
+}
+
 /// The image media type an extension asks for, when the bytes said nothing.
 ///
 /// This is the extension's only job: naming the reader so a truncated file is
@@ -834,6 +848,36 @@ mod tests {
             detect_bytes(&named("a.doc"), &compound(&["CompObj"])),
             Format::Unsupported("a compound file with no Word stream")
         );
+    }
+
+    #[test]
+    fn what_the_bridge_reads_is_more_than_what_only_it_can_read() {
+        // A legacy `.doc`: read here, and read differently here than through
+        // Writer, so its reading depends on the bridge without the bridge being
+        // its only reader.
+        assert_eq!(
+            detect_bytes(&named("brief.doc"), &compound(&["WordDocument"])),
+            Format::Doc
+        );
+        assert!(reads_through_libreoffice(Format::Doc));
+        assert!(!is_bridged("doc"), "a `.doc` has a reader here");
+
+        // A Works file: no reader here at all, so the bridge is not a better
+        // reading of it but the only one.
+        let works = [0x01, 0xFE, 0x00, 0x00];
+        assert!(reads_through_libreoffice(detect_bytes(
+            &named("ledger.wks"),
+            &works
+        )));
+        assert!(is_bridged("wks"));
+
+        // And the formats that are neither: what is read here is read here.
+        assert!(!reads_through_libreoffice(Format::Pdf));
+        assert!(!reads_through_libreoffice(Format::Flow("html")));
+        assert!(!reads_through_libreoffice(detect_bytes(
+            &named("report.docx"),
+            &package(&["word/document.xml"])
+        )));
     }
 
     #[test]
