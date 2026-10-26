@@ -700,6 +700,19 @@ fn a_word_processor_rtf_conforms_to_the_docling_schema() {
     assert_fixture_conforms("merged_table.rtf", "merged_table", "rtf-schema");
 }
 
+/// An HTML page is a flow document too, and its one table states its header row
+/// after a caption row that spans every column: the header is a flag on the
+/// cells rather than a position, so a table read by row number would take the
+/// caption for the header and every value under it for text.
+#[test]
+fn a_late_merged_header_html_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "late_merged_header.html",
+        "late_merged_header",
+        "html-schema",
+    );
+}
+
 /// A table inside a table's cell: the nested `w:tbl` is part of the cell's
 /// content, so the document holds the cell's group with the nested table under
 /// it rather than a second table standing beside the outer one — the shape
