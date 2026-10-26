@@ -11,6 +11,11 @@
 //! backdrop is inherited, from the layout and then the master, which is where a
 //! deck usually keeps one picture behind every slide. Its third slide states a
 //! colour background of its own, which is where that inheritance stops.
+//!
+//! `test-data/layout_background_deck.pptx` covers the middle of that chain: the
+//! master states one picture and the blank layout another, so a slide that
+//! states neither must take the layout's — the nearer level — and not the
+//! master's that lies behind it.
 
 use pdfextractor_pptx_parser::{PptxDocument, Shape};
 use std::path::PathBuf;
@@ -53,6 +58,60 @@ fn a_picture_background_is_the_slides_own_image() {
     assert_eq!(deck.slides[0].shapes.len(), 1);
     assert!(matches!(deck.slides[0].shapes[0], Shape::Text(_)));
     assert!(deck.slides[1].background.is_none());
+}
+
+#[test]
+fn a_picture_background_the_layout_states_is_the_slides_before_the_masters() {
+    let deck = deck("layout_background_deck.pptx");
+    assert_eq!(deck.slides.len(), 3);
+    let layout_picture = std::fs::read(path("images/scan.jpg")).expect("the layout's backdrop");
+    let master_picture = std::fs::read(path("images/scan.webp")).expect("the master's backdrop");
+    assert_ne!(
+        layout_picture, master_picture,
+        "the two levels state different pictures, or the reading could not tell them apart"
+    );
+
+    // The first two slides state no background of their own, and the layout
+    // between them and the master states one: it is the level that answers.
+    for (index, slide) in deck.slides.iter().take(2).enumerate() {
+        let background = slide
+            .background
+            .as_ref()
+            .unwrap_or_else(|| panic!("slide {} inherits the layout's picture", index + 1));
+        assert_eq!(
+            background.mime,
+            "image/jpeg",
+            "slide {}: the layout's media type, not the master's",
+            index + 1
+        );
+        assert_eq!(
+            background.data,
+            layout_picture,
+            "slide {}: the layout is the nearer level, so its picture is the one behind the page",
+            index + 1
+        );
+        assert_eq!(
+            background.bbox,
+            [0.0, 0.0, deck.width, deck.height],
+            "a background covers the slide's page"
+        );
+        assert_eq!(
+            slide.shapes.len(),
+            1,
+            "slide {}: an inherited backdrop is the page's image, not a shape",
+            index + 1
+        );
+        assert!(matches!(slide.shapes[0], Shape::Text(_)));
+    }
+
+    // The third slide states what is behind it, and a colour is not either
+    // picture: the inheritance stops at the slide, before the layout.
+    assert!(
+        deck.slides[2].background.is_none(),
+        "a slide that states its own colour is not given the layout's picture"
+    );
+    assert_eq!(deck.slides[2].shapes.len(), 1);
+    assert!(matches!(deck.slides[2].shapes[0], Shape::Text(_)));
 }
 
 #[test]
