@@ -7839,6 +7839,87 @@ fn a_layouts_picture_background_is_the_pages_image() {
     }
 }
 
+/// A layout that states a colour keeps the master's picture off the page.
+///
+/// `layout_colour_background_deck.pptx` keeps a photograph in the slide master
+/// and a colour in the blank layout, and neither of its first two slides states
+/// a `p:bg` of its own. A colour is a background but not a picture, so the chain
+/// stops at the layout and those pages have no image, although the master's WebP
+/// sits in the same package as the thing that must not answer. The third slide
+/// states a picture of its own — the nearest level — so its page is that JPEG at
+/// the 620 × 350 grid and 62 dpi its 620 pixels across the 10-inch page imply,
+/// which is what makes the two bare pages the layout's colour rather than a
+/// reading that dropped backgrounds. No backdrop is a picture item.
+#[test]
+fn a_layouts_colour_background_stops_the_masters_picture() {
+    let ws = Workspace::new("layout-colour-deck");
+    let input = repository_root().join("test-data/layout_colour_background_deck.pptx");
+    let output = ws.join("colour.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    let pages = doc["pages"].as_object().expect("a pages map");
+    for page in ["1", "2"] {
+        assert_eq!(
+            pages[page].get("image"),
+            None,
+            "page {page}: the layout's colour is a background, so the master's picture behind it is not the page's image"
+        );
+    }
+
+    let image = &pages["3"]["image"];
+    assert_eq!(image["mimetype"], "image/jpeg");
+    assert_eq!(
+        image["dpi"].as_u64(),
+        Some(62),
+        "620 pixels across 720 pt is 62 dpi"
+    );
+    assert_eq!(image["size"]["width"].as_f64(), Some(620.0));
+    assert_eq!(image["size"]["height"].as_f64(), Some(350.0));
+    let uri = image["uri"].as_str().expect("the backdrop's file");
+    assert!(
+        uri.ends_with("slide3_background.jpg"),
+        "the page image is not named for the slide it backs: {uri}"
+    );
+    assert_eq!(
+        std::fs::read(ws.join(uri)).expect("the backdrop written beside the JSON"),
+        fixture("images/scan.jpg"),
+        "the page image is not the third slide's own JPEG bytes"
+    );
+    assert_eq!(
+        doc["pictures"].as_array().expect("a pictures list").len(),
+        0,
+        "a backdrop was reported as a picture item as well as the page's image"
+    );
+
+    let words = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .map(|item| item["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for sentence in [
+        "A colour behind these words.",
+        "The same colour behind these words.",
+        "A picture behind these words.",
+    ] {
+        assert!(
+            words.contains(sentence),
+            "{sentence} did not survive: {words}"
+        );
+    }
+}
+
 /// `--ocr-lang` and `--psm` are checked before work starts, and a real mode
 /// still recognises a real scan.
 #[test]
