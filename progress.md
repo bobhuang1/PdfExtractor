@@ -12914,6 +12914,58 @@ in 233.41 s; `cargo test -p pdfextractor-cli --test cli_test` **128 passed** in 
 the new test among them. `cargo fmt --all --check` clean and clippy with `-D warnings`
 quiet on both crates.
 
+## A fixture the suites read has to be in the index
+
+**What was asked.** Add a test that every fixture the golden suites read is tracked by
+git, so an ignore rule can never silently drop one again.
+
+**The failure it exists for.** `crates/ui/capabilities/default.json` was source that the
+repository-wide `*.json` had hidden: present on the machine, absent from the index, and
+invisible in `git status` — the audit above found it by walking the ignored files. The
+same shape is possible for every fixture the golden suites read, because they read the
+tree rather than a list: a reference is anything in `test-data/golden/docling/`, a render
+golden is anything under the four format directories, and the document behind a golden
+is the one beside the corpus with the same stem. Add one, forget to add it to the
+repository, and a fresh checkout runs those suites without it.
+
+**The test.** `every_fixture_the_golden_suites_read_is_tracked` in
+[tracked_fixtures_test.rs](crates/cli/tests/tracked_fixtures_test.rs) gathers the files
+the suites read the way the suites gather them — the schema, the oracle script and the
+ratchet's memory by name; everything under `golden/docling`, `real`, `photos`, `images`
+and the four render directories by walking; and, for each golden's stem, the document
+that stem resolves to (`corpus_input`'s order, `test-data/real` first) — then asks `git
+ls-files -z` for the index and fails on every one that is not in it. The failure names
+the file and, when a rule is what keeps it out, the rule as `git check-ignore -v` spells
+it (``hidden by `.gitignore:24:!test-data/golden/docling/*.json` ``) — a matched
+negation is a rule keeping the file *in*, so it is reported as one never added instead.
+
+Two guards keep it from passing for the wrong reason. The walk must find at least 150
+files (it finds 210 today, plus the three named ones), so a mistyped directory cannot
+turn the test into a no-op; and a tree that is not a git checkout says so and skips,
+because a source archive has no index to ask and this test has nothing to say about one.
+
+**Proven both ways.** With the three pending fixtures staged — `nested_table.docx`,
+`golden/docling/nested_table.json`, `golden/docling/late_merged_header.json` — the test
+passes; unstaged, it fails naming exactly those three, and the staging was undone. To
+prove the rule branch, a probe golden `test-data/golden/markdown/probe.md` was added and
+matched by a temporary `test-data/golden/markdown/probe.md` rule in `.gitignore`: the
+test failed with ``hidden by `.gitignore:40:test-data/golden/markdown/probe.md` ``, and
+both the probe and the rule were removed afterwards.
+
+**Its state in this tree.** The test is **green**: the three fixtures it named when it was
+written have each been committed with the change that added them, so nothing the suites
+read is outside the index. The failing report above is the finding it was built on rather
+than a state of this tree; a file it names is one to commit, which is what was done. The
+audit's own changes (`.gitignore`, the deleted `mathtype_images/`) and the CI workflows are
+unaffected.
+
+**Verification.** `cargo test -p pdfextractor-cli --test tracked_fixtures_test` is **1
+passed** and names nothing: the index holds every file it walks, and `git status
+--ignored` over the same directories shows no ignored file hiding in one. When it was
+written the same run named the three pending fixtures and passed with them staged; the
+probe scenario above is the rule branch. Clippy over the CLI's targets with `-D warnings`
+is quiet, `cargo fmt --all --check` and `git diff --check` clean.
+
 ## A scheduled job carries the bridge
 
 **What was asked.** Install LibreOffice in a separate scheduled CI job so the legacy
