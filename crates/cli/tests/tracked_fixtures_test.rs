@@ -11,13 +11,18 @@
 //! directories hand a suite has to be in the index, and one that is not fails
 //! here naming the rule that hid it, or saying it was never added.
 //!
+//! It holds the other half of the same promise. A golden is named after the
+//! document it pins, so the document is part of the fixture: a golden whose
+//! document is nowhere in the tree fails here as well, rather than being left to
+//! whichever suite happens to look for it first.
+//!
 //! It knows nothing about *why* a file is not tracked; that is the point. A file
 //! the suites read belongs in the repository, whether it is hand-written or
 //! generated — the fixtures written by `test-data/make_*.py` are committed on
 //! purpose — and the generator scripts themselves are the one kind of file in
 //! `test-data/` a suite does not read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -93,12 +98,51 @@ const RENDER_GOLDENS: [&str; 4] = [
     "test-data/golden/yaml",
 ];
 
+/// Every golden's stem, and the goldens that carry it.
+///
+/// A golden is named after the document it pins — `<document>.<extension>` in
+/// the golden directory — which is what lets a fixture be found as a file rather
+/// than named in code. One document therefore has several goldens (its Markdown,
+/// its HTML, its text, its YAML and its reference), and every one of them agrees
+/// on the stem it is looking for.
+fn goldens_by_stem(root: &Path) -> BTreeMap<String, Vec<PathBuf>> {
+    let mut goldens: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for directory in RENDER_GOLDENS {
+        for path in files_in(&root.join(directory)) {
+            if let Some(stem) = path.file_stem().and_then(|name| name.to_str()) {
+                goldens.entry(stem.to_string()).or_default().push(path);
+            }
+        }
+    }
+    for reference in files_in(&root.join("test-data/golden/docling")) {
+        if let Some(stem) = reference.file_stem().and_then(|name| name.to_str()) {
+            goldens.entry(stem.to_string()).or_default().push(reference);
+        }
+    }
+    goldens
+}
+
+/// The goldens whose document is nowhere in the tree, as the stem they are named
+/// after and the goldens that carry it.
+///
+/// The document is the other half of the fixture, so a golden whose document is
+/// absent — deleted, renamed, or never committed — is a fixture missing from the
+/// tree whether or not a suite trips over it first.
+fn goldens_without_a_document(root: &Path) -> Vec<(String, Vec<PathBuf>)> {
+    goldens_by_stem(root)
+        .into_iter()
+        .filter(|(stem, _)| document_named(root, stem).is_none())
+        .collect()
+}
+
 /// The files the golden suites read.
 ///
 /// Gathered the way the suites gather them, rather than from a list that would
 /// have to be kept in step: the schema, the oracle script and the ratchet's
 /// memory they open by name; every file in the directories they walk; and the
-/// document behind every golden, found by its stem.
+/// document behind every golden, found by its stem. A golden whose document is
+/// nowhere is reported by `goldens_without_a_document` instead of here: there is
+/// nothing to gather for a document the tree does not hold.
 fn fixtures(root: &Path) -> Vec<PathBuf> {
     let golden = root.join("test-data/golden");
     let mut paths = vec![
@@ -110,22 +154,7 @@ fn fixtures(root: &Path) -> Vec<PathBuf> {
         paths.extend(files_below(&root.join(directory)));
     }
 
-    let mut stems = BTreeSet::new();
-    for directory in RENDER_GOLDENS {
-        for path in files_in(&root.join(directory)) {
-            if let Some(stem) = path.file_stem().and_then(|name| name.to_str()) {
-                stems.insert(stem.to_string());
-            }
-        }
-    }
-    for reference in files_in(&golden.join("docling")) {
-        if let Some(stem) = reference.file_stem().and_then(|name| name.to_str()) {
-            stems.insert(stem.to_string());
-        }
-    }
-    // A golden whose document cannot be found is the suites' own failure (the
-    // corpus report names a reference with no document), not this test's.
-    for stem in stems {
+    for stem in goldens_by_stem(root).into_keys() {
         if let Some(document) = document_named(root, &stem) {
             paths.push(document);
         }
@@ -222,6 +251,40 @@ fn every_fixture_the_golden_suites_read_is_tracked() {
         "the walk found {} fixture(s), where the tree it reads holds more than 150 — a \
          directory it walks has moved",
         fixtures.len()
+    );
+
+    // The other half of a fixture: a golden names its document by stem, so a
+    // golden the tree cannot answer for is a fixture missing — the suite that
+    // converts it would be the thing that noticed, and this is the test whose
+    // subject is the tree rather than the conversion.
+    let missing = goldens_without_a_document(&root);
+    assert!(
+        missing.is_empty(),
+        "{} golden(s) name a document the tree does not hold:\n  {}\n\
+         A golden is named after the document it pins, so the document belongs in the \
+         repository beside the golden: restore it, or take the golden away with it.",
+        missing.len(),
+        missing
+            .iter()
+            .map(|(stem, goldens)| {
+                let named_by: Vec<String> = goldens
+                    .iter()
+                    .map(|golden| {
+                        golden
+                            .strip_prefix(&root)
+                            .unwrap_or(golden)
+                            .display()
+                            .to_string()
+                    })
+                    .collect();
+                format!(
+                    "`{stem}`: named by {} — no document with that stem in `test-data/real` \
+                     or `test-data`",
+                    named_by.join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
 
     let tracked = tracked(&root);
