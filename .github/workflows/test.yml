@@ -1,0 +1,76 @@
+# The test gate, on every push: every test of every crate, run as the README's
+# "Build and test" runs it by hand.
+#
+#     cargo test --workspace --locked
+#
+# `--locked` so the gate also proves the committed lockfile is the one the
+# workspace builds from: a failing test and a stale lock are then the same red
+# build. Nothing is filtered — the unit tests, the corpus report, the golden
+# suite and the command line's own integration tests all run, the schema layer of
+# the Docling suite included (only its `docling-core` layer is skipped, because
+# that needs a Python with the package and `DOCLING_PY` pointing at it).
+#
+# The suite compiles the desktop shell as well as the CLI, and OCR is a required
+# capability, so the job installs what both need on Linux: the Tesseract and
+# Leptonica libraries the CLI links (and libclang, which builds the bindings) with
+# `tesseract-ocr`/`tesseract-ocr-eng` for the language data the OCR tests
+# recognise with, and the WebKitGTK and GTK development packages the shell's
+# default features need. These are the same packages the clippy gate installs,
+# plus the OCR data.
+#
+# LibreOffice is not installed, on purpose, and the suite is green without it.
+# That was measured by running the suite's binaries with an empty `PATH` — naming
+# a `PDFE_SOFFICE` that does not exist is not enough, because the lookup falls
+# through to `PATH` and finds a `soffice` that is installed:
+#
+# * the CLI suite's bridge tests return early and say so (`soffice_binary()`);
+# * the corpus report keeps the baseline entries of the documents it could not
+#   measure — the four legacy `.doc` documents in `test-data/real` — rather than
+#   recording a reading it did not make;
+# * the golden suite's corpus comparison still passes: a `.doc` read by the
+#   built-in reader instead of the bridge keeps its body text, and both readings
+#   report no pages, so all four stay above the 0.85 floor (equation 1.000,
+#   two_images 1.000, FloatingPictures 0.971, testPictures 0.941).
+#
+# Installing it would put the runner's LibreOffice between the ratchet and the
+# numbers the baseline was measured with — the bridge's readings depend on the
+# installed version, which is the same reason the compare gate measures with
+# `--ocr never`. A run here is therefore the suite a fresh checkout on a machine
+# without LibreOffice gets, and the bridge is gated on the machines that have it.
+
+name: the test gate
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: every crate, every test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The native libraries the workspace needs, and the OCR data the tests
+      # recognise with.
+      - name: The native libraries and OCR data the workspace needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev libclang-dev \
+            tesseract-ocr tesseract-ocr-eng \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: The workspace suite
+        run: cargo test --workspace --locked

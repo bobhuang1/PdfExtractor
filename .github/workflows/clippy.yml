@@ -1,0 +1,60 @@
+# The clippy gate, on every push: every crate, every target, warnings refused.
+#
+# `-D warnings` is what makes the check a verdict rather than advice. Plain
+# `cargo clippy` prints a lint and exits zero, so an unused import, a
+# `clippy::` lint a dependency change brings in, or an `unused_mut` only a test
+# reaches can sit in the tree with nothing failing; with the flag the job ends
+# non-zero and names the lint. `--all-targets` is part of the gate: the tests,
+# examples and benches are held to the same reading as the libraries and the
+# binaries, so a warning that only appears under `cfg(test)` still fails.
+#
+# The command is the one README's "Build and test" gives, run by hand the same
+# way:
+#
+#     cargo clippy --workspace --all-targets --locked -- -D warnings
+#
+# Clippy compiles every target before it lints it, so the job installs what the
+# workspace's build scripts need on Linux: the CLI links the Tesseract bindings
+# (`libtesseract-dev`, `libleptonica-dev`) and builds those bindings with
+# libclang, and the desktop shell's default features need the WebKitGTK and GTK
+# development packages. Without them the job fails in a build script, before a
+# single lint is asked.
+
+name: the clippy gate
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  clippy:
+    name: every crate and target, warnings refused
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The libraries the build scripts ask pkg-config for, and libclang for
+      # the Tesseract bindings' build.
+      - name: The native libraries the workspace needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev libclang-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+
+      # `--locked` so the gate also proves the committed lockfile is the one
+      # the workspace builds from; a lint failure and a stale lock are then the
+      # same red build.
+      - name: Clippy, with warnings refused
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
