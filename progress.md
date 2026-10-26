@@ -13061,3 +13061,49 @@ corpus_report_test`: **9 passed** in 147.83 s against the updated baseline.
 `tracked_fixtures_test` **1 passed** with the new reference in the index, which is where a
 reference has to be for a fresh checkout to have it.
 
+## A golden whose document is gone is a fixture missing
+
+**What was asked.** Have the tracked-fixtures test also fail when a golden's document is
+nowhere in the tree, instead of deferring that to the suites.
+
+**The half it passed over.** The test gathered the document behind every golden by stem —
+`corpus_input`'s order, `test-data/real` first — and asked the index about it; a stem that
+resolved to *nothing* was skipped without a word, on the reasoning that a golden whose
+document cannot be found is the suites' own failure. That is true of each suite one at a
+time and false of the tree, which is this test's subject: the same absence is reported in
+as many ways as there are suites and in each suite's own words, each only when that suite
+runs. `corpus_report_test` says `` `late_header`: the corpus has no such document`` for a
+reference with nothing to hold it against; `docling_golden_test` reaches the same gap as
+`corpus_input`'s panic, "no corpus document or fixture named `late_header.*`"; and a
+golden under a render directory is noticed only through the case that names it, so a
+golden whose case was taken out with its document can sit in the tree unnoticed
+altogether. A golden that has outlived its document — deleted, renamed, or never
+committed — is a fixture missing from the repository, and the check for a missing fixture
+belongs where the fixture is the subject.
+
+**The check.** `goldens_by_stem` now builds the map the test needed anyway: every golden's
+stem, with the goldens that carry it, from `golden/docling` and the four render
+directories. `fixtures` takes its documents from that map, so one reading answers both
+what to ask the index about and what is unaccounted for, and `goldens_without_a_document`
+is the second use of it — the entries `document_named` cannot resolve. The test fails on
+any of them, naming the stem and every golden that carries it:
+
+```
+1 golden(s) name a document the tree does not hold:
+  `ghost_document`: named by test-data/golden/markdown/ghost_document.md — no document with that stem in `test-data/real` or `test-data`
+A golden is named after the document it pins, so the document belongs in the repository
+beside the golden: restore it, or take the golden away with it.
+```
+
+**Proven both ways.** Green on this tree: **114 goldens over 54 stems** — the 44
+references in `golden/docling` and 70 render goldens across the four format directories —
+every stem resolving to a document in `test-data/real` or `test-data`, so nothing is
+named. To prove it bites, a probe golden `test-data/golden/markdown/ghost_document.md` was
+written with no document of that stem anywhere in the tree: the test failed with exactly
+the report above, naming the probe as the golden that carries it, and the probe was
+removed afterwards.
+
+**Verification.** `cargo test -p pdfextractor-cli --test tracked_fixtures_test` is **1
+passed** in 0.09 s on this tree and names nothing, and the probe run above is the failing
+side. `cargo fmt --all --check` clean and clippy over the CLI's targets with `-D warnings`
+quiet.
