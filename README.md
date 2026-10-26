@@ -976,6 +976,9 @@ test-data/
 ├── layout_background_deck.pptx              # a picture background the slide layout states,
 │                                            #   with the master's own beside it
 │                                            #   (make_layout_background_deck.py)
+├── layout_colour_background_deck.pptx       # a colour background the slide layout states,
+│                                            #   which hides the master's picture
+│                                            #   (make_layout_colour_background_deck.py)
 ├── preset_deck.pptx                         # one shape per preset outline (make_preset_deck.py)
 ├── q3_review.pptx                           # deck fixture (make_deck_pptx.py)
 ├── legacy_deck.ppt                          # legacy deck fixture (make_legacy_ppt.py)
@@ -1458,6 +1461,15 @@ first two slides to the layout's bytes at the full slide box and the third to no
 background, and one end-to-end test holds the first two pages' page images to the same
 620 × 350 `image/jpeg` at 62 dpi with the layout's own bytes written beside the JSON and
 the third page's to nothing, no picture item anywhere.
+
+`test-data/layout_colour_background_deck.pptx` puts a colour at that level instead: the
+master states a photograph (`images/scan.webp`) and the blank layout a colour, so the
+first two slides, which state nothing, have no backdrop at all — the photograph is in
+the same package and must not be reached past a part that states a background, because a
+colour is a background and not a picture. The third slide states a picture of its own
+(`images/scan.jpg`), the nearest level of all, so its page is that JPEG: the two bare
+pages say the layout stopped the chain, not that the reading lost backgrounds. One test
+of the parser and one end-to-end test hold it there.
 
 A GIF arriving as the input file is an animation rather than one picture, and every
 frame of it is a page: `image-parser`'s `gif_frames` decodes them all, compositing each

@@ -12808,3 +12808,50 @@ every one at or better than the updated baseline; `--test compare_test --test fo
 compare_mode_test` **8 passed**; `DOCLING_PY=… cargo test -p pdfextractor-cli --test
 docling_golden_test` **30 passed** in 237.80 s. `cargo fmt --all --check` clean and clippy
 with `-D warnings` quiet on the two crates.
+
+## A layout's colour stops the chain where it stands
+
+**What was asked.** Add a layout-level background-stopping case: a layout whose colour
+blocks the master's picture for slides beneath it.
+
+**Why it was missing.** The chain is slide -> layout -> master, and the nearest part that
+states a background is the one that answers — even when what it states is not a picture.
+The decks held every other arrangement: `background_deck.pptx` states a picture on the
+slide, `master_background_deck.pptx` a picture on the master with a colour on the third
+slide, and `layout_background_deck.pptx` pictures at both inherited levels. None put the
+colour at the *layout*, which is the level a reading is most likely to skip: a chain
+written to look for the nearest *picture* — falling past a layout whose background it
+cannot read — passes every other test in the tree and lights the master's photograph on a
+page whose layout says otherwise.
+
+**The fixture.** [make_layout_colour_background_deck.py](test-data/make_layout_colour_background_deck.py)
+writes `layout_colour_background_deck.pptx`: the master's `p:bg` states `images/scan.webp`
+through the master's own relationships, the blank layout's `p:bg` is a `solidFill` of
+`accent2`, and the three slides sit on that layout. The first two state nothing, so what is
+behind them is the layout's colour — the photograph is in the package beside it, which is
+what makes the question worth asking. The third states a picture of its own,
+`images/scan.jpg`, inserted the way the master's is: it is the nearest level of all, and its
+page is that JPEG, so a reading that dropped backgrounds altogether cannot pass either.
+Which parts answer is read off the package the writer produced, as in the deck beside it,
+and the two pictures are different encodings, so bytes and media type say which one a page
+carries.
+
+**The tests.** `a_layouts_colour_stops_the_chain_before_the_masters_picture` in
+[background_test.rs](crates/pptx-parser/tests/background_test.rs) holds the first two
+slides to no background at all — a colour is a background, not a picture — and the third to
+its own JPEG bytes at the full slide box, one shape apiece and that shape the sentence. The
+end-to-end `a_layouts_colour_background_stops_the_masters_picture` in
+[cli_test.rs](crates/cli/tests/cli_test.rs) converts the deck through the binary and holds
+pages 1 and 2 to no `image`, page 3 to the 620 x 350 `image/jpeg` at 62 dpi written beside
+the JSON as the slide's own bytes, `pictures` to none, and every sentence to its text.
+
+**Proof it bites.** Allowing the layout's colour to fall through to the master — a chain
+that only accepts a background it can read as a picture — fails both: the parser test on
+the first slide's `background`, and the end-to-end test on page 1, whose image becomes the
+master's WebP re-encoded as PNG (`colour_images/slide1_background.png`) where no image
+belongs. Restored, both pass.
+
+**Verification.** `cargo test -p pdfextractor-pptx-parser --test background_test` **5
+passed**; `cargo test -p pdfextractor-cli --test cli_test` **127 passed**; `cargo fmt --all
+--check` clean and clippy quiet on the touched crates. Rerunning the generator writes the
+same parts, byte for byte; only the archive's own timestamps differ.
