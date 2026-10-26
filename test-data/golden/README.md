@@ -776,7 +776,12 @@ The comparison is about what the reference saw, so it does not force us to
   our reading holds the day it ran, so the character share counts neither — a
   calendar value written with numeric separators (`10/12/2026`, `4-26-2006`,
   `2026.10.12`) is dropped from both sides, and `FloatingPictures.doc` reads the
-  same **99.3%** (0.99275) on any day. The value is what is left out, not the item: without
+  same **99.4%** (0.99361) on any day. A `TIME` field has the same non-answer one
+  granularity finer: `test-data/stamp_fields.doc` is a footer of a `DATE` field and a
+  `TIME` field, and every conversion writes its own moment into it, so a time of day
+  (`18:06:14`, `9:41:07` — hours, minutes and seconds, each group in range) is dropped
+  the same way and a document with a stamped footer cannot make the share read the
+  clock either. The value is what is left out, not the item: without
   those words the footer is still a row that differs or a row only the reference
   has, and both of those are ratcheted. Before the rule the same reading scored
   99.162% to 99.133% depending on the day, which is enough for the ratchet to

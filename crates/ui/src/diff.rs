@@ -2764,33 +2764,42 @@ fn without_inline_math(text: &str) -> String {
     out
 }
 
-/// `text` with every calendar value written with numeric separators removed.
+/// `text` with every stamp a conversion writes removed: a calendar value and a time
+/// of day.
 ///
-/// A `DATE` field has no text of its own: Word, LibreOffice and Docling each put
-/// the day *their* run happened into it when the document is written, so a legacy
-/// `.doc` read through the bridge holds today's date while a reference made from
-/// the same file holds the day its own conversion ran. Neither reading holds what
-/// the file stores, and the two never agree — which would make the character share
-/// of that document a reading of the calendar, and have the ratchet refuse a reading
-/// that lost nothing the next morning.
+/// A `DATE` or `TIME` field has no text of its own: Word, LibreOffice and Docling
+/// each put the day *their* run happened — and, for a `TIME` field, the moment — into
+/// it when the document is written, so a legacy `.doc` read through the bridge holds
+/// today's date and now's time while a reference made from the same file holds the day
+/// and the minute its own conversion ran. Neither reading holds what the file stores,
+/// and the two never agree — which would make the character share of that document a
+/// reading of the calendar and the clock, and have the ratchet refuse a reading that
+/// lost nothing the next morning, or across a minute
+/// (`test-data/stamp_fields.doc` is the fixture that writes both).
 ///
-/// So a calendar value is not counted on either side. What is left out is the
-/// *value*, not the fact that something is there: the item still holds its date for
-/// the rows, so a reading that lost one is still a row that differs or a row only
-/// the reference has, and both of those are ratcheted on their own. Only the digits
-/// of the stamp stop feeding this share.
+/// So a stamp is not counted on either side. What is left out is the *value*, not the
+/// fact that something is there: the item still holds its date for the rows, so a
+/// reading that lost one is still a row that differs or a row only the reference has,
+/// and both of those are ratcheted on their own. Only the digits of the stamp stop
+/// feeding this share.
 ///
 /// A calendar value is `a/b/c`, `a-b-c` or `a.b.c` with both separators the same,
 /// one of the outer groups a four-digit year, and the middle group a month or a day
 /// (`10/12/2026`, `4-26-2006`, `2026.10.12`). A two-digit year is left alone on
 /// purpose: `1.2.3` is a version as often as a date, and a stamp is what the fields
 /// write with a full year.
+///
+/// A time of day is `h:mm:ss` or `hh:mm:ss` — three groups separated by colons, hours
+/// 0–23 and minutes and seconds 0–59, with nothing numeric glued on either side
+/// (`18:06:14`, `9:41:07`). The seconds group is what makes it a stamp: a field writes
+/// the format its author chose, and `test-data/stamp_fields.doc` writes seconds, while
+/// `3:16` and `10:25` are a verse, a score or a ratio as often as a time.
 fn without_calendar_values(text: &str) -> String {
     let characters: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut index = 0;
     while index < characters.len() {
-        match calendar_value(&characters, index) {
+        match calendar_value(&characters, index).or_else(|| time_of_day(&characters, index)) {
             Some(end) => index = end,
             None => {
                 out.push(characters[index]);
@@ -2841,6 +2850,45 @@ fn calendar_value(characters: &[char], start: usize) -> Option<usize> {
         return None;
     }
     Some(end)
+}
+
+/// Where the time of day that starts at `start` ends, or `None` when what starts there
+/// is not one ([`without_calendar_values`] for the shape).
+///
+/// Three colon-separated groups of one or two digits, in range, so `10:25` — a time of
+/// day, but also a verse or a ratio — and `25:00:00` stay text, and the minutes and
+/// seconds of a longer number are never taken for a clock.
+fn time_of_day(characters: &[char], start: usize) -> Option<usize> {
+    let digit = |index: usize| characters.get(index).is_some_and(char::is_ascii_digit);
+    if start > 0 && digit(start - 1) {
+        return None;
+    }
+    let mut groups = [0u32; 3];
+    let mut index = start;
+    for (group, value) in groups.iter_mut().enumerate() {
+        let first = index;
+        while digit(index) {
+            *value = *value * 10 + u32::from(characters[index] as u8 - b'0');
+            index += 1;
+        }
+        if index == first || index - first > 2 {
+            return None;
+        }
+        if group < 2 {
+            if characters.get(index) != Some(&':') {
+                return None;
+            }
+            index += 1;
+        }
+    }
+    if digit(index) {
+        return None;
+    }
+    let [hours, minutes, seconds] = groups;
+    if hours > 23 || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    Some(index)
 }
 
 /// What the two documents say about their pages: how many, how big, and whether
@@ -5172,6 +5220,28 @@ mod tests {
         assert_eq!(without_calendar_values("10/12/26"), "10/12/26");
         assert_eq!(without_calendar_values("1.2.3"), "1.2.3");
         assert_eq!(without_calendar_values("12345/6/7890"), "12345/6/7890");
+    }
+
+    #[test]
+    fn a_time_a_conversion_writes_is_not_counted() {
+        // `stamp_fields.doc`'s footer holds a `DATE` field and a `TIME` field, and the
+        // bridge writes the moment *it* ran into both. Two footers that differ only in
+        // the minute and the second are the same words of the document, so the share
+        // must not read the clock any more than it reads the calendar.
+        let ours = document(&[text("paragraph", "Printed 10/25/2026 at 18:06:14")]);
+        let reference = document(&[text("paragraph", "Printed 10/12/2026 at 09:41:07")]);
+        assert_eq!(summary(&ours, &reference).text_agreement, 1.0);
+
+        // The shape a field writes with seconds, and the text that is not one: a verse
+        // (`3:16`), a time of day written without seconds, an hour and a minute that
+        // are no clock at all.
+        assert_eq!(without_calendar_values("18:06:14"), "");
+        assert_eq!(without_calendar_values("9:41:07"), "");
+        assert_eq!(without_calendar_values("at 18:06:14 sharp"), "at  sharp");
+        assert_eq!(without_calendar_values("John 3:16"), "John 3:16");
+        assert_eq!(without_calendar_values("at 10:25"), "at 10:25");
+        assert_eq!(without_calendar_values("25:00:00"), "25:00:00");
+        assert_eq!(without_calendar_values("10:60:00"), "10:60:00");
     }
 
     #[test]

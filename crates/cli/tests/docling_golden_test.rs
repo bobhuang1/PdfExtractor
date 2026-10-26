@@ -1379,20 +1379,22 @@ fn without_inline_math(text: &str) -> String {
     out
 }
 
-/// `text` with every calendar value written with numeric separators removed.
+/// `text` with every stamp a conversion writes removed: a calendar value written with
+/// numeric separators, and a time of day.
 ///
 /// The same rule as the panel's (`without_calendar_values` in
 /// `crates/ui/src/diff.rs`), carried here because this comparison has its own copy of
-/// the character metric and the two figures must not drift apart. A `DATE` field has
-/// no text of its own: a legacy `.doc` read through LibreOffice holds the day *that*
-/// conversion ran, the reference holds the day Docling's did, and counting the digits
-/// of the stamp made the figure a reading of the calendar rather than of the document.
+/// the character metric and the two figures must not drift apart. A `DATE` or `TIME`
+/// field has no text of its own: a legacy `.doc` read through LibreOffice holds the day
+/// and the moment *that* conversion ran, the reference holds the day and the moment
+/// Docling's did, and counting the digits of the stamp made the figure a reading of the
+/// calendar and the clock rather than of the document.
 fn without_calendar_values(text: &str) -> String {
     let characters: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut index = 0;
     while index < characters.len() {
-        match calendar_value(&characters, index) {
+        match calendar_value(&characters, index).or_else(|| time_of_day(&characters, index)) {
             Some(end) => index = end,
             None => {
                 out.push(characters[index]);
@@ -1441,6 +1443,42 @@ fn calendar_value(characters: &[char], start: usize) -> Option<usize> {
         return None;
     }
     Some(end)
+}
+
+/// Where the time of day that starts at `start` ends, or `None` when what starts there
+/// is not one. Three colon-separated groups of one or two digits, in range (`18:06:14`,
+/// `9:41:07`), so `10:25` — a time of day, but also a verse or a ratio — stays text.
+fn time_of_day(characters: &[char], start: usize) -> Option<usize> {
+    let digit = |index: usize| characters.get(index).is_some_and(char::is_ascii_digit);
+    if start > 0 && digit(start - 1) {
+        return None;
+    }
+    let mut groups = [0u32; 3];
+    let mut index = start;
+    for (group, value) in groups.iter_mut().enumerate() {
+        let first = index;
+        while digit(index) {
+            *value = *value * 10 + u32::from(characters[index] as u8 - b'0');
+            index += 1;
+        }
+        if index == first || index - first > 2 {
+            return None;
+        }
+        if group < 2 {
+            if characters.get(index) != Some(&':') {
+                return None;
+            }
+            index += 1;
+        }
+    }
+    if digit(index) {
+        return None;
+    }
+    let [hours, minutes, seconds] = groups;
+    if hours > 23 || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    Some(index)
 }
 
 /// How many mislabelled headings and boundary-merged blocks each document is

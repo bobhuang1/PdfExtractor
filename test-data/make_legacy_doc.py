@@ -36,6 +36,17 @@ What the pair carries, one case per feature the DOCX reader has:
 Everything here is a feature the native reading and the bridged one agree on
 exactly, so the gate needs no excuse but the container's own identity and the
 directory an output names its pictures in.
+
+The script also writes `test-data/stamp_fields.doc`, which has no native twin
+because its native and bridged readings are meant to *differ*: its footer holds a
+`DATE` field and a `TIME` field, and every conversion rewrites both from its own
+clock. LibreOffice reads the fields out of the Word 97 file and writes the moment
+*it* converted into the package, so a reading of that `.doc` holds today's date and
+now's time while any other conversion of the same file holds its own — which is
+what `without_calendar_values` (either copy) keeps out of the character share, so
+the ratchet cannot read the calendar or the clock. The stored results (`1/1/2000`,
+`00:00:00`) never survive a conversion; they are there so the fields are valid
+before one happens.
 """
 
 import os
@@ -54,6 +65,7 @@ from docx.shared import Inches
 HERE = Path(__file__).resolve().parent
 NATIVE = HERE / "brief.docx"
 BRIDGED = HERE / "legacy_brief.doc"
+STAMPED = HERE / "stamp_fields.doc"
 PICTURE = HERE / "images" / "scan.jpg"
 
 
@@ -100,6 +112,62 @@ def add_link(paragraph, text: str, url: str) -> None:
     paragraph._p.append(link)
 
 
+def literal(paragraph, text: str) -> None:
+    """A run of words as written, whitespace and all."""
+    run = OxmlElement("w:r")
+    words = OxmlElement("w:t")
+    words.set(qn("xml:space"), "preserve")
+    words.text = text
+    run.append(words)
+    paragraph._p.append(run)
+
+
+def field_mark(paragraph, kind: str) -> None:
+    """One of a field's three marks: `begin`, `separate` or `end`."""
+    run = OxmlElement("w:r")
+    mark = OxmlElement("w:fldChar")
+    mark.set(qn("w:fldCharType"), kind)
+    run.append(mark)
+    paragraph._p.append(run)
+
+
+def add_field(paragraph, instruction: str, stored: str) -> None:
+    """A field: `begin`, its instruction, `separate`, the stored result, `end`.
+
+    The stored result is what a reader that does not refresh fields holds; the
+    conversion that *does* refresh them writes its own over it.
+    """
+    field_mark(paragraph, "begin")
+    run = OxmlElement("w:r")
+    instruction_text = OxmlElement("w:instrText")
+    instruction_text.set(qn("xml:space"), "preserve")
+    instruction_text.text = f" {instruction} "
+    run.append(instruction_text)
+    paragraph._p.append(run)
+    field_mark(paragraph, "separate")
+    literal(paragraph, stored)
+    field_mark(paragraph, "end")
+
+
+def write_stamp_fixture(scratch: Path) -> None:
+    """The `.doc` whose footer is stamped by whichever conversion writes it."""
+    document = Document()
+    document.add_paragraph(
+        "The footer says when this file was printed. The fields in it are refreshed "
+        "by whatever writes the file next, so no reading of it holds what it stores."
+    )
+    footer = document.sections[0].footer.paragraphs[0]
+    literal(footer, "Printed ")
+    add_field(footer, 'DATE \\@ "M/d/yyyy"', "1/1/2000")
+    literal(footer, " at ")
+    add_field(footer, 'TIME \\@ "HH:mm:ss"', "00:00:00")
+    native = scratch / "stamp_fields.docx"
+    document.save(native)
+
+    shutil.copyfile(convert(native, scratch), STAMPED)
+    print(f"wrote {STAMPED}")
+
+
 def write_native() -> None:
     document = Document()
     document.add_heading("Quarterly Brief", level=0)
@@ -131,36 +199,45 @@ def write_native() -> None:
     document.save(NATIVE)
 
 
+def convert(native: Path, scratch: Path) -> Path:
+    """The Word 97 file LibreOffice's exporter writes for `native`."""
+    out = scratch / "out"
+    out.mkdir(exist_ok=True)
+    profile = scratch / "profile"
+    result = subprocess.run(
+        [
+            soffice(),
+            "--headless",
+            "--norestore",
+            f"-env:UserInstallation=file://{profile}",
+            "--convert-to",
+            "doc",
+            "--outdir",
+            str(out),
+            str(native),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    produced = out / f"{native.stem}.doc"
+    if result.returncode != 0 or not produced.is_file():
+        sys.exit(
+            "LibreOffice could not write the fixture: "
+            f"{result.stderr.strip() or result.stdout.strip() or 'no diagnostic'}"
+        )
+    return produced
+
+
 def main() -> None:
     write_native()
 
     with tempfile.TemporaryDirectory(prefix="pdfe-legacy-doc-") as scratch:
-        out = Path(scratch) / "out"
-        out.mkdir()
-        profile = Path(scratch) / "profile"
-        result = subprocess.run(
-            [
-                soffice(),
-                "--headless",
-                "--norestore",
-                f"-env:UserInstallation=file://{profile}",
-                "--convert-to",
-                "doc",
-                "--outdir",
-                str(out),
-                str(NATIVE),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        produced = out / f"{NATIVE.stem}.doc"
-        if result.returncode != 0 or not produced.is_file():
-            sys.exit(
-                "LibreOffice could not write the fixture: "
-                f"{result.stderr.strip() or result.stdout.strip() or 'no diagnostic'}"
-            )
+        produced = convert(NATIVE, Path(scratch))
         shutil.copyfile(produced, BRIDGED)
     print(f"wrote {NATIVE} and {BRIDGED}")
+
+    with tempfile.TemporaryDirectory(prefix="pdfe-stamp-fields-") as scratch:
+        write_stamp_fixture(Path(scratch))
 
 
 if __name__ == "__main__":
