@@ -12437,7 +12437,7 @@ what the baseline records.
 
 **The ratchet.** `nested_table` is in
 [compare-baseline.json](test-data/golden/compare-baseline.json) with rows 6, same 4,
-`theirsOnly` 2 and agreement 1.0, so the report compares **41 documents** — the 42
+`theirsOnly` 2 and agreement 1.0, so the report compares **42 documents** — the 43
 references less `invoice_scan.png`, whose text exists only through OCR — and a later
 reading that loses a row of the fixture fails. The update run also recorded the row
 improvements `drawing.docx` (271 → 267 rows) and `calibre_demo.docx` (123 → 122) had
@@ -12446,19 +12446,19 @@ been rewritten for; both are improvements, so the ratchet had not refused them.
 
 **The schema test.** `a_nested_table_docx_conforms_to_the_docling_schema` holds our
 output for the fixture to `DoclingDocument.json` field by field, like the workbook, the
-deck, the image and the RTF — it is beside the corpus, not in it, so
+deck, the image, the RTF and the HTML page — it is beside the corpus, not in it, so
 the corpus-wide conformance test never sees it.
 
-**Docs.** [test-data/golden/README.md](test-data/golden/README.md) now says **42 in
-all** with five fixtures beside the corpus, describes this one's reference (four items,
+**Docs.** [test-data/golden/README.md](test-data/golden/README.md) now says **43 in
+all** with six fixtures beside the corpus, describes this one's reference (four items,
 the rich cell, the nested table, 1.000), and states the rich-cell rule in the text
 bullet together with the corpus's new agreement range. The root README's compatibility
-row moves from 41 to 42 and the `test-data` tree lists the fixture.
+row moves from 42 to 43 and the `test-data` tree lists the fixture.
 
 **Verification.** `DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p
-pdfextractor-cli --test docling_golden_test` **29 passed** in 256.14 s, the schema test,
+pdfextractor-cli --test docling_golden_test` **30 passed** in 256.14 s, the schema test,
 the fixture's conformance test and `docling_core_accepts_our_documents` among them;
-`cargo test -p pdfextractor-ui --test corpus_report_test` **9 passed**, 41 documents
+`cargo test -p pdfextractor-ui --test corpus_report_test` **9 passed**, 42 documents
 compared; `cargo test -p pdfextractor-ui --lib` **106 passed**, the two new metric tests
 (`a_rich_cells_paragraphs_are_counted_once`,
 `a_rich_cell_keeps_what_its_paragraphs_do_not_say`) among them;
