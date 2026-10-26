@@ -12855,3 +12855,61 @@ belongs. Restored, both pass.
 passed**; `cargo test -p pdfextractor-cli --test cli_test` **127 passed**; `cargo fmt --all
 --check` clean and clippy quiet on the touched crates. Rerunning the generator writes the
 same parts, byte for byte; only the archive's own timestamps differ.
+
+## A time a conversion writes is left out of the share
+
+**What was asked.** Extend the calendar-value rule to the other stamps a conversion
+writes, such as a time of day, if a fixture can produce one.
+
+**The fixture first, because the rule depends on it.** Only a `.doc` can produce a
+stamp: the DOCX reader takes a field's stored result, so a `.docx` fixture would hold
+`00:00:00` on both sides and prove nothing, while the bridge rewrites fields from its
+own clock. So [make_legacy_doc.py](test-data/make_legacy_doc.py) now also writes
+[stamp_fields.doc](test-data/stamp_fields.doc) — one paragraph and a footer of
+`Printed <DATE> at <TIME>`, with `DATE \@ "M/d/yyyy"` and `TIME \@ "HH:mm:ss"` fields
+whose stored results are `1/1/2000` and `00:00:00`. It has no native twin on purpose:
+its native and bridged readings are meant to differ, and the stored results are there
+only so the fields are valid before a conversion runs. Read back through the bridge
+the footer says `Printed 10/25/2026 at 18:12:02` — both fields rewritten — so a fixture
+can produce a time of day, and every reading of it holds the moment *its* conversion
+ran.
+
+**The rule.** `time_of_day` in [diff.rs](crates/ui/src/diff.rs) sits beside
+`calendar_value`, and `without_calendar_values` takes whichever answers: `h:mm:ss` or
+`hh:mm:ss`, three colon-separated groups of one or two digits, hours 0–23 and minutes
+and seconds 0–59, with nothing numeric glued on either side. Seconds are required, so
+`10:25` — a time of day, but also a verse, a score or a ratio — stays text, and the
+minutes and seconds of a longer number are never taken for a clock. The golden suite's
+copy of the metric in [docling_golden_test.rs](crates/cli/tests/docling_golden_test.rs)
+carries the same function, because the panel and the comparison must stay one figure.
+
+**The tests.** `a_time_a_conversion_writes_is_not_counted` holds two footers that
+differ only in the minute and the second to an agreement of 1.000, and pins the
+spellings the rule accepts (`18:06:14`, `9:41:07`, a time inside a sentence) and the
+ones it leaves alone (`John 3:16`, `at 10:25`, `25:00:00`, `10:60:00`). The fixture's
+own end-to-end test,
+`a_legacy_docs_date_and_time_fields_carry_the_conversions_clock` in
+[cli_test.rs](crates/cli/tests/cli_test.rs), converts `stamp_fields.doc` through the
+binary and holds the footer to the two fields' formats — three groups of a calendar
+date, three groups of a time, each in range — and to the stored results being gone. It
+asserts the shapes rather than today's value, since pinning the value would make the
+test a calendar of its own.
+
+**The baseline moved by one entry.** The update run rewrote `FloatingPictures` from
+0.99275047 to 0.99361486 and nothing else: its comment carries a `time:
+2006-04-26T21:33:00`, and those digits now leave the share the way the comment's own
+date already did. The floor is therefore slightly stricter for that document, not
+looser; no row count changed, and no other entry moved — `q3_review`'s comment times
+sit in a document already at 1.000.
+
+**Docs.** The root README's ratchet paragraph and the corpus README's
+`FloatingPictures` bullet now say a stamp is what is left out — the date and the moment
+— and the `test-data` tree lists `stamp_fields.doc` beside the bridge pair.
+
+**Verification.** `cargo test -p pdfextractor-ui --no-default-features --lib` **107
+passed**; `--test corpus_report_test` **9 passed** in 147.63 s with 42 documents
+compared, every one at or better than the updated baseline;
+`DOCLING_PY=… cargo test -p pdfextractor-cli --test docling_golden_test` **30 passed**
+in 233.41 s; `cargo test -p pdfextractor-cli --test cli_test` **128 passed** in 429.00 s,
+the new test among them. `cargo fmt --all --check` clean and clippy with `-D warnings`
+quiet on both crates.

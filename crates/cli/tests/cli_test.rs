@@ -12517,6 +12517,84 @@ fn a_legacy_doc_is_read_through_libreoffice_as_a_document() {
     );
 }
 
+/// The footer of `stamp_fields.doc` holds a `DATE` field and a `TIME` field, and
+/// neither keeps what the file stores: LibreOffice rewrites both from its own clock
+/// when it writes the package the DOCX reader reads, so the reading holds today's
+/// date and the moment of *this* conversion — which is what makes a reading of that
+/// document a reading of the calendar and the clock, and what the character share
+/// leaves out on both sides (`without_calendar_values` in the panel and in the
+/// golden suite). This test is the fixture's reason: it shows the stamp a conversion
+/// writes, and it asserts the fields' formats rather than today's value, since
+/// pinning the value would make the test a calendar of its own.
+#[test]
+fn a_legacy_docs_date_and_time_fields_carry_the_conversions_clock() {
+    if !libreoffice_on_path() {
+        eprintln!("no soffice on PATH; skipping the .doc stamp test");
+        return;
+    }
+
+    let ws = Workspace::new("doc-stamp");
+    let source = repository_root().join("test-data/stamp_fields.doc");
+    let bytes = std::fs::read(&source).expect("the stamp fixture");
+    let input = ws.write("stamp_fields.doc", &bytes);
+    let output = ws.join("stamp_fields.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(doc["name"], "stamp_fields.doc");
+    assert_eq!(doc["origin"]["mimetype"], "application/msword");
+
+    let texts = doc["texts"].as_array().expect("a text list");
+    let stamped = texts
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .find(|text| text.starts_with("Printed "))
+        .unwrap_or_else(|| panic!("no stamped footer: {texts:#?}"));
+
+    // The stored results the fixture writes — `1/1/2000` and `00:00:00` — are what a
+    // reader that does not refresh fields would hold. A conversion does refresh them,
+    // and this is what says the fixture is the one that does.
+    assert!(
+        !stamped.contains("1/1/2000") && !stamped.contains("00:00:00"),
+        "the conversion kept the stored results: {stamped:?}"
+    );
+
+    let (date, time) = stamped
+        .strip_prefix("Printed ")
+        .and_then(|rest| rest.split_once(" at "))
+        .unwrap_or_else(|| panic!("the footer is not a stamped line: {stamped:?}"));
+    let groups = |text: &str, separator: char| -> Vec<u32> {
+        text.split(separator)
+            .map(|group| {
+                group
+                    .parse::<u32>()
+                    .unwrap_or_else(|_| panic!("{group:?} is not a number in {stamped:?}"))
+            })
+            .collect()
+    };
+    let date = groups(date, '/');
+    let time = groups(time, ':');
+    assert_eq!(date.len(), 3, "the date field is not M/d/yyyy: {stamped:?}");
+    assert_eq!(time.len(), 3, "the time field is not HH:mm:ss: {stamped:?}");
+    let (month, day, year) = (date[0], date[1], date[2]);
+    assert!(
+        (1..=12).contains(&month) && (1..=31).contains(&day) && (1000..=9999).contains(&year),
+        "not a calendar date: {stamped:?}"
+    );
+    let (hours, minutes, seconds) = (time[0], time[1], time[2]);
+    assert!(
+        hours <= 23 && minutes <= 59 && seconds <= 59,
+        "not a time of day: {stamped:?}"
+    );
+}
+
 /// Without LibreOffice a legacy workbook names what it is, what it needs, and
 /// the one action that needs nothing installed.
 #[test]
