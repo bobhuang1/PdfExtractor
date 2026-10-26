@@ -12958,3 +12958,54 @@ build, are proven.
 
 **Docs.** [README.md](README.md) says beside the per-push gate that the bridge is not left
 untested for it, names this workflow, and says why the image is pinned.
+## An HTML page is compared with Docling's own reading
+
+**What was asked.** Give `late_header.html` a Docling reference and add it to the corpus
+comparison.
+
+**The reference.** `test-data/golden/docling/late_header.json`, made by
+`test-data/golden/regenerate.py late_header.html` with the Docling the folder's README
+records (2.138.0, docling-core 2.101.1): **no pages, three text items and one table**.
+Docling's HTML backend turns the head's `<title>` into a `title` item and the body's
+`<h1>` into another, so both read `Quarterly report`; the paragraph is a `text`; and the
+table is the `colspan="2"` caption row above `Month` and `Total`, which our reader holds
+cell for cell.
+
+**The comparison.** The suite compares every reference in the folder, so the page joined
+it without being named anywhere: `corpus_input` finds `test-data/late_header.html` beside
+the corpus rather than in it, converts it, and the comparison reports **0/0 pages and
+text agreement 0.839** in four rows — the title once, the paragraph, the caption row and
+the header row. 0.839 is 78 of the reference's 93 alphanumerics, and the 15 that are
+missing are its second copy of the title. With that copy taken out of the count the page
+matches character for character.
+
+**The floor it needs.** 0.839 is below the 0.85 every document is held to, and it cannot
+rise: our reader drops the head's title when the body states one (`crates/text-parser/
+src/html.rs` says why), and a block that appears twice in a row is exactly what the
+comparison calls a defect in *our* output — copying Docling's duplicate to reach the floor
+would be the wrong fix. So `TEXT_FLOORS` sits beside `LABEL_BUDGETS` and
+`FOOTNOTE_BUDGETS` with `("late_header", 0.83)` and the reason in its comment, and the
+strict 0.85 stays the rule for every document not named there. The floor still bites on a
+real loss: 78 of 93 becomes 65 of 93 (0.699) without the caption row's long cell and 57 of
+93 (0.613) without the paragraph.
+
+**The ratchet it also joined.** `corpus_report_test` covers every reference the folder
+holds, so the page is measured there too. `CORPUS_BASELINE=update` added **one entry** to
+`test-data/golden/compare-baseline.json` — `late_header`: 4 rows, 3 same, 1 only the
+reference, agreement 0.8387096774 — and changed nothing else: the diff is 15 inserted
+lines and every other document's numbers are identical, which is the evidence that the
+other 43 readings were the same run's.
+
+**Docs.** `test-data/golden/README.md` says 44 references now (37 corpus documents and
+seven fixtures, `late_header.html` named among them), describes the page's reading, its
+0.839 and the floor that records it, and adds a "Known limits" bullet on the `<title>`
+Docling reads twice. The root README's compatibility row moves 43 to 44.
+
+**Verification.** `cargo test -p pdfextractor-cli --test docling_golden_test` with
+`DOCLING_PY` set: **30 passed** in 236.47 s, `late_header` among the references (and the
+run before the floor was added failed on it, so the floor is the only thing that changed
+the verdict). `cargo test -p pdfextractor-ui --no-default-features --test
+corpus_report_test`: **9 passed** in 147.83 s against the updated baseline.
+`tracked_fixtures_test` **1 passed** with the new reference in the index, which is where a
+reference has to be for a fresh checkout to have it.
+

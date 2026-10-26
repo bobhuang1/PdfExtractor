@@ -247,6 +247,21 @@
       "joined": 6,
       "agreement": 0.9944791515327619
     },
+    "late_header": {
+      "rows": 4,
+      "same": 3,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 1,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 0.8387096774193549
+    },
     "late_merged_header": {
       "rows": 4,
       "same": 3,

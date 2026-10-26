@@ -1500,6 +1500,21 @@ const LABEL_BUDGETS: [(&str, usize, usize); 9] = [
     ("tracemonkey", 1, 0),
 ];
 
+/// The floor on character agreement, per stem, where the global 0.85 cannot be
+/// reached without copying a defect out of the reference — `(stem, floor)`.
+///
+/// `late_header.html` is read perfectly: every character the reference holds is
+/// ours, and the whole of what is left out is one title that the reference states
+/// twice. Docling's HTML backend turns the head's `<title>` into a `title` item and
+/// then reads the body's `<h1>` as another, so 15 of the reference's 93 alphanumerics
+/// repeat words it has already counted. Our reader drops the head's title when the
+/// body states one (`crates/text-parser/src/html.rs` says why), which is the reading
+/// the writers and the window expect — and a block that appears twice in a row is
+/// what this comparison calls a defect in *our* output — so 78/93 = 0.839 is this
+/// document's ceiling rather than a shortfall, and every character outside that
+/// duplicate is held. Everything not listed keeps the global floor.
+const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
+
 /// How many of each document's footnotes must be *held* — labelled `footnote`
 /// or, failing that, still in the body — and how many must be **labelled**, by
 /// stem: `(stem, held, labelled)`.
@@ -1603,9 +1618,13 @@ fn our_output_agrees_with_real_docling_conversions() {
                 agreement.pages_ours, agreement.pages_theirs
             ));
         }
-        if agreement.text_agreement < 0.85 {
+        let floor = TEXT_FLOORS
+            .iter()
+            .find(|(name, _)| *name == stem)
+            .map_or(0.85, |(_, floor)| *floor);
+        if agreement.text_agreement < floor {
             mismatches.push(format!(
-                "{stem}: text agreement {:.3} (below 0.85)\n     {}",
+                "{stem}: text agreement {:.3} (below {floor:.2})\n     {}",
                 agreement.text_agreement,
                 agreement.notes.join("\n     ")
             ));
