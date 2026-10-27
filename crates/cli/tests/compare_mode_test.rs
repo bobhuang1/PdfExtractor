@@ -22,6 +22,11 @@
 //! measured with the bridge, so a run without one leaves the document to the
 //! bridge rather than holding it to numbers another reader never produced — and
 //! `PDFE_SOFFICE` is how these tests say which machine they are.
+//!
+//! The legacy `.xls` is the third, for the other half of that rule: a family the
+//! bridge is the *only* reader for, where leaving it out cannot wait for a
+//! finished document because there is no reading here to finish. Both are left
+//! out before anything is converted, on the same sentence and in the same count.
 
 use pdfextractor_ui::diff::{Measurement, Memory, Numbers};
 use std::collections::BTreeMap;
@@ -34,6 +39,13 @@ const LEGACY_DOC: &str = "test-data/real/two_images.doc";
 /// Its committed reference, and the stem the memory remembers it under.
 const LEGACY_REFERENCE: &str = "two_images.json";
 const LEGACY_STEM: &str = "two_images";
+
+/// A legacy Excel workbook: a BIFF compound file with no `WordDocument` stream,
+/// so nothing here reads it and the bridge is not a better reading of it but the
+/// only one. It has no reference, because a run that leaves it out never looks
+/// for one.
+const BRIDGE_ONLY: &str = "test-data/ledger.xls";
+const BRIDGE_ONLY_STEM: &str = "ledger";
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -84,6 +96,18 @@ impl Scratch {
         Scratch::holding(tag, "dummy.json")
     }
 
+    /// A scratch folder with a reference folder of its own and **nothing** in it:
+    /// a run that leaves its documents out never looks for a reference, and a run
+    /// that converts one has none to hold it to — the two outcomes a test below
+    /// needs to tell apart.
+    fn empty(tag: &str) -> Scratch {
+        let path =
+            std::env::temp_dir().join(format!("pdfe-cli-compare-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("docling")).expect("create the scratch folder");
+        Scratch(path)
+    }
+
     /// A scratch folder holding one committed reference of `docling/`, under its
     /// own name — what the run compares a document of the same stem against.
     fn holding(tag: &str, reference: &str) -> Scratch {
@@ -130,10 +154,10 @@ impl Scratch {
         ])
     }
 
-    /// Convert the corpus's legacy `.doc` and compare it with the reference this
-    /// scratch holds, on the machine whose LibreOffice is `soffice`.
-    fn compare_the_legacy_doc(&self, soffice: &str) -> Output {
-        let input = repository_root().join(LEGACY_DOC);
+    /// Convert `document` and compare it with the reference this scratch holds,
+    /// on the machine whose LibreOffice is `soffice`.
+    fn compare(&self, document: &str, soffice: &str) -> Output {
+        let input = repository_root().join(document);
         let output = self.0.join("out.json");
         run_with_soffice(
             &[
@@ -157,17 +181,17 @@ impl Drop for Scratch {
     }
 }
 
-/// A memory no reading of the legacy `.doc` can stand under: every count
-/// remembered as none, and the reference's characters as 200% held — a share
-/// above anything a comparison can report. Whatever this machine reads of the
-/// document, a run that holds it is refused, so the test below cannot pass by the
-/// floor happening to be out of reach.
-fn a_memory_no_reading_can_meet() -> Memory {
+/// A memory no reading of `stem` can stand under: every count remembered as
+/// none, and the reference's characters as 200% held — a share above anything a
+/// comparison can report. Whatever this machine reads of the document, a run that
+/// holds it is refused, so the tests below cannot pass by the floor happening to
+/// be out of reach.
+fn a_memory_no_reading_can_meet(stem: &str) -> Memory {
     Memory {
         note: "a floor no reading reaches, written by the compare mode's test".to_string(),
         measured: Measurement::from_ocr("never"),
         documents: BTreeMap::from([(
-            LEGACY_STEM.to_string(),
+            stem.to_string(),
             Numbers {
                 rows: 0,
                 same: 0,
@@ -427,9 +451,9 @@ fn a_document_with_no_reference_fails_the_comparison() {
 #[test]
 fn a_document_the_bridge_reads_is_not_held_on_a_machine_without_one() {
     let scratch = Scratch::holding("unbridged", LEGACY_REFERENCE);
-    scratch.remember(&a_memory_no_reading_can_meet());
+    scratch.remember(&a_memory_no_reading_can_meet(LEGACY_STEM));
 
-    let output = scratch.compare_the_legacy_doc("/nowhere/soffice");
+    let output = scratch.compare(LEGACY_DOC, "/nowhere/soffice");
     let logs = logs_of(&output);
 
     assert!(
@@ -463,9 +487,9 @@ fn the_same_document_is_held_when_the_bridge_is_here() {
         return;
     };
     let scratch = Scratch::holding("bridged", LEGACY_REFERENCE);
-    scratch.remember(&a_memory_no_reading_can_meet());
+    scratch.remember(&a_memory_no_reading_can_meet(LEGACY_STEM));
 
-    let output = scratch.compare_the_legacy_doc(soffice.to_str().expect("a UTF-8 path"));
+    let output = scratch.compare(LEGACY_DOC, soffice.to_str().expect("a UTF-8 path"));
     let logs = logs_of(&output);
 
     assert!(
@@ -479,5 +503,80 @@ fn the_same_document_is_held_when_the_bridge_is_here() {
     assert!(
         !logs.contains("not held"),
         "a machine with the bridge left the document out: {logs}"
+    );
+}
+
+/// A family the bridge is the **only** reader for is left out of a compare run on
+/// a machine without it, on the same sentence and in the same count as the legacy
+/// `.doc` — and before anything is converted, because there is no reading here to
+/// finish and leave out afterwards. Without that, a workbook only Calc can open
+/// would fail the gate on the missing tool rather than on anything the gate is
+/// about, which is the failure the legacy `.doc` was left out to stop.
+#[test]
+fn a_format_only_the_bridge_can_read_is_not_held_on_a_machine_without_one() {
+    let scratch = Scratch::empty("bridge-only-unbridged");
+    scratch.remember(&a_memory_no_reading_can_meet(BRIDGE_ONLY_STEM));
+
+    let output = scratch.compare(BRIDGE_ONLY, "/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a document left to the bridge failed the run: {logs}"
+    );
+    assert!(
+        logs.contains("not held · read through LibreOffice"),
+        "the document was not said to be left out, nor why: {logs}"
+    );
+    assert!(
+        logs.contains("1 document(s) not held"),
+        "the run did not count what it left out: {logs}"
+    );
+    assert!(
+        !logs.contains("below the floor"),
+        "it was held to a floor another reader's numbers set: {logs}"
+    );
+    // And not converted: leaving it out happens before the run spends a bridge it
+    // does not have. A run that read the file first could not leave this family
+    // out at all, because the read is what would fail.
+    assert!(
+        !scratch.0.join("out.json").exists(),
+        "the document was converted by a run that left it out: {logs}"
+    );
+}
+
+/// The control for the test above: the same workbook on a machine that has the
+/// bridge. It is read, and then refused for having no reference in this scratch —
+/// the ordinary rule for a document nothing remembers — which is what shows the
+/// test above is about the bridge rather than about a file the run passes over.
+/// Returns without asserting where no LibreOffice is installed, as the other
+/// bridge tests do.
+#[test]
+fn the_bridge_only_format_is_read_when_the_bridge_is_here() {
+    let Some(soffice) = soffice_on_path() else {
+        println!("skipped: no LibreOffice here, so there is no bridge to read it through");
+        return;
+    };
+    let scratch = Scratch::empty("bridge-only-bridged");
+    scratch.remember(&a_memory_no_reading_can_meet(BRIDGE_ONLY_STEM));
+
+    let output = scratch.compare(BRIDGE_ONLY, soffice.to_str().expect("a UTF-8 path"));
+    let logs = logs_of(&output);
+
+    assert!(
+        !output.status.success(),
+        "an unheld document passed where the bridge is: {logs}"
+    );
+    assert!(
+        !logs.contains("not held"),
+        "a machine with the bridge left the document out: {logs}"
+    );
+    assert!(
+        logs.contains("no reference for this document"),
+        "the refusal was not the missing reference: {logs}"
+    );
+    assert!(
+        scratch.0.join("out.json").exists(),
+        "the document was not converted where the bridge is: {logs}"
     );
 }

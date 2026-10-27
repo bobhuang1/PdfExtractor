@@ -13173,3 +13173,57 @@ test -p pdfextractor-cli --test compare_mode_test` is **10 passed** (both new te
 this machine has LibreOffice, so the control asserted rather than skipped), the formats unit
 test **1 passed**, `cargo fmt --all --check` clean and clippy over the CLI's targets with
 `-D warnings` quiet.
+
+## A family only the bridge can read is left out before the conversion
+
+**What was asked.** Add a test that the compare gate leaves a bridge-only format — a Works
+file, a legacy workbook — out on a machine without LibreOffice, as it already leaves a
+legacy `.doc` out.
+
+**The half the rule passed over.** The gate asked the question *after* the conversion:
+`check` walked the finished documents and left out the ones whose reading goes through
+LibreOffice. That covers a legacy `.doc`, which the built-in reader still opens — the
+reading exists, it is only not the one the memory remembers. It could not cover a family the
+bridge is the *only* reader for, because there is no reading to finish: a Works `.wks` run
+with `PDFE_SOFFICE=/nowhere/soffice` and `--compare` stopped at `error: … this is a Microsoft
+Works document; reading it needs LibreOffice (soffice), which is not on PATH — install
+LibreOffice, or re-save it as .docx`, then `Error: 1 of 1 document(s) failed`, exit 1, with no
+`not held` line at all. The `Format::Bridge` arm of `not_held_here` was therefore unreachable
+through the binary, although `compare.rs`'s own header and the README both already promised
+the wider rule ("any of the families the bridge is the only reader for"). A gate that reddens
+for a tool the runner does not have is exactly the failure the `.doc` rule exists to stop,
+one family further out.
+
+**The change.** The question is asked **before** anything is converted. `not_held_here` is
+public, and `run` partitions the targets once the compare session is open — asking each path's
+format the way the run itself asks it, bytes first and the name after — then hands the
+left-out paths, with their reason, to `compare::check`, which says each on a line of its own
+and counts them at the end in the same words as before. Nothing else about the run moves: a
+conversion with no `--compare` keeps every document and still stops on the missing bridge with
+the re-save route, because there the missing reader *is* the failure. As a side effect the
+legacy `.doc` is no longer converted in a comparison run it was never going to be held in —
+that work was done and thrown away.
+
+**Proven both ways.** `a_format_only_the_bridge_can_read_is_not_held_on_a_machine_without_one`
+compares `test-data/ledger.xls` — a BIFF compound file with no `WordDocument` stream, so
+`Format::Bridge { target: Xlsx }` — against a scratch reference folder holding **nothing**,
+under a memory no reading can meet for the stem `ledger`. Left out, it is exit 0 with
+`not held · read through LibreOffice, and this machine has none …`, `1 document(s) not held`,
+no floor, and **no output written at all**, which is the proof the rule now runs before the
+conversion rather than after it. The same command on the tree before the change is the
+failing side: exit 1 on the LibreOffice error above, with no `not held` line. The control,
+`the_bridge_only_format_is_read_when_the_bridge_is_here` (skipped where no `soffice` is
+installed, like the other bridge tests), runs the same workbook with the bridge on `PATH` and
+asserts it **is** converted and not left out, refused instead by the ordinary rule for a
+document with no reference beside it.
+
+**Verification.** `cargo test -p pdfextractor-cli --test compare_mode_test` is **12 passed**
+(both new tests and both bridge controls ran — this machine has LibreOffice, so the controls
+asserted rather than skipped). The corpus gate over `test-data/real` with the bridge absent
+(`PDFE_SOFFICE=/nowhere/soffice`, `--ocr never --parallel 4`) is **exit 0** in 3 m 39 s:
+**33** documents at or above the whole ratchet, the four `.doc` files named and counted
+(`compare: 4 document(s) not held: this machine has no LibreOffice, and they are read through
+it`), and **33** JSON outputs — none for the four. The same command with LibreOffice on `PATH`
+is **exit 0** with **37** held, every one on its own numbers, and **no** line saying anything
+was left out, so the partition takes nothing away where the bridge is there. `cargo fmt --all
+--check` clean; clippy over the CLI's targets with `-D warnings` quiet.
