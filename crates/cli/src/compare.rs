@@ -25,12 +25,15 @@
 //! * A document the memory does not know stands under no floor, exactly as in the
 //!   window: there is nothing for it to fall from.
 //! * A document whose reading goes through LibreOffice — a legacy `.doc`, or a
-//!   family the bridge is the only reader for — is **not held** on a machine
-//!   without one. The memory's numbers are Writer's reading of that file and what
-//!   this run compared is the built-in reader's, and the two say different things
-//!   about the same document, so neither can be held to the other's numbers. Such
-//!   a document is said on a line of its own and counted at the end, because a
-//!   gate that quietly held less than it claims to is worse than no gate at all.
+//!   family the bridge is the only reader for — is **left out** of the run on a
+//!   machine without one, before anything is converted. The memory's numbers are
+//!   Writer's reading of that file, and what a run here would compare is either
+//!   the built-in reader's reading or, for a family with no reader here at all, no
+//!   reading — so neither can be held to the other's numbers, and a document only
+//!   the bridge can read would otherwise fail the gate on the missing tool rather
+//!   than on anything the gate is about. Such a document is said on a line of its
+//!   own and counted at the end, because a gate that quietly held less than it
+//!   claims to is worse than no gate at all.
 //! * A document that **cannot be compared** — no reference for it, an unreadable
 //!   output — and a reference whose memory is there but cannot be read are failures
 //!   rather than silences, and a reference path that is not there is refused before
@@ -52,15 +55,23 @@ pub fn open(reference: &Path, ocr: &str) -> anyhow::Result<gate::Session> {
     gate::Session::open(reference, diff::Measurement::from_ocr(ocr)).map_err(anyhow::Error::msg)
 }
 
-/// Why this document is not held by this run, when it is not: it is read through
-/// LibreOffice and this machine has none, so what the run compared is another
-/// reader's reading of it.
+/// Why this document is left out of the run, when it is: it is read through
+/// LibreOffice and this machine has none, so what a run here would compare is
+/// another reader's reading of it — or, where the bridge is the only reader, no
+/// reading at all.
+///
+/// Asked **before** the conversion rather than after it, which is what makes the
+/// answer the same for both families: a legacy Excel workbook has nothing here to
+/// read it with, so a rule that waited for a finished document would have the run
+/// fail on the missing bridge first and never be reached. A comparison run has no
+/// business converting a document it is not going to hold; a run that is only
+/// converting does, and asks nothing.
 ///
 /// The format is detected rather than read off the file's name, because that is
 /// the question the run itself asked when it chose a reader: a DOCX called
 /// `report.doc`, or a `.wps` that is really a package, is read here exactly as it
 /// would be with the bridge installed, and so is held as usual.
-fn not_held_here(input: &Path) -> Option<&'static str> {
+pub fn not_held_here(input: &Path) -> Option<&'static str> {
     if formats::libreoffice().is_some() {
         return None;
     }
@@ -75,23 +86,25 @@ fn not_held_here(input: &Path) -> Option<&'static str> {
 /// answer with every reason the run must fail: a document below its floor, or one
 /// that could not be compared at all. A conversion that failed has no output to
 /// compare and is already a failure of the run, so it is left to the run's own
-/// tally rather than reported twice. A document this machine cannot read the way
-/// the memory's numbers were read is left out rather than held ([`not_held_here`]).
+/// tally rather than reported twice. The documents this machine could not read the
+/// way the memory's numbers were read were taken out of `results` before the run
+/// started ([`not_held_here`]); they arrive here as `left_out`, with the reason,
+/// to be said and counted beside the ones that were held.
 pub fn check(
     session: &gate::Session,
     results: &[(PathBuf, anyhow::Result<PathBuf>)],
+    left_out: &[(PathBuf, &'static str)],
 ) -> Vec<String> {
+    // Said first, because these are the documents the run did not convert at all:
+    // a reader of the log meets the absence before the lines about what was read.
+    for (input, why) in left_out {
+        eprintln!("compare: {}: not held · {why}", input.display());
+    }
     let mut refused = Vec::new();
-    let mut left_out = 0usize;
     for (input, result) in results {
         let Ok(output) = result else {
             continue;
         };
-        if let Some(why) = not_held_here(input) {
-            eprintln!("compare: {}: not held · {why}", input.display());
-            left_out += 1;
-            continue;
-        }
         let report = session.compare(&input.to_string_lossy(), output);
 
         // A document the comparison could not make: the line names the reason,
@@ -121,10 +134,11 @@ pub fn check(
     // Said once at the end as well as on the document's own line: a run whose
     // log is read by somebody scanning for what a build did should not have to
     // notice an absence.
-    if left_out > 0 {
+    if !left_out.is_empty() {
         eprintln!(
-            "compare: {left_out} document(s) not held: this machine has no LibreOffice, and \
-             they are read through it"
+            "compare: {} document(s) not held: this machine has no LibreOffice, and \
+             they are read through it",
+            left_out.len()
         );
     }
     refused

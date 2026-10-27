@@ -830,14 +830,20 @@ Every push runs that gate over the corpus in CI
 measured `--ocr never` so every rule of the ratchet applies — a document that falls
 below its floor fails the build with its name and its count in the job's log.
 
-A document whose reading goes through the bridge is not held by a run on a machine
+A document whose reading goes through the bridge is left out of a run on a machine
 without one — the corpus's four legacy `.doc` files, on that runner — because the
 numbers the baseline remembers are Writer's reading of those files and what the run
-compared is the built-in reader's. Each is named on a line of its own and counted at the end
+compared is the built-in reader's. The run decides that **before** it converts anything,
+which is what puts the families the bridge is the *only* reader for under the same rule: a
+legacy `.xls` or a Works `.wks` has no reading here to finish and leave out afterwards, so a
+rule that waited for a converted document would have it fail the gate on the missing tool
+instead. Each is named on a line of its own and counted at the end
 (`not held · read through LibreOffice, and this machine has none — a reading made
 without it is not the reading the memory remembers`), so the log says what was held and
 what was left out rather than quietly holding less than the gate claims; the weekly
-bridge gate above is where those documents are held, with LibreOffice installed.
+bridge gate above is where those documents are held, with LibreOffice installed. A run that
+is only converting, with no `--compare`, still stops on the missing bridge and names the
+re-save route.
 
 ### Smoke-testing the whole stack without a human
 

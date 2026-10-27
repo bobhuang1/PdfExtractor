@@ -356,6 +356,28 @@ fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    // A comparison run leaves out what this machine cannot read the way the
+    // memory's numbers were read, and decides **before** converting anything: a
+    // family the bridge is the only reader for has no reading here to leave out
+    // afterwards, so a rule that waited for a finished document would have the run
+    // fail on the missing bridge instead of on what the gate is about. A run that
+    // is only converting keeps every document — there the missing reader *is* the
+    // failure, and it says so with the re-save route.
+    let (left_out, targets): (Vec<(PathBuf, &'static str)>, Vec<PathBuf>) = match &comparing {
+        Some(_) => {
+            let mut left_out = Vec::new();
+            let mut held = Vec::with_capacity(targets.len());
+            for path in targets {
+                match compare::not_held_here(&path) {
+                    Some(why) => left_out.push((path, why)),
+                    None => held.push(path),
+                }
+            }
+            (left_out, held)
+        }
+        None => (Vec::new(), targets),
+    };
+
     tracing::info!(
         "{} document(s) to convert, parallelism {}",
         targets.len(),
@@ -410,7 +432,7 @@ fn main() -> anyhow::Result<()> {
     // per-document lines are on the log either way: a run that failed for some
     // other reason still says what each panel held.
     let refused = match &comparing {
-        Some(session) => compare::check(session, &results),
+        Some(session) => compare::check(session, &results, &left_out),
         None => Vec::new(),
     };
 
