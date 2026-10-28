@@ -13227,3 +13227,30 @@ it`), and **33** JSON outputs — none for the four. The same command with Libre
 is **exit 0** with **37** held, every one on its own numbers, and **no** line saying anything
 was left out, so the partition takes nothing away where the bridge is there. `cargo fmt --all
 --check` clean; clippy over the CLI's targets with `-D warnings` quiet.
+
+## The format question moves into a crate of its own
+
+**What was asked.** The corpus report needs to know which documents a machine without
+LibreOffice cannot hold, and it must answer that the way the run and the `--compare` gate
+answer it rather than keeping a second rule beside theirs.
+
+**Why it had to move.** The question lived in `crates/cli/src/formats.rs`, and a binary crate
+exports nothing: the report could not link it, so it had kept its own list of extensions and a
+hand-written copy of the LibreOffice lookup. Two answers to one question drift, and the drift
+here would have been invisible — the four legacy `.doc` files in the corpus really are Word
+binaries, so a list and a sniff agree on every file the corpus has and would part ways only on
+the first misnamed one.
+
+**The change.** `sniff`, `detect`, the format it answers with, `reads_through_libreoffice`,
+`is_bridged` and `libreoffice()` now live in `crates/formats` (`pdfextractor-formats`), moved
+there with `git mv` at 96% similarity. `relabel` stays behind in `crates/cli/src/main.rs`,
+because it is about the document a run *produces* rather than about what a file *is*. The CLI
+imports from the crate — `main.rs` for the reader it chooses, `compare.rs` for the question
+`not_held_here` asks — and the report takes it as a **dev-dependency**, being a test binary
+that must not write a second rule.
+
+**Verification.** `cargo test -p pdfextractor-formats` **15 passed** (the detection's own unit
+tests, moved with it); `cargo test -p pdfextractor-cli --test compare_mode_test` **12 passed**,
+both bridge controls asserting on this machine; `cargo fmt --all --check` clean; and the
+`--no-default-features` build of the UI's targets, which is how the corpus report is built on
+a headless box, still pulls no gtk/webkit/glib/tauri.

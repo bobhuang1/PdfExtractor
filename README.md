@@ -983,10 +983,13 @@ crates/
 ├── doc-parser/    # legacy OLE compound files, Word Fib + piece table
 ├── text-parser/   # RTF, HTML, Markdown/text, CSV/TSV
 ├── picture-formats/ # the one list of picture formats: media type ↔ extension
+├── formats/       # what a file actually is (the bytes, not the name), and the
+│                  # one family with no reader here: the LibreOffice bridge. Asked
+│                  # by the run, the `--compare` gate and the corpus report alike
 ├── layout/        # rows/runs, XY-cut columns, reading order, labels, tables
 ├── ocr-engine/    # Tesseract OCR (required, default-on); TSV word/line boxes
 ├── json-exporter/ # Docling JSON serialization
-├── cli/           # command line interface, format detection, LibreOffice bridge
+├── cli/           # command line interface over the parsers and the gate
 └── ui/            # Tauri window (static frontend in ui/dist) over the CLI
 test-data/
 ├── hello.pdf, compressed.pdf, scanned.pdf   # hand-made fixtures

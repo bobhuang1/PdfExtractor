@@ -747,7 +747,8 @@ PDFBox and PDF.js.
   (PDF, compound file, `01 FE` Works, ZIP, RTF, HTML, text) and lets the bytes pick
   the reader, so `.wps` is read as whatever it actually holds: a DOCX, a Word 97
   binary, or Works proper. A bridged document keeps the original file's name, MIME
-  type and hash. **Done**: `crates/cli/src/formats.rs` — `sniff`/`detect` over magic
+  type and hash. **Done**: `crates/formats/src/lib.rs` (a crate of its own since the
+  corpus report has to ask the same question of the same files) — `sniff`/`detect` over magic
   bytes and package part names (`word/document.xml`, `xl/workbook.xml`, the
   `WordDocument` stream name in UTF-16LE, which is in all four Word fixtures and
   none of the 40 Works samples), and `bridge`, which runs `soffice --headless
