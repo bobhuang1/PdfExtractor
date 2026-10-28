@@ -2,8 +2,11 @@
 //!
 //! `compare_test.rs` looks a few documents over closely; this looks at every
 //! document the corpus has a reference for, **in one pass**: a single CLI run
-//! over `test-data/real`, then `diff::compare_document` — the function the window
-//! itself calls — for each document, one after another. The point is the order of
+//! over the documents this machine can measure — copied into one folder, so a
+//! document it leaves out is never handed to the CLI at all, and *which* those are
+//! is the gate's own question, asked of each file's bytes rather than of the name
+//! it was saved under — then `diff::compare_document`, the function the window
+//! itself calls, for each document, one after another. The point is the order of
 //! the output: worst first, so the documents worth a look are at the top of the
 //! table rather than buried in 37 rows.
 //!
@@ -46,6 +49,7 @@
 //! which is why the baseline's own recorded measurement is checked below before any
 //! document is held.
 
+use pdfextractor_formats::{detect, libreoffice, reads_through_libreoffice, Format};
 use pdfextractor_ui::diff;
 use pdfextractor_ui::gate;
 use std::collections::BTreeMap;
@@ -403,10 +407,11 @@ fn ratchet(
         }
     }
     for name in baseline.documents.keys() {
-        // A document this machine could not measure — a legacy `.doc` with no
-        // LibreOffice to read it through — is not a gap in the file: its
-        // numbers are remembered from the run that had the bridge, and this run
-        // has no reading of the same kind to hold them to.
+        // A document this machine could not measure — a legacy `.doc`, or a
+        // format only the bridge reads, with no LibreOffice to read it through —
+        // is not a gap in the file: its numbers are remembered from the run that
+        // had the bridge, and this run has no reading of the same kind to hold
+        // them to.
         if !now.contains_key(name) && !unbridged.contains(name) {
             complaints.push(format!(
                 "{name}: in the baseline, but this run compared no such document"
@@ -508,14 +513,13 @@ fn references() -> Vec<(String, PathBuf)> {
 /// entry that says the document has no content. The image's reference is held
 /// by the golden suite, which runs it through OCR and compares the text; the
 /// ratchet has nothing to measure here.
+///
+/// Asked of the file's own bytes ([`Format::Image`]), like the bridge question
+/// below, rather than of a list of picture extensions: a scan saved under
+/// another name is still an image, and a document that happens to be called
+/// `.png` is not taken for one.
 fn is_plain_image(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "webp")
-    )
+    matches!(detect(path), Ok(Format::Image { .. }))
 }
 
 /// Whether a document is read through LibreOffice, one way or another.
@@ -523,81 +527,263 @@ fn is_plain_image(path: &Path) -> bool {
 /// A legacy `.doc` is the same file read two ways: through Writer when
 /// LibreOffice is installed — headings, list markers, merged tables and pictures
 /// — and through the built-in piece-table reader when it is not, which reads the
-/// words alone. The rest of these extensions have no reader here at all and are
+/// words alone. The other bridged families have no reader here at all and are
 /// the bridge's alone. Their numbers therefore depend on an external converter,
 /// so a run without one cannot compare them — the same reason a plain image is
 /// skipped, stated for the same kind of fact.
+///
+/// The question is the gate's own ([`reads_through_libreoffice`]), asked of the
+/// same file the `--compare` mode asks it of — by its **bytes**, not by the name
+/// it was saved under, so a DOCX someone saved as `report.doc` is read here
+/// exactly as it would be with the bridge installed, and a Works file whose name
+/// says nothing is still the bridge's. A file that cannot be read at all is not
+/// left out: there is nothing to say it needs the bridge, and the conversion
+/// that follows reports the unreadable file itself, which is the failure a
+/// report wants to hear about.
 fn is_bridged(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("doc" | "wps" | "wp" | "wpd" | "wks" | "wdb" | "xls" | "ppt")
-    )
+    detect(path).map(reads_through_libreoffice).unwrap_or(false)
 }
 
-/// Whether the CLI on this machine will reach LibreOffice, by the same rule the
-/// CLI itself uses: `PDFE_SOFFICE` naming a file, or `soffice`/`libreoffice` on
-/// `PATH`.
-fn libreoffice_available() -> bool {
-    if let Some(path) = std::env::var_os("PDFE_SOFFICE") {
-        return PathBuf::from(path).is_file();
+/// Split the documents this run will measure from the ones this machine leaves
+/// out, because the device that reads them is LibreOffice and it has none.
+///
+/// The question is asked **before** anything is converted — the rule the command
+/// line's `--compare` mode applies, not a second rule beside it. A legacy `.doc`
+/// has a reading here without the bridge, the built-in piece-table reader's, so it
+/// could be left out afterwards; a family the bridge is the *only* reader for has
+/// no reading to finish, so a run that converted first would stop on the missing
+/// tool (`reading it needs LibreOffice (soffice), which is not on PATH`, exit 1)
+/// and never reach the leaving-out.
+///
+/// `bridge` is the answer [`libreoffice`] gives, passed in rather than read here
+/// so a test can ask both machines on one of them.
+fn partition(
+    documents: Vec<(String, PathBuf)>,
+    bridge: bool,
+) -> (Vec<(String, PathBuf)>, Vec<String>) {
+    let mut measured = Vec::with_capacity(documents.len());
+    let mut left_out = Vec::new();
+    for (stem, path) in documents {
+        if is_bridged(&path) && !bridge {
+            left_out.push(stem);
+        } else {
+            measured.push((stem, path));
+        }
     }
-    let search = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&search).any(|directory| {
-        ["soffice", "libreoffice"]
-            .iter()
-            .any(|name| directory.join(name).is_file())
-    })
+    (measured, left_out)
 }
 
-/// Convert the whole corpus in one run of the CLI.
+/// What this run will measure, and what it leaves out: every reference whose
+/// document is on this machine, asked the question above.
+fn planned(inputs: &BTreeMap<String, PathBuf>) -> (Vec<(String, PathBuf)>, Vec<String>) {
+    let documents = references()
+        .into_iter()
+        .filter_map(|(stem, _)| inputs.get(&stem).map(|path| (stem, path.clone())))
+        .collect();
+    partition(documents, libreoffice().is_some())
+}
+
+/// Convert the documents this run is going to measure, in one run of the CLI.
 ///
 /// One process rather than 37: the comparison is what this test is about, and a
 /// directory conversion is the same code path the window drives when it is
-/// pointed at a folder.
-fn convert_corpus(cli: &Path, out: &Path) {
-    let corpus = repository_root().join("test-data/real");
+/// pointed at a folder. The documents are copied into a folder of their own
+/// first, because a directory is how the CLI is handed a set — and the set must
+/// not hold a document this run leaves out, or the conversion would stop on the
+/// missing bridge before the leaving-out could be said. A copy keeps each file's
+/// name and bytes, which are what a document records about its origin, so the
+/// readings are the ones the references were made from; a document with a
+/// reference outside the corpus (`inventory.xlsx`) comes the same way.
+fn convert_corpus(cli: &Path, out: &Path, documents: &[(String, PathBuf)]) {
+    let staging = out.join("in");
+    std::fs::create_dir_all(&staging).expect("create the staging folder");
+    for (_, path) in documents {
+        let name = path.file_name().expect("a document with a name");
+        std::fs::copy(path, staging.join(name))
+            .unwrap_or_else(|error| panic!("stage {}: {error}", path.display()));
+    }
     let status = Command::new(cli)
-        .args(["--input", corpus.to_str().expect("a UTF-8 path")])
+        .args(["--input", staging.to_str().expect("a UTF-8 path")])
         .args(["--output", out.to_str().expect("a UTF-8 path")])
         .args(["--parallel", "4"])
         // Deterministic and fast: with OCR off a document's reading is its text
         // layer and its drawings, and nothing depends on a tessdata build.
         .args(["--ocr", "never"])
         .status()
-        .expect("run the CLI over the corpus");
-    assert!(status.success(), "the corpus conversion failed: {status}");
+        .expect("run the CLI over the documents");
+    assert!(
+        status.success(),
+        "the conversion failed: {status} ({:?})",
+        documents.iter().map(|(stem, _)| stem).collect::<Vec<_>>()
+    );
+}
 
-    // A reference whose document is a fixture beside the corpus rather than in
-    // it (`inventory.xlsx`, the XLSX parser's workbook) is converted on its
-    // own, to the same name a directory run would give it — the stem, `.json`
-    // — so the comparison finds its output the same way. Only documents that
-    // have a reference are converted: the fixture folder holds scripts and
-    // sources too.
-    let inputs = corpus_inputs();
-    for (stem, _) in references() {
-        let Some(path) = inputs.get(&stem) else {
-            continue;
-        };
-        if path.starts_with(&corpus) || is_plain_image(path) {
-            continue;
-        }
-        let path = path.clone();
-        let output = out.join(format!("{stem}.json"));
-        let status = Command::new(cli)
-            .args(["-i", path.to_str().expect("a UTF-8 path")])
-            .args(["-o", output.to_str().expect("a UTF-8 path")])
-            .args(["--ocr", "never"])
-            .status()
-            .expect("run the CLI over a fixture");
-        assert!(
-            status.success(),
-            "{} did not convert: {status}",
-            path.display()
-        );
-    }
+/// A document only the bridge can read is left out of the conversion, not after
+/// it.
+///
+/// This is the half the legacy `.doc` rule passed over. A `.doc` converts without
+/// the bridge — the built-in reader opens it — so its numbers can be left out once
+/// they exist; a legacy workbook or a Works file has no reading here at all, so a
+/// report that converted the corpus first would stop on the missing tool and never
+/// say what it left out. What the CLI is handed is the set already decided, which
+/// is the rule the command line's `--compare` mode applies.
+#[test]
+fn a_document_only_the_bridge_can_read_is_left_out_before_the_conversion() {
+    let documents = vec![
+        (
+            "dummy".to_string(),
+            repository_root().join("test-data/real/dummy.pdf"),
+        ),
+        (
+            "two_images".to_string(),
+            repository_root().join("test-data/real/two_images.doc"),
+        ),
+        (
+            "ledger".to_string(),
+            repository_root().join("test-data/ledger.xls"),
+        ),
+    ];
+
+    // Without the bridge, both documents it reads are left out and the PDF is not
+    // — the `.doc` because its reading would be the built-in reader's, the
+    // workbook because there is no reading here at all.
+    let (measured, left_out) = partition(documents.clone(), false);
+    assert_eq!(
+        left_out,
+        vec!["two_images".to_string(), "ledger".to_string()]
+    );
+    assert_eq!(
+        measured
+            .iter()
+            .map(|(stem, _)| stem.as_str())
+            .collect::<Vec<_>>(),
+        vec!["dummy"]
+    );
+
+    // With it, nothing is left out: the rule is about the machine, not the format.
+    let (with_bridge, none_left_out) = partition(documents.clone(), true);
+    assert!(
+        none_left_out.is_empty(),
+        "a machine with the bridge left {none_left_out:?} out"
+    );
+    assert_eq!(with_bridge.len(), 3);
+
+    let Some(cli) = locate_cli() else {
+        println!("skipped: build the CLI (`cargo build -p pdfextractor-cli`) to run this");
+        return;
+    };
+
+    // The reading the exclusion exists for: handed the workbook, the CLI stops on
+    // the missing bridge and converts nothing, which is the failure a report that
+    // converted first would take instead of leaving the document out.
+    let refusal = Scratch::new("bridge-only-refusal");
+    let refused = Command::new(&cli)
+        .args([
+            "-i",
+            documents[2].1.to_str().expect("a UTF-8 path"),
+            "-o",
+            refusal
+                .0
+                .join("ledger.json")
+                .to_str()
+                .expect("a UTF-8 path"),
+        ])
+        .args(["--ocr", "never"])
+        // The machine this test is about, whatever this one has.
+        .env("PDFE_SOFFICE", "/nowhere/soffice")
+        .output()
+        .expect("run the CLI over the workbook");
+    assert!(
+        !refused.status.success(),
+        "the workbook converted without the bridge: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refusal.0.join("ledger.json").exists(),
+        "a workbook that could not be read wrote a document anyway"
+    );
+
+    // Left out of the set, the same run converts what is left and writes nothing
+    // for the two it passed over.
+    let scratch = Scratch::new("bridge-only");
+    convert_corpus(&cli, &scratch.0, &measured);
+    assert!(
+        scratch.0.join("dummy.json").exists(),
+        "the document this machine reads was not converted"
+    );
+    assert!(
+        !scratch.0.join("two_images.json").exists() && !scratch.0.join("ledger.json").exists(),
+        "a document left out of the set was converted anyway"
+    );
+}
+
+/// A document whose name lies about what it holds is decided by its bytes, the
+/// way the compare gate decides it.
+///
+/// This is the case a list of extensions cannot get right. The run reads the
+/// magic ([`pdfextractor_formats::detect`]) and picks a reader from that, so a
+/// DOCX somebody saved as `report.doc` is read here exactly as it would be with
+/// the bridge installed; a report that asked the name instead would leave it out
+/// on a machine without LibreOffice, and say so — a document left out of a gate
+/// for the letters in its file name. The other direction is the control: the same
+/// name over bytes that only Writer reads is left out, so what decides is the
+/// file and not the list the names come from.
+#[test]
+fn a_document_whose_name_lies_about_its_format_is_held() {
+    let scratch = Scratch::new("misnamed");
+    // Two documents this machine reads with no bridge at all, saved under names
+    // that say otherwise: a PDF as `report.doc`, a Word package as `notes.wps`.
+    let misnamed = [
+        ("report", "test-data/real/dummy.pdf", "report.doc"),
+        (
+            "notes",
+            "test-data/real/EquationAsScientificNumbering.docx",
+            "notes.wps",
+        ),
+    ];
+    let held: Vec<(String, PathBuf)> = misnamed
+        .iter()
+        .map(|&(stem, source, name)| {
+            let copy = scratch.0.join(name);
+            std::fs::copy(repository_root().join(source), &copy)
+                .unwrap_or_else(|error| panic!("copy {source}: {error}"));
+            (stem.to_string(), copy)
+        })
+        .collect();
+
+    let (measured, left_out) = partition(held.clone(), false);
+    assert!(
+        left_out.is_empty(),
+        "a document the bytes say this machine reads was left out: {left_out:?}"
+    );
+    assert_eq!(
+        measured
+            .iter()
+            .map(|(stem, _)| stem.as_str())
+            .collect::<Vec<_>>(),
+        vec!["report", "notes"]
+    );
+    // With the bridge there is nothing to leave out either, and for the same
+    // reason: the question was never about the machine here.
+    assert!(partition(held, true).1.is_empty());
+
+    // The control: `report.doc` again, over bytes that really are what the name
+    // claims — a Word 97 binary, which only Writer reads the way the baseline's
+    // numbers were read. Same name, different file's bytes, different answer.
+    let control = Scratch::new("misnamed-control");
+    let word = control.0.join("report.doc");
+    std::fs::copy(
+        repository_root().join("test-data/real/two_images.doc"),
+        &word,
+    )
+    .expect("copy the legacy Word document");
+    let (measured, left_out) = partition(vec![("report".to_string(), word)], false);
+    assert_eq!(
+        left_out,
+        vec!["report".to_string()],
+        "a document the bytes say needs Writer was read without it"
+    );
+    assert!(measured.is_empty());
 }
 
 /// Compare every corpus document with its reference and print them worst first.
@@ -609,7 +795,14 @@ fn the_whole_corpus_compared_worst_first() {
     };
 
     let scratch = Scratch::new("report");
-    convert_corpus(&cli, &scratch.0);
+    // What this machine can measure, decided **before** anything is converted —
+    // the same rule the command line's `--compare` mode applies, so the two gates
+    // cannot part company. The documents left out here are never handed to the
+    // CLI, because for a family only the bridge reads there is no conversion to
+    // leave out afterwards: the run would stop on the missing tool first.
+    let inputs = corpus_inputs();
+    let (documents, unbridged) = planned(&inputs);
+    convert_corpus(&cli, &scratch.0, &documents);
 
     let golden = repository_root().join("test-data/golden/docling");
     // The gate, once, for the whole run: the memory beside those references and this
@@ -620,14 +813,9 @@ fn the_whole_corpus_compared_worst_first() {
     let update = matches!(std::env::var(BASELINE_UPDATE).as_deref(), Ok("update"));
     let baseline = (!update).then(|| read_baseline(&baseline_path()));
     let session = gate::Session::with_memory(&golden, baseline.clone(), measurement());
-    let inputs = corpus_inputs();
     let mut lines = Vec::new();
     let mut missing = Vec::new();
     let mut skipped = Vec::new();
-    // The documents this machine could not measure because the bridge is not
-    // here: kept apart from the other skips, because the baseline remembers
-    // them and this run has nothing to hold them to.
-    let mut unbridged = Vec::new();
     for (stem, reference) in references() {
         let Some(input) = inputs.get(&stem) else {
             missing.push(format!("{stem}: the corpus has no such document"));
@@ -640,13 +828,12 @@ fn the_whole_corpus_compared_worst_first() {
             skipped.push(stem.clone());
             continue;
         }
-        if is_bridged(input) && !libreoffice_available() {
+        if unbridged.contains(&stem) {
             println!(
                 "skipping {stem}: it is read through LibreOffice, and this run has none \
-                 (its numbers would be the built-in reader's, not the bridge's)"
+                 (it cannot be read the way the baseline's numbers were read)"
             );
             skipped.push(stem.clone());
-            unbridged.push(stem.clone());
             continue;
         }
         let ours = scratch.0.join(format!("{stem}.json"));

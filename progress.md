@@ -13254,3 +13254,92 @@ tests, moved with it); `cargo test -p pdfextractor-cli --test compare_mode_test`
 both bridge controls asserting on this machine; `cargo fmt --all --check` clean; and the
 `--no-default-features` build of the UI's targets, which is how the corpus report is built on
 a headless box, still pulls no gtk/webkit/glib/tauri.
+
+## The corpus report leaves a bridge-only document out before it converts
+
+**What was asked.** Check that the corpus report leaves a bridge-only document out the way
+the compare gate now does, and align it if it does not.
+
+**What the check found.** Half the rule was real and half was on paper. The report's
+`is_bridged`/`unbridged` machinery named the families the bridge is the only reader for
+beside the legacy `.doc`, and kept their baseline entries out of the gap check — and for a
+`.doc` that works, because it converts here without the bridge (the built-in piece-table
+reader opens it) and so the skip fires afterwards. Measured with `PDFE_SOFFICE=/nowhere/soffice`,
+the four `.doc` files are each named, counted (`4 document(s) left out for lack of LibreOffice,
+their baseline entries kept`), the 39-entry baseline still holds and the run exits 0. But the
+conversion is **one run over the whole of `test-data/real`**, asserted successful, and it
+happens before any of that: handed a legacy `.xls` or a Works `.wks`, the CLI stops with
+`reading it needs LibreOffice (soffice), which is not on PATH` and exit 1
+(`PDFE_SOFFICE=/nowhere/soffice pdfextractor-cli -i test-data/ledger.xls -o …` reproduces it in
+a second), so `convert_corpus`'s `assert!(status.success())` would have failed the report before
+a single skip line was printed. The second half was unreachable — the gap the gate had, one
+layer down.
+
+**The change.** The set to convert is now decided before the conversion and handed to it:
+`partition` splits what this machine can measure from what it leaves out (`bridge` passed in,
+so a test can ask both machines on one), `planned` asks it of every reference whose document is
+here, and `convert_corpus` copies that set into a folder of its own and runs the CLI once over
+it — one process still, and a bridge-only document is never handed over at all. The loop takes
+its left-out names from that same decision rather than asking `is_bridged` again, and the skip
+line says what is true of both families (`it cannot be read the way the baseline's numbers were
+read`) instead of claiming a built-in reading exists. A copy rather than a link: the file's name
+and its bytes are what a document records about its origin, so the readings are the ones the
+references were made from.
+
+**Proven.** `a_document_only_the_bridge_can_read_is_left_out_before_the_conversion` asks
+`partition` on a PDF, a legacy `.doc` and a legacy `.xls`: without the bridge the two bridged
+documents are left out and the PDF is not, with it nothing is left out; then the CLI is handed
+the workbook on a machine named as bridgeless (`PDFE_SOFFICE=/nowhere/soffice`) and exits
+non-zero writing nothing, which is the failure the report would have taken; and converting the
+decided set writes `dummy.json` and nothing for the two it passed over.
+
+**Verification.** The report with LibreOffice on `PATH` is **43** documents compared, every one
+at or above the baseline, **10 passed** in 3 m 07 s — the staged copies read exactly as the
+corpus did, or the ratchet would have said so. Without it (`PDFE_SOFFICE=/nowhere/soffice`) it
+is **39** compared with the four `.doc` named and their entries kept, **10 passed**, exit 0, in
+2 m 34 s — down from 3 m 37 s, because only the documents with a reference are converted now.
+`cargo fmt --all --check` clean; clippy over `pdfextractor-ui`'s targets with `-D warnings`
+quiet.
+
+## The corpus report asks the format question the gate asks, of the file's bytes
+
+**What was asked.** Make the corpus report decide by the document's detected format rather
+than its extension list, so a misnamed file is handled the way the compare gate handles it.
+
+**What was wrong.** The report kept its own list — `doc | wps | wp | wpd | wks | wdb | xls |
+ppt` — beside the gate's question, and the run answers that question from the **bytes**
+(`detect`, in `crates/formats/src/lib.rs`: `%PDF-`, an OLE2 header, `01 FE`, a ZIP's part
+names, an image signature, with the extension consulted only where the bytes leave it open).
+The two agree on every document the corpus has — the four `.doc` files really are Word
+binaries, which is why the bridgeless run below still reports exactly the same four — so the
+drift was invisible here and would have shown up on the first misnamed fixture: a DOCX saved
+as `report.doc` is read here exactly as it would be with no bridge installed, and held, while
+a list of extensions would have left it out of a gate for the letters in its name. The report's
+`libreoffice_available` was the same fault one level up: a hand-written copy of the lookup the
+CLI performs (`PDFE_SOFFICE`, then `soffice`/`libreoffice` on `PATH`).
+
+**The change.** The question itself moved to `crates/formats`, as the note above records. What
+the report does with it changed too: unable to link a binary crate and unwilling to write a
+second rule, it takes the crate as a **dev-dependency** and asks it directly: `is_bridged` is
+`detect(path).map(reads_through_libreoffice).unwrap_or(false)`, `is_plain_image` is
+`Format::Image` rather than a list of picture extensions, and `planned` asks the crate's
+`libreoffice()` instead of its own copy. A file that cannot be read at all is **not** left out,
+which is the gate's behaviour too: there is nothing to say it needs the bridge, and the
+conversion that follows reports the unreadable file itself.
+
+**Proven.** `a_document_whose_name_lies_about_its_format_is_held` copies `dummy.pdf` to
+`report.doc` and `EquationAsScientificNumbering.docx` to `notes.wps` and asks `partition` of
+them: on a machine named as bridgeless neither is left out (the old list would have left out
+both), and on a machine with the bridge neither is either. The control is the point of the
+test: the **same name**, `report.doc`, over `test-data/real/two_images.doc`'s bytes *is* left
+out, so what decides is the file and not the names being absent from some list.
+
+**Verification.** The report over the corpus is unchanged, which is what rewriting its
+question had to preserve: with LibreOffice on `PATH`, **43** documents compared and every one
+at or better than the baseline (`, 43 document(s))`), **11 passed** in 3 m 27 s; without it
+(`PDFE_SOFFICE=/nowhere/soffice`), **39** compared with the same four `.doc` named and their
+entries kept (`FloatingPictures, equation, testPictures, two_images`), **11 passed**, exit 0,
+in 3 m 49 s. `test-data/golden/compare-baseline.json` was not touched by either run — no
+document's numbers moved, so what changed is the decision and nothing else. `cargo test
+--workspace` **977 passed, 0 failed** across 70 suites, exit 0; `cargo fmt --all --check`
+clean; `cargo clippy --workspace --all-targets -- -D warnings` quiet.
