@@ -28,12 +28,13 @@
 //! finished document because there is no reading here to finish. Both are left
 //! out before anything is converted, on the same sentence and in the same count.
 //!
-//! The last pair asks the same question of a **misnamed** file, because the run
+//! The last three ask the same question of a **misnamed** file, because the run
 //! decides on the bytes and the extension is the only other thing there is to
 //! decide on: a PDF called `report.doc` is read here with or without the bridge,
-//! and a Word binary called `notes.pdf` is Writer's to read all the same. A rule
-//! that looked at the name would hold the first to Writer's numbers on a machine
-//! that never read it and convert the second into a reader's failure.
+//! a Word binary called `notes.pdf` is Writer's to read all the same, and a legacy
+//! workbook called `ledger.docx` is Calc's. A rule that looked at the name would
+//! hold the first to Writer's numbers on a machine that never read it, and convert
+//! the other two into a reader's failure.
 
 use pdfextractor_ui::diff::{Measurement, Memory, Numbers};
 use std::collections::BTreeMap;
@@ -678,5 +679,38 @@ fn a_document_whose_name_hides_the_bridge_is_left_out_without_one() {
     assert!(
         !scratch.0.join("out.json").exists(),
         "a Word binary named `.pdf` was converted by a run that left it out: {logs}"
+    );
+}
+
+/// And the bridge-only families answer to their bytes the same way: the legacy
+/// workbook is given a name the built-in readers own, where the gate must still
+/// leave it out — its `Workbook` stream is what Calc opens, and the name promises
+/// a package this file is not. Converted instead, it would fail on a name it
+/// never had rather than on the missing bridge, and the gate would redden for the
+/// same wrong reason the `.xls` was left out to avoid.
+#[test]
+fn a_workbook_named_as_a_package_is_left_out_without_the_bridge() {
+    let scratch = Scratch::empty("bridge-only-misnamed");
+    scratch.remember(&a_memory_no_reading_can_meet(BRIDGE_ONLY_STEM));
+    let input = scratch.copy_in(BRIDGE_ONLY, "ledger.docx");
+
+    let output = scratch.compare_at(&input, "/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a document left to the bridge failed the run: {logs}"
+    );
+    assert!(
+        logs.contains("ledger.docx: not held · read through LibreOffice"),
+        "the workbook was not said to be left out, nor why: {logs}"
+    );
+    assert!(
+        logs.contains("1 document(s) not held"),
+        "the run did not count what it left out: {logs}"
+    );
+    assert!(
+        !scratch.0.join("out.json").exists(),
+        "a workbook named `.docx` was converted by a run that left it out: {logs}"
     );
 }

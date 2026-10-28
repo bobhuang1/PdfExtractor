@@ -261,13 +261,18 @@ fn zip_family(data: &[u8]) -> Format {
     Format::Unsupported("a ZIP package with no document part this reads")
 }
 
-/// A compound file is Word's when it holds a `WordDocument` stream and
+/// A compound file is Word's when it holds a `WordDocument` stream, and
 /// PowerPoint's when it holds a `PowerPoint Document` stream. The directory
 /// stores names in UTF-16LE with no terminator, so the name itself is the
 /// signature; Word writes the first, and no Works file in the 40-sample corpus
 /// has it (Word's four `.doc` fixtures all do). Legacy PowerPoint has no reader
 /// here — Impress does, and it writes a package the PPTX reader reads — so the
-/// stream sends the file to the bridge rather than to a parser.
+/// stream sends the file to the bridge rather than to a parser, and BIFF's
+/// `Workbook` (or BIFF5's `Book`) does the same for a legacy workbook. Those
+/// three are the compound families whose bytes name them, so a file is read for
+/// what it holds even when the name promises something else; the rest — Works,
+/// WordPerfect, an older PowerPoint that named its stream otherwise — are the
+/// extension's to say, because nothing in their bytes is theirs alone.
 fn compound_family(data: &[u8], ext: &str) -> Format {
     if contains_utf16(data, "WordDocument") {
         return Format::Doc;
@@ -277,6 +282,14 @@ fn compound_family(data: &[u8], ext: &str) -> Format {
             target: BridgeTarget::Pptx,
             mimetype: POWERPOINT_MIME,
             label: "a legacy PowerPoint presentation",
+        };
+    }
+    // `Book` is BIFF5's name for the same stream, and what Calc opens either way.
+    if contains_utf16(data, "Workbook") || contains_utf16(data, "Book") {
+        return Format::Bridge {
+            target: BridgeTarget::Xlsx,
+            mimetype: EXCEL_MIME,
+            label: "a legacy Excel workbook",
         };
     }
     by_extension(ext).unwrap_or(match ext {
@@ -728,6 +741,38 @@ mod tests {
                 label: "a legacy PowerPoint presentation",
             },
             "a compound deck is a legacy deck whatever it is called"
+        );
+    }
+
+    #[test]
+    fn a_workbook_stream_sends_a_compound_file_to_the_bridge() {
+        // BIFF's stream is its signature in the same way: a workbook saved under
+        // a name that promises a package is Calc's to read, not ours to refuse.
+        assert_eq!(
+            detect_bytes(&named("ledger.xls"), &compound(&["Workbook", "CompObj"])),
+            Format::Bridge {
+                target: BridgeTarget::Xlsx,
+                mimetype: EXCEL_MIME,
+                label: "a legacy Excel workbook",
+            }
+        );
+        assert_eq!(
+            detect_bytes(&named("ledger.docx"), &compound(&["Workbook"])),
+            Format::Bridge {
+                target: BridgeTarget::Xlsx,
+                mimetype: EXCEL_MIME,
+                label: "a legacy Excel workbook",
+            },
+            "a compound workbook is a legacy workbook whatever it is called"
+        );
+        // BIFF5 called the same stream `Book`.
+        assert_eq!(
+            detect_bytes(&named("ledger.docx"), &compound(&["Book"])),
+            Format::Bridge {
+                target: BridgeTarget::Xlsx,
+                mimetype: EXCEL_MIME,
+                label: "a legacy Excel workbook",
+            }
         );
     }
 
