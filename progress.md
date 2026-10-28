@@ -2,7 +2,7 @@
 
 **Project**: PDF & Office Document Extractor (Docling-compatible)
 **Started**: October 11, 2026
-**Last Updated**: October 22, 2026
+**Last Updated**: October 28, 2026
 **Language**: Rust (toolchain verified: cargo 1.99.0, rustc 1.99.0)
 **Approach**: Hybrid — reuse open-source infrastructure where it is commodity (DEFLATE, ZIP/XML, image codecs, Tesseract); implement the domain logic (PDF object model, content-stream interpretation, image decoding, layout, export) ourselves.
 
@@ -2327,17 +2327,17 @@ Office's** files — while WPS Office today also writes OOXML under the same nam
 the user saves in its format. No extension can tell those apart, so the bytes do, and
 the extension became a promise the run accepts rather than a fact it trusts.
 
-**Detection** (`crates/cli/src/formats.rs`): `sniff` reads the magic — `%PDF-`,
-`D0 CF 11 E0…`, `01 FE`, `PK\x03\x04`, `{\rtf`, HTML, or text. A ZIP is then named by
-its parts (`word/document.xml`, `xl/workbook.xml`, `ppt/presentation.xml`, EPUB's
-`META-INF/container.xml`, ODF's `content.xml`), and a compound file by whether it
-holds a `WordDocument` stream. That last test is the interesting one: the stream name
-sits in the directory as UTF-16LE, and it is in **all four** of the corpus's Word
-binaries and in **none of the 40** Works samples — so a Word 97 file called
-`letter.wps` reaches the Word reader, and a Works file reaches the bridge, both by
-content. Works *spreadsheets* are a third case: none of the 26 samples is a compound
-file at all (they start `00 00` or `FF 00` and carry a version pair), so there the
-extension is the only identifier there is.
+**Detection** (`crates/formats/src/lib.rs`; `crates/cli/src/formats.rs` before the crate
+extraction): `sniff` reads the magic — `%PDF-`, `D0 CF 11 E0…`, `01 FE`, `PK\x03\x04`,
+`{\rtf`, HTML, or text. A ZIP is then named by its parts (`word/document.xml`,
+`xl/workbook.xml`, `ppt/presentation.xml`, EPUB's `META-INF/container.xml`, ODF's
+`content.xml`), and a compound file by whether it holds a `WordDocument` stream. That last
+test is the interesting one: the stream name sits in the directory as UTF-16LE, and it is
+in **all four** of the corpus's Word binaries and in **none of the 40** Works samples — so
+a Word 97 file called `letter.wps` reaches the Word reader, and a Works file reaches the
+bridge, both by content. Works *spreadsheets* are a third case: none of the 26 samples is
+a compound file at all (they start `00 00` or `FF 00` and carry a version pair), so there
+the extension is the only identifier there is.
 
 **The bridge**: LibreOffice's importer is the only reader that exists for the Works
 family — libwps (0.4.14 here) behind the `MS_Works` Writer and Calc filters — and it
@@ -2627,16 +2627,16 @@ and WordPerfect, and the PPTX reader was already the most complete of the Office
 readers, so the missing piece was one `BridgeTarget` and the detection that finds the
 file — plus the fixture that proves a real PowerPoint 97 file goes through it.
 
-**Detection** (`crates/cli/src/formats.rs`): a PowerPoint 97–2003 deck is a compound
-file whose directory holds the stream `PowerPoint Document`, the same kind of signature
-`WordDocument` is for Word. The UTF-16LE name is tested first, so a deck is recognised
-whatever it is called, and it is tested *after* the Word stream, so a Word file is never
-mistaken for a deck. Two cases the stream cannot cover are the extension's: a
-PowerPoint 4/95 binary that is not this container at all, and a compound file whose
-producer wrote the stream under another name. Both are the promise an extension makes,
-so `.ppt` is bridged by name as well; nothing else about detection changed. The bytes
-still win where they can: a `.ppt` that is really a PPTX package is read by the PPTX
-reader, with LibreOffice switched off (a test holds that).
+**Detection** (`crates/formats/src/lib.rs`; `crates/cli/src/formats.rs` before the crate
+extraction): a PowerPoint 97–2003 deck is a compound file whose directory holds the stream
+`PowerPoint Document`, the same kind of signature `WordDocument` is for Word. The UTF-16LE
+name is tested first, so a deck is recognised whatever it is called, and it is tested
+*after* the Word stream, so a Word file is never mistaken for a deck. Two cases the stream
+cannot cover are the extension's: a PowerPoint 4/95 binary that is not this container at
+all, and a compound file whose producer wrote the stream under another name. Both are the
+promise an extension makes, so `.ppt` is bridged by name as well; nothing else about
+detection changed. The bytes still win where they can: a `.ppt` that is really a PPTX
+package is read by the PPTX reader, with LibreOffice switched off (a test holds that).
 
 **Reading** (`crates/cli/src/main.rs`): the new `BridgeTarget::Pptx` runs
 `soffice --headless --convert-to pptx` under the same private profile every other
@@ -2668,14 +2668,14 @@ as that conversion — a text box Impress re-lays out is the re-laid-out box —
 SmartArt is not read from a bridged deck, since it is not read from a native one
 either; the deck's text, tables, pictures, notes and charts are.
 
-**Verification.** `crates/cli/src/formats.rs` gains two unit tests (the stream decides;
-the extension decides when the stream says nothing), `crates/cli/tests/cli_test.rs`
-gains three (the real `.ppt` through LibreOffice with identity, content and extracted
-picture asserted; a `.ppt` that is really a `.pptx` read without LibreOffice; the
-missing-LibreOffice message naming the format, the dependency and the re-save route).
-`cargo test -p pdfextractor-cli --test cli_test` **35 passed, 0 failed** (3 new),
-`cargo test -p pdfextractor-cli --bins` 26/26, `cargo clippy -p pdfextractor-cli
---all-targets` clean, `cargo fmt --all -- --check` clean.
+**Verification.** `crates/formats/src/lib.rs` (`crates/cli/src/formats.rs` before the
+crate extraction) gains two unit tests (the stream decides; the extension decides when the
+stream says nothing), `crates/cli/tests/cli_test.rs` gains three (the real `.ppt` through
+LibreOffice with identity, content and extracted picture asserted; a `.ppt` that is really
+a `.pptx` read without LibreOffice; the missing-LibreOffice message naming the format, the
+dependency and the re-save route). `cargo test -p pdfextractor-cli --test cli_test` **35
+passed, 0 failed** (3 new), `cargo test -p pdfextractor-cli --bins` 26/26, `cargo clippy
+-p pdfextractor-cli --all-targets` clean, `cargo fmt --all -- --check` clean.
 
 ## W6: a deck's own remarks — speaker notes and comments on the notes layer
 
@@ -13318,14 +13318,15 @@ a list of extensions would have left it out of a gate for the letters in its nam
 `libreoffice_available` was the same fault one level up: a hand-written copy of the lookup the
 CLI performs (`PDFE_SOFFICE`, then `soffice`/`libreoffice` on `PATH`).
 
-**The change.** The question itself moved to `crates/formats`, as the note above records. What
-the report does with it changed too: unable to link a binary crate and unwilling to write a
-second rule, it takes the crate as a **dev-dependency** and asks it directly: `is_bridged` is
-`detect(path).map(reads_through_libreoffice).unwrap_or(false)`, `is_plain_image` is
-`Format::Image` rather than a list of picture extensions, and `planned` asks the crate's
-`libreoffice()` instead of its own copy. A file that cannot be read at all is **not** left out,
-which is the gate's behaviour too: there is nothing to say it needs the bridge, and the
-conversion that follows reports the unreadable file itself.
+**The change.** The question itself moved to `crates/formats`, as the crate's own note
+above records. What the report does with it changed too: unable to link a binary crate and
+unwilling to write a second rule, it takes the crate as a **dev-dependency** and asks it
+directly: `is_bridged` is `detect(path).map(reads_through_libreoffice).unwrap_or(false)`,
+`is_plain_image` is `Format::Image` rather than a list of picture extensions, and
+`planned` asks the crate's `libreoffice()` instead of its own copy. A file that cannot be
+read at all is **not** left out, which is the gate's behaviour too: there is nothing to
+say it needs the bridge, and the conversion that follows reports the unreadable file
+itself.
 
 **Proven.** `a_document_whose_name_lies_about_its_format_is_held` copies `dummy.pdf` to
 `report.doc` and `EquationAsScientificNumbering.docx` to `notes.wps` and asks `partition` of
