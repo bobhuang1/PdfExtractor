@@ -769,9 +769,14 @@ every deliberate trade is, by regenerating the baseline and reading its diff. Ac
 `CORPUS_BASELINE=update cargo test -p pdfextractor-ui --test corpus_report_test`, and let
 the diff of that file be the argument for it. A document whose reading goes through
 LibreOffice — a legacy `.doc`, or any of the families the bridge is the only reader
-for — is **left out** of a run on a machine without it, and the baseline entry is kept:
-the same file read through Writer and read by the built-in piece-table reader says
-different things, so neither reading can be held to the other's numbers.
+for — is **left out** of a run on a machine without it, before the corpus is converted
+at all, and the baseline entry is kept: the same file read through Writer and read by
+the built-in piece-table reader says different things, so neither reading can be held
+to the other's numbers — and a family with no reading here at all would otherwise stop
+the conversion on the missing tool rather than be left out. Which documents those are is
+the gate's own question, asked of each file's **bytes** rather than of the name it was
+saved under: a DOCX somebody saved as `report.doc` is read here exactly as it would be
+with the bridge installed, and is held.
 
 The window holds that **same floor itself**, by the same code: `compare-baseline.json`
 lives beside the references it is about, so the Compare panel finds it without being told
