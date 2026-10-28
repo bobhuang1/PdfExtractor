@@ -13415,3 +13415,26 @@ format this reads` — the test is the branch's guard, not a restatement of the 
 pdfextractor-cli --test compare_mode_test` **15 passed** in 5.3 s; the gate over the whole corpus
 with LibreOffice on `PATH` is exit 0, every document `at or above the whole ratchet` and nothing
 left out, so no document's classification moved; `cargo fmt --all --check` clean.
+
+## The renamed workbook's control: read where the bridge is
+
+**What was asked.** Add the bridge-present control for the misnamed workbook, so the
+leaving-out is shown to be about the bridge rather than the name.
+
+**What it holds.** `the_misnamed_workbook_is_read_when_the_bridge_is_here` copies
+`test-data/ledger.xls` to `ledger.docx` and runs it on the machine's own LibreOffice: Calc
+takes the file whatever it is called, so the run converts it and writes its output, and then
+refuses it for having no reference in the scratch folder — the ordinary rule for a document
+nothing remembers. The assertions are the mirror of
+`a_workbook_named_as_a_package_is_left_out_without_the_bridge`: no `not held` line, the
+refusal naming `no reference for this document`, and `out.json` present. A run that passed
+over the file on any machine would fail the last of those.
+
+**Both halves are pinned.** With the `Workbook`/`Book` check short-circuited for one run the
+control fails too — the file becomes `Format::Unsupported` and is converted into a failure
+rather than to a reading — so the pair guards the detection branch as well as the bridge
+rule. The test returns without asserting where no LibreOffice is installed, as the other
+bridge tests do, which is why the scheduled bridge job matters for it.
+
+**Verification.** `cargo test -p pdfextractor-cli --test compare_mode_test` **16 passed**, 0
+failed, in 7.1 s on this machine, the three bridge controls asserting rather than skipping.

@@ -714,3 +714,40 @@ fn a_workbook_named_as_a_package_is_left_out_without_the_bridge() {
         "a workbook named `.docx` was converted by a run that left it out: {logs}"
     );
 }
+
+/// The control for the test above: the same renamed workbook on a machine that has
+/// the bridge. Calc takes it whatever it is called, so the run converts it — and
+/// then refuses it for having no reference in this scratch, the ordinary rule for a
+/// document nothing remembers. That is what makes the test above about the bridge
+/// rather than about a file the run passes over on any machine. Returns without
+/// asserting where no LibreOffice is installed, as the other bridge tests do.
+#[test]
+fn the_misnamed_workbook_is_read_when_the_bridge_is_here() {
+    let Some(soffice) = soffice_on_path() else {
+        println!("skipped: no LibreOffice here, so there is no bridge to read it through");
+        return;
+    };
+    let scratch = Scratch::empty("bridge-only-misnamed-bridged");
+    scratch.remember(&a_memory_no_reading_can_meet(BRIDGE_ONLY_STEM));
+    let input = scratch.copy_in(BRIDGE_ONLY, "ledger.docx");
+
+    let output = scratch.compare_at(&input, soffice.to_str().expect("a UTF-8 path"));
+    let logs = logs_of(&output);
+
+    assert!(
+        !output.status.success(),
+        "an unheld document passed where the bridge is: {logs}"
+    );
+    assert!(
+        !logs.contains("not held"),
+        "a machine with the bridge left the workbook out: {logs}"
+    );
+    assert!(
+        logs.contains("no reference for this document"),
+        "the refusal was not the missing reference: {logs}"
+    );
+    assert!(
+        scratch.0.join("out.json").exists(),
+        "the workbook was not converted where the bridge is: {logs}"
+    );
+}
