@@ -13380,3 +13380,37 @@ byte-identically (`git diff` on `crates/cli/src/compare.rs` empty).
 **Verification.** `cargo test -p pdfextractor-cli --test compare_mode_test` **14 passed**, 0
 failed, in 5.2 s, the two bridge controls among them asserting rather than skipping on this
 machine, which has LibreOffice; `cargo fmt --all --check` clean.
+
+## A legacy workbook is named by its stream, not by its extension
+
+**What was asked.** Cover one more misnamed case in the compare gate: a bridge-only workbook given
+a name the built-in readers own, so the bytes alone decide it is left out.
+
+**What it found first.** The case could not be written. `compound_family` named a compound file
+Word's by its `WordDocument` stream and PowerPoint's by its `PowerPoint Document` stream, but
+BIFF — the legacy workbook the bridge is the only reader for — was recognised only by the
+extension, even though the comment beside `by_extension` says its `Workbook`/`Book` stream is
+what identifies it. So `ledger.xls` copied to `ledger.docx` was detected as `Format::Unsupported`
+("a compound (OLE2) file of no format this reads") and was neither left out nor read: it failed
+the run on a name it never had, which is the same wrong reason the truthful `.xls` is left out to
+avoid — and it would have failed with LibreOffice installed too, since an unsupported format is
+never sent to the bridge.
+
+**The change.** `compound_family` now reads the stream: `Workbook` (BIFF8) or `Book` (BIFF5) is a
+`Format::Bridge` to Calc, after the Word and PowerPoint streams and before the extension, which is
+where the other compound families — Works, WordPerfect, an older PowerPoint that named its stream
+otherwise — still live, because nothing in their bytes is theirs alone. Detection and the docs in
+the same block now say the same thing.
+
+**Proven.** `a_workbook_stream_sends_a_compound_file_to_the_bridge` (formats, 16 in the crate) pins
+the two stream names and the misnamed case at the detection level. In the gate,
+`a_workbook_named_as_a_package_is_left_out_without_the_bridge` copies `test-data/ledger.xls` to
+`ledger.docx` and runs it on a machine named as bridgeless: exit 0, `ledger.docx: not held · read
+through LibreOffice`, `1 document(s) not held`, and no output written. With the stream check
+disabled for one run, the same test fails with `unsupported format: a compound (OLE2) file of no
+format this reads` — the test is the branch's guard, not a restatement of the extension.
+
+**Verification.** `cargo test -p pdfextractor-formats` **16 passed**; `cargo test -p
+pdfextractor-cli --test compare_mode_test` **15 passed** in 5.3 s; the gate over the whole corpus
+with LibreOffice on `PATH` is exit 0, every document `at or above the whole ratchet` and nothing
+left out, so no document's classification moved; `cargo fmt --all --check` clean.
