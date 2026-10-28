@@ -14,12 +14,21 @@
 //! engineering, and the last writer of these files stopped around 2007. What
 //! does exist is LibreOffice's importer, so that is the bridge — the same route
 //! Docling itself takes for legacy `.doc`. The converted document is read by
-//! our own readers afterwards, and the result is re-labelled with the original
-//! file's name, MIME type and hash: what was read is what the user handed us,
-//! however it was read.
+//! our own readers afterwards, and the command line gives the result the
+//! identity of the file the user handed over (its name, MIME type and hash, in
+//! `relabel`): what was read is what the user gave us, however it was read.
+//!
+//! This is a crate rather than a module of the command line because more than
+//! one thing asks its question and they must not answer it differently. The run
+//! asks it to choose a reader for each file ([`detect`]); the `--compare` mode's
+//! gate asks it to decide, before anything is converted, which documents this
+//! machine may hold ([`reads_through_libreoffice`], in `crates/cli/src/compare.rs`);
+//! and the corpus report (`crates/ui/tests/corpus_report_test.rs`) asks it for
+//! the same reason and must get the same answer — a report that kept its own
+//! list of extensions beside this one would leave out a document the gate holds,
+//! or hold one the gate leaves out, on nothing but the name it was saved under.
 
 use anyhow::{bail, Context, Result};
-use pdfextractor_core::{DoclingDocument, Origin};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -491,30 +500,6 @@ pub fn bridge(input: &Path, target: BridgeTarget, label: &str) -> Result<Bridged
         path: produced,
         _scratch: scratch,
     })
-}
-
-/// Give a bridged document the identity of the file the user handed over: the
-/// name, MIME type and hash are the original's, because that is the document;
-/// LibreOffice was only how its words were reached.
-pub fn relabel(
-    mut doc: DoclingDocument,
-    original: &Path,
-    mimetype: &str,
-) -> Result<DoclingDocument> {
-    let data = std::fs::read(original).with_context(|| format!("read {}", original.display()))?;
-    let name = original
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "document".to_string());
-    doc.name = name.clone();
-    doc.origin = Some(Origin {
-        mimetype: Some(mimetype.to_string()),
-        // Docling requires a non-negative integer, so the hash stays unsigned.
-        binary_hash: Some(crate::fnv1a(&data)),
-        filename: Some(name),
-        uri: None,
-    });
-    Ok(doc)
 }
 
 /// A directory under the system's temporary area, removed on drop.

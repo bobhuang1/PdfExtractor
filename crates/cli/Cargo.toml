@@ -19,6 +19,12 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 pdfextractor-core = { path = "../core" }
+# What a file actually is: the reader is chosen by the bytes rather than by the
+# name the file was saved under, and the one family with no reader here is
+# handed to LibreOffice. A crate of its own because the corpus report asks the
+# same question of the same file (`crates/ui/tests/corpus_report_test.rs`) and
+# must not keep a list of extensions beside it.
+pdfextractor-formats = { path = "../formats" }
 pdfextractor-pdf-parser = { path = "../pdf-parser" }
 pdfextractor-docx-parser = { path = "../docx-parser" }
 pdfextractor-doc-parser = { path = "../doc-parser" }

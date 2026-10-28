@@ -1,0 +1,16 @@
+[package]
+name = "pdfextractor-formats"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# A picture's own bytes name its encoding, so a file called `scan.dat` is still
+# read as the image it is: the format question is about the bytes, not the name.
+pdfextractor-image-parser = { path = "../image-parser" }
+# The names a picture format is written under — the same table the flow reader
+# accepts and the extractor writes an extracted picture out with.
+pdfextractor-picture-formats = { path = "../picture-formats" }

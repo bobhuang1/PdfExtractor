@@ -13,6 +13,7 @@ members = [
   "crates/drawingml",
   "crates/chart",
   "crates/picture-formats",
+  "crates/formats",
   "crates/text-parser",
   "crates/layout",
   "crates/ocr-engine",

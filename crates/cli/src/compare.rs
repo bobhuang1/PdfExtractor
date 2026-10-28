@@ -43,7 +43,7 @@
 //! With no memory beside the reference — every comparison against a document of
 //! your own — the comparisons are still printed and no floor can fire.
 
-use crate::formats;
+use pdfextractor_formats::{detect, libreoffice, reads_through_libreoffice};
 use pdfextractor_ui::diff;
 use pdfextractor_ui::gate;
 use std::path::{Path, PathBuf};
@@ -72,11 +72,11 @@ pub fn open(reference: &Path, ocr: &str) -> anyhow::Result<gate::Session> {
 /// `report.doc`, or a `.wps` that is really a package, is read here exactly as it
 /// would be with the bridge installed, and so is held as usual.
 pub fn not_held_here(input: &Path) -> Option<&'static str> {
-    if formats::libreoffice().is_some() {
+    if libreoffice().is_some() {
         return None;
     }
-    let format = formats::detect(input).ok()?;
-    formats::reads_through_libreoffice(format).then_some(
+    let format = detect(input).ok()?;
+    reads_through_libreoffice(format).then_some(
         "read through LibreOffice, and this machine has none — a reading made \
          without it is not the reading the memory remembers",
     )

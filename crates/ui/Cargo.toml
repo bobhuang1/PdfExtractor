@@ -17,6 +17,14 @@ desktop = ["dep:tauri", "dep:rfd"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+# The corpus report asks the format question — is this document read through
+# LibreOffice on this machine? — through the same code the run and the
+# `--compare` gate ask it through, rather than keeping a list of extensions
+# beside it. A report that decided by the name would leave out a document the
+# gate holds, and hold one the gate leaves out.
+pdfextractor-formats = { path = "../formats" }
+
 [dependencies]
 # Tauri wraps the system webview (WebKitGTK / WebView2 / WKWebView), so the
 # same Rust core and the same static frontend run on all three platforms.

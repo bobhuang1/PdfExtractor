@@ -1,14 +1,19 @@
 mod compare;
-mod formats;
 mod preview;
 
+// `relabel` reads the original file back to hash it, and says which file it
+// could not read when it cannot.
+use anyhow::Context as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 use base64::Engine as _;
 use clap::{Parser, ValueEnum, ValueHint};
-use formats::{BridgeTarget, Format};
+// The format question — what a file actually is, and the one family with no
+// reader here — lives in a crate of its own, because the corpus report asks it
+// of the same documents and the two must not answer it differently.
 use pdfextractor_core::{
     DocumentBuilder, GridCell, GridTable, Origin, PictureData, Ref, TextLabel,
 };
+use pdfextractor_formats::{bridge, detect, is_bridged, BridgeTarget, Format};
 use pdfextractor_json_exporter::export_to_file;
 use pdfextractor_layout::Span as LayoutSpan;
 use pdfextractor_ocr_engine::QuarterTurn;
@@ -744,7 +749,7 @@ fn input_families() -> Vec<InputFamily> {
                 .map(|extension| InputFormat {
                     extension,
                     aliases: &[],
-                    bridged: formats::is_bridged(extension),
+                    bridged: is_bridged(extension),
                 })
                 .collect(),
         });
@@ -876,15 +881,15 @@ fn carried_picture_not_a_page(ext: &str) -> Option<String> {
 /// The extension gate refuses before any reader looks at the file, so a PDF
 /// saved as `report.xyz` was told only that `.xyz` is not accepted — true, and
 /// useless when the bytes are a format this tool reads well under its own name.
-/// `formats::detect` already reads the magic for the reader choice; this turns
-/// its answer into the sentence a refusal needs: what the file is, called by a
+/// [`detect`] already reads the magic for the reader choice; this turns its
+/// answer into the sentence a refusal needs: what the file is, called by a
 /// name a user recognises, and what to do about it.
 ///
 /// `None` when the bytes say nothing more than the name did — a stranger stays
 /// a plain stranger — or when the file cannot be read at all, in which case the
 /// name is the only thing there was to go on.
 fn bytes_say_what_it_is(path: &Path, ext: &str) -> Option<String> {
-    let (description, advice) = match formats::detect(path).ok()? {
+    let (description, advice) = match detect(path).ok()? {
         Format::Pdf => ("a PDF", Some("rename the file to .pdf".to_string())),
         Format::Docx => (
             "a Word document (DOCX)",
@@ -1044,7 +1049,7 @@ fn build_document(
         }
     }
 
-    let doc = match formats::detect(path)? {
+    let doc = match detect(path)? {
         Format::Pdf => {
             let langs = tesseract_langs(&args.ocr_lang)?;
             convert_pdf(
@@ -1099,14 +1104,14 @@ fn build_document(
         // of the file the user handed over.
         Format::Doc => {
             note_flow_format(args.preview, path);
-            match formats::bridge(path, BridgeTarget::Docx, "a legacy Word document") {
+            match bridge(path, BridgeTarget::Docx, "a legacy Word document") {
                 Ok(bridged) => {
                     tracing::info!(
                         "{}: a legacy Word document, read through LibreOffice as docx",
                         path.display()
                     );
                     let doc = convert_docx(bridged.path(), output_path)?;
-                    formats::relabel(doc, path, "application/msword")?
+                    relabel(doc, path, "application/msword")?
                 }
                 Err(error) => {
                     // Not a failure: the file has a reader of its own. Why the
@@ -1149,7 +1154,7 @@ fn build_document(
                 }
                 _ => note_flow_format(args.preview, path),
             }
-            let bridged = formats::bridge(path, target, label)?;
+            let bridged = bridge(path, target, label)?;
             tracing::info!(
                 "{}: {label}, read through LibreOffice as {}",
                 path.display(),
@@ -1161,11 +1166,37 @@ fn build_document(
                 BridgeTarget::Csv => convert_text("csv", bridged.path(), output_path)?,
                 BridgeTarget::Pptx => convert_pptx(bridged.path(), output_path)?,
             };
-            formats::relabel(doc, path, mimetype)?
+            relabel(doc, path, mimetype)?
         }
         Format::Unsupported(what) => anyhow::bail!("unsupported format: {what}"),
     };
 
+    Ok(doc)
+}
+
+/// Give a document read through the bridge the identity of the file the user
+/// handed over: the name, MIME type and hash are the original's, because that is
+/// the document; LibreOffice was only how its words were reached. Here rather
+/// than beside the bridge itself, because it is about the document the run
+/// produces, not about what a file is.
+fn relabel(
+    mut doc: pdfextractor_core::DoclingDocument,
+    original: &Path,
+    mimetype: &str,
+) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    let data = std::fs::read(original).with_context(|| format!("read {}", original.display()))?;
+    let name = original
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document".to_string());
+    doc.name = name.clone();
+    doc.origin = Some(Origin {
+        mimetype: Some(mimetype.to_string()),
+        // Docling requires a non-negative integer, so the hash stays unsigned.
+        binary_hash: Some(fnv1a(&data)),
+        filename: Some(name),
+        uri: None,
+    });
     Ok(doc)
 }
 
@@ -4080,7 +4111,7 @@ mod tests {
                 let marked = help.contains(&format!(".{extension}*"));
                 assert_eq!(
                     marked,
-                    formats::is_bridged(extension),
+                    is_bridged(extension),
                     "{family}: .{extension} is marked {} the bridge reads it",
                     if marked { "as if" } else { "though" }
                 );

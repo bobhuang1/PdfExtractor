@@ -3238,6 +3238,7 @@ dependencies = [
  "pdfextractor-core",
  "pdfextractor-doc-parser",
  "pdfextractor-docx-parser",
+ "pdfextractor-formats",
  "pdfextractor-image-parser",
  "pdfextractor-json-exporter",
  "pdfextractor-layout",
@@ -3304,6 +3305,15 @@ dependencies = [
  "pdfextractor-svg",
  "quick-xml 0.36.2",
  "tracing",
+]
+
+[[package]]
+name = "pdfextractor-formats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pdfextractor-image-parser",
+ "pdfextractor-picture-formats",
 ]
 
 [[package]]
@@ -3427,6 +3437,7 @@ dependencies = [
 name = "pdfextractor-ui"
 version = "0.1.0"
 dependencies = [
+ "pdfextractor-formats",
  "rfd",
  "serde",
  "serde_json",
