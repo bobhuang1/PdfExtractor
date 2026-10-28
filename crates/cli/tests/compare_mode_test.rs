@@ -27,6 +27,13 @@
 //! bridge is the *only* reader for, where leaving it out cannot wait for a
 //! finished document because there is no reading here to finish. Both are left
 //! out before anything is converted, on the same sentence and in the same count.
+//!
+//! The last pair asks the same question of a **misnamed** file, because the run
+//! decides on the bytes and the extension is the only other thing there is to
+//! decide on: a PDF called `report.doc` is read here with or without the bridge,
+//! and a Word binary called `notes.pdf` is Writer's to read all the same. A rule
+//! that looked at the name would hold the first to Writer's numbers on a machine
+//! that never read it and convert the second into a reader's failure.
 
 use pdfextractor_ui::diff::{Measurement, Memory, Numbers};
 use std::collections::BTreeMap;
@@ -111,6 +118,13 @@ impl Scratch {
     /// A scratch folder holding one committed reference of `docling/`, under its
     /// own name — what the run compares a document of the same stem against.
     fn holding(tag: &str, reference: &str) -> Scratch {
+        Scratch::holding_as(tag, reference, reference)
+    }
+
+    /// [`Scratch::holding`] under another name: the reference is found by the stem
+    /// of the document it belongs to, so a document renamed in the scratch folder
+    /// needs its reference renamed with it.
+    fn holding_as(tag: &str, reference: &str, name: &str) -> Scratch {
         let path =
             std::env::temp_dir().join(format!("pdfe-cli-compare-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
@@ -120,10 +134,19 @@ impl Scratch {
             repository_root()
                 .join("test-data/golden/docling")
                 .join(reference),
-            references.join(reference),
+            references.join(name),
         )
         .expect("copy the reference");
         Scratch(path)
+    }
+
+    /// Copy a repository document into the scratch folder under `name`, and answer
+    /// with where it landed: the same bytes carrying another extension, which is
+    /// how a test hands the gate a file whose name lies about its format.
+    fn copy_in(&self, document: &str, name: &str) -> PathBuf {
+        let path = self.0.join(name);
+        std::fs::copy(repository_root().join(document), &path).expect("copy the document");
+        path
     }
 
     /// The reference folder to point `--compare` at.
@@ -157,7 +180,12 @@ impl Scratch {
     /// Convert `document` and compare it with the reference this scratch holds,
     /// on the machine whose LibreOffice is `soffice`.
     fn compare(&self, document: &str, soffice: &str) -> Output {
-        let input = repository_root().join(document);
+        self.compare_at(&repository_root().join(document), soffice)
+    }
+
+    /// Convert the document at `input` and compare it with the reference this
+    /// scratch holds, on the machine whose LibreOffice is `soffice`.
+    fn compare_at(&self, input: &std::path::Path, soffice: &str) -> Output {
         let output = self.0.join("out.json");
         run_with_soffice(
             &[
@@ -234,10 +262,16 @@ fn dummy_as_read() -> Numbers {
 /// The memory as the corpus report would write it: `dummy` remembered by its
 /// stem, measured with `--ocr never`.
 fn memory_of(dummy: Numbers) -> Memory {
+    remembered("dummy", dummy)
+}
+
+/// A memory holding one document by its stem — the shape [`memory_of`] has, for a
+/// test whose document is not called `dummy`.
+fn remembered(stem: &str, numbers: Numbers) -> Memory {
     Memory {
         note: "written by the compare mode's test".to_string(),
         measured: Measurement::from_ocr("never"),
-        documents: BTreeMap::from([("dummy".to_string(), dummy)]),
+        documents: BTreeMap::from([(stem.to_string(), numbers)]),
     }
 }
 
@@ -578,5 +612,71 @@ fn the_bridge_only_format_is_read_when_the_bridge_is_here() {
     assert!(
         scratch.0.join("out.json").exists(),
         "the document was not converted where the bridge is: {logs}"
+    );
+}
+
+/// A document whose **name** says the bridge reads it, but whose bytes say a PDF,
+/// is read here and **held** on a machine without LibreOffice — because the run
+/// asks the bytes, as the reader it chose did. `dummy.pdf` under the name
+/// `report.doc` reads exactly as `dummy.pdf` does, so a name-decided rule would
+/// have left it out and quietly held one document fewer than it claims to.
+#[test]
+fn a_document_whose_name_claims_the_bridge_is_held_when_the_bytes_do_not() {
+    // The reference is found by the document's stem, so it is copied in under the
+    // stem the renamed file has.
+    let scratch = Scratch::holding_as("misnamed-held", "dummy.json", "report.json");
+    scratch.remember(&remembered("report", dummy_as_read()));
+    let input = scratch.copy_in("test-data/real/dummy.pdf", "report.doc");
+
+    let output = scratch.compare_at(&input, "/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a PDF named `.doc` failed the run: {logs}"
+    );
+    assert!(
+        !logs.contains("not held"),
+        "a PDF named `.doc` was left to a bridge it does not need: {logs}"
+    );
+    assert!(
+        logs.contains("at or above the whole ratchet"),
+        "it was not held to the memory at all: {logs}"
+    );
+    assert!(
+        scratch.0.join("out.json").exists(),
+        "the document was not converted by a run that claimed to hold it: {logs}"
+    );
+}
+
+/// The other direction, and the one that costs something if it is wrong: a Word
+/// binary called `notes.pdf` is Writer's reading of that file, so a machine
+/// without the bridge leaves it out — the name does not make the built-in reader
+/// a reader of it. Converted instead, it would fail on the missing bridge and take
+/// the gate down for a fact about the machine rather than about the document.
+#[test]
+fn a_document_whose_name_hides_the_bridge_is_left_out_without_one() {
+    let scratch = Scratch::empty("misnamed-left-out");
+    scratch.remember(&a_memory_no_reading_can_meet("notes"));
+    let input = scratch.copy_in(LEGACY_DOC, "notes.pdf");
+
+    let output = scratch.compare_at(&input, "/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a document left to the bridge failed the run: {logs}"
+    );
+    assert!(
+        logs.contains("notes.pdf: not held · read through LibreOffice"),
+        "the document was not said to be left out, nor why: {logs}"
+    );
+    assert!(
+        logs.contains("1 document(s) not held"),
+        "the run did not count what it left out: {logs}"
+    );
+    assert!(
+        !scratch.0.join("out.json").exists(),
+        "a Word binary named `.pdf` was converted by a run that left it out: {logs}"
     );
 }
