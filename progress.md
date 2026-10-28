@@ -13343,3 +13343,40 @@ in 3 m 49 s. `test-data/golden/compare-baseline.json` was not touched by either 
 document's numbers moved, so what changed is the decision and nothing else. `cargo test
 --workspace` **977 passed, 0 failed** across 70 suites, exit 0; `cargo fmt --all --check`
 clean; `cargo clippy --workspace --all-targets -- -D warnings` quiet.
+
+## The compare gate is shown a document whose name lies about its format
+
+**What was asked.** Add a compare-gate test where the document handed to `--compare` is
+misnamed, so the gate's own byte-decided rule is covered as well as the report's.
+
+**What was covered already, and what was not.** The gate asks `not_held_here` before it
+converts anything, and that asks `detect` — the bytes first, the extension only where the
+bytes leave it open. The report's tests prove the report asks the same question
+(`a_document_whose_name_lies_about_its_format_is_held`, in
+`crates/ui/tests/corpus_report_test.rs`), but the gate's own tests all handed it files whose
+names tell the truth, so nothing in this suite would have noticed the gate going back to a
+name. The corpus is no help either way: its four legacy `.doc` files really are Word binaries,
+so a name-decided gate reads the corpus exactly as a byte-decided one does.
+
+**The two directions, both without a bridge needed.** `dummy.pdf` copied to `report.doc` is a
+PDF under a legacy Word name: read here with or without LibreOffice, so it is converted, held
+and passes — `at or above the whole ratchet` against a memory that is exactly what it reads,
+and no `not held` line. `two_images.doc`'s bytes copied to `notes.pdf` is the other half: a
+Word binary under a name nothing here reads through the bridge, so on a machine named as
+bridgeless (`PDFE_SOFFICE=/nowhere/soffice`) it is left out on the same sentence and in the
+same count as the truthful `.doc`, and **not converted** — the run would otherwise fail on the
+missing bridge and take the gate down for a fact about the machine. `Scratch` grew
+`copy_in`, `holding_as` (a reference under the stem of a renamed document, since references are
+found by stem) and `compare_at`; `holding` and `compare` are now the same methods with the
+document's own name and path.
+
+**The rule is what fails, not just the run.** Both tests were checked against a gate deciding
+by name: with `compare.rs`'s `detect(input)` replaced (for the length of one run) by the
+extension — `doc` → `Doc`, `pdf` → `Pdf` — the PDF named `.doc` is left to a bridge it does not
+need (`not held · read through LibreOffice`) and the Word binary named `.pdf` is converted and
+refused for having no reference. Both fail; both pass again with the file restored
+byte-identically (`git diff` on `crates/cli/src/compare.rs` empty).
+
+**Verification.** `cargo test -p pdfextractor-cli --test compare_mode_test` **14 passed**, 0
+failed, in 5.2 s, the two bridge controls among them asserting rather than skipping on this
+machine, which has LibreOffice; `cargo fmt --all --check` clean.
