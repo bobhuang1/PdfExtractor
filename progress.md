@@ -13473,3 +13473,33 @@ detection moved.
 pdfextractor-cli --test compare_mode_test` **17 passed** in 3.1 s; `cargo test -p pdfextractor-ui
 --test formats_test` **1 passed**; `cargo fmt --all --check` clean; `cargo clippy -p
 pdfextractor-formats -p pdfextractor-cli --all-targets -- -D warnings` quiet.
+
+## A skip you can see
+
+**What was asked.** Make the bridge-conditional tests say when they skip, so a bridgeless run's
+pass cannot be read as an assertion.
+
+**Why it was needed.** The bridge tests return without asserting where no LibreOffice is installed,
+as they must — a machine has no reason to have it. The line they printed said so with `println!` or
+`eprintln!`, and the harness captures both for a passing test unless the run was given
+`--nocapture`: on a runner without LibreOffice the log showed `ok` and nothing else, exactly what a
+test that converted its fixture and held the reading shows. Every such site was affected: the
+fourteen re-save tests and the `.ppt`/`.xls`/`.doc`/`.doc`-stamp/comment-time bridge tests in
+`cli_test.rs`, and the three bridge controls in the compare gate.
+
+**The change.** Each suite has a `skipped(what, why)` helper that writes to `std::io::stdout()`
+rather than through `print!`. The capture is the macros', not the stream's, so the line appears
+beside the test's `ok` in the log of an ordinary run; each file also has a `const` for its reason
+(`NO_SOFFICE`, `NO_LIBREOFFICE`), which keeps the call sites one line. The Works test's
+`PDFE_WORKS_SAMPLES` skip got the same treatment in passing — it is the same pass that asserted
+nothing — and the four suite files' remaining `println!` skips (a CLI that was never built) were
+left alone, because those tests do assert on the documents they do read.
+
+**Verified.** With this machine's LibreOffice the suites print no skip lines and pass (`17` in the
+gate suite, `128` in `cli_test`); with `PATH` emptied to imitate a bridgeless runner the same
+binaries, under the harness's default capture, print three lines from the gate suite
+(`the document read where the bridge is`, `the renamed workbook read where the bridge is`, `the
+document held where the bridge is`) and nineteen from `cli_test` (the re-save tests, the three
+legacy formats, the date-field and comment-time tests, and the Works test's missing samples), while
+still reporting `ok`. `cargo fmt --all --check` clean; `cargo clippy -p pdfextractor-cli
+--all-targets -- -D warnings` quiet.

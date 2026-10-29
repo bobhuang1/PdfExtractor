@@ -4518,7 +4518,7 @@ fn reading_order(doc: &serde_json::Value) -> Vec<String> {
 #[test]
 fn libreoffice_opens_and_resaves_the_svg_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the fixture re-save test");
+        skipped("the fixture re-save test", NO_SOFFICE);
         return;
     };
     let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
@@ -4676,7 +4676,7 @@ fn libreoffice_opens_and_resaves_the_svg_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_mc_svg_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the alternate-content re-save test");
+        skipped("the alternate-content re-save test", NO_SOFFICE);
         return;
     };
     let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
@@ -4826,7 +4826,7 @@ fn libreoffice_opens_and_resaves_the_mc_svg_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the fallback-only re-save test");
+        skipped("the fallback-only re-save test", NO_SOFFICE);
         return;
     };
 
@@ -5039,7 +5039,7 @@ fn libreoffice_opens_and_resaves_the_fallback_only_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_svg_embed_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the embedded-SVG re-save test");
+        skipped("the embedded-SVG re-save test", NO_SOFFICE);
         return;
     };
     let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
@@ -5166,7 +5166,7 @@ fn libreoffice_opens_and_resaves_the_svg_embed_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_svg_blip_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the svgBlip re-save test");
+        skipped("the svgBlip re-save test", NO_SOFFICE);
         return;
     };
     let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
@@ -5309,7 +5309,7 @@ fn libreoffice_opens_and_resaves_the_svg_blip_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_oriented_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the oriented-picture re-save test");
+        skipped("the oriented-picture re-save test", NO_SOFFICE);
         return;
     };
     let jpeg = std::fs::read(repository_root().join("test-data/photos/06_rotated.jpg"))
@@ -5380,7 +5380,7 @@ fn libreoffice_opens_and_resaves_the_oriented_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_picture_bullet_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the picture-bullet re-save test");
+        skipped("the picture-bullet re-save test", NO_SOFFICE);
         return;
     };
 
@@ -5595,7 +5595,7 @@ fn libreoffice_opens_and_resaves_the_picture_bullet_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the picture-fill re-save test");
+        skipped("the picture-fill re-save test", NO_SOFFICE);
         return;
     };
     let svg = std::fs::read(repository_root().join("test-data/images/diagram.svg"))
@@ -5759,7 +5759,7 @@ fn libreoffice_opens_and_resaves_the_blip_fill_fixture_package() {
 #[test]
 fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the worksheet-picture re-save test");
+        skipped("the worksheet-picture re-save test", NO_SOFFICE);
         return;
     };
     let file = "worksheet_pictures.xlsx";
@@ -5883,7 +5883,7 @@ fn libreoffice_opens_and_resaves_the_worksheet_picture_fixture() {
 #[test]
 fn libreoffice_opens_and_resaves_the_header_picture_fixture() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the header-picture re-save test");
+        skipped("the header-picture re-save test", NO_SOFFICE);
         return;
     };
     let file = "headerPic.docx";
@@ -5985,7 +5985,7 @@ fn libreoffice_opens_and_resaves_the_header_picture_fixture() {
 #[test]
 fn libreoffice_opens_and_resaves_the_picture_background_deck() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the picture-background re-save test");
+        skipped("the picture-background re-save test", NO_SOFFICE);
         return;
     };
     let file = "background_deck.pptx";
@@ -6138,7 +6138,7 @@ fn libreoffice_opens_and_resaves_the_picture_background_deck() {
 #[test]
 fn libreoffice_opens_and_resaves_the_master_picture_background_deck() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the master picture-background re-save test");
+        skipped("the master picture-background re-save test", NO_SOFFICE);
         return;
     };
     let file = "master_background_deck.pptx";
@@ -6324,7 +6324,7 @@ fn libreoffice_opens_and_resaves_the_master_picture_background_deck() {
 #[test]
 fn libreoffice_opens_and_resaves_the_bmp_and_tiff_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the BMP/TIFF re-save test");
+        skipped("the BMP/TIFF re-save test", NO_SOFFICE);
         return;
     };
     let bmp = std::fs::read(repository_root().join("test-data/images/chart.bmp"))
@@ -6404,7 +6404,7 @@ fn libreoffice_opens_and_resaves_the_bmp_and_tiff_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_webp_and_jp2_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the WebP/JPEG 2000 re-save test");
+        skipped("the WebP/JPEG 2000 re-save test", NO_SOFFICE);
         return;
     };
     let webp = std::fs::read(repository_root().join("test-data/images/chart.webp"))
@@ -6558,7 +6558,7 @@ fn libreoffice_opens_and_resaves_the_webp_and_jp2_fixture_packages() {
 #[test]
 fn libreoffice_opens_and_resaves_the_metafile_fixture_packages() {
     let Some(soffice) = soffice_binary() else {
-        eprintln!("no soffice on PATH; skipping the metafile re-save test");
+        skipped("the metafile re-save test", NO_SOFFICE);
         return;
     };
 
@@ -11725,7 +11725,10 @@ fn a_works_document_names_libreoffice_when_it_is_absent() {
 #[test]
 fn works_documents_are_read_through_libreoffice() {
     let Ok(directory) = std::env::var("PDFE_WORKS_SAMPLES") else {
-        eprintln!("PDFE_WORKS_SAMPLES is not set; skipping the LibreOffice bridge test");
+        skipped(
+            "the Works bridge test",
+            "PDFE_WORKS_SAMPLES is not set, so nothing was asserted",
+        );
         return;
     };
     let search = std::env::var_os("PATH").unwrap_or_default();
@@ -11735,7 +11738,7 @@ fn works_documents_are_read_through_libreoffice() {
             .any(|name| directory.join(name).is_file())
     });
     if !has_soffice {
-        eprintln!("no soffice on PATH; skipping the LibreOffice bridge test");
+        skipped("the LibreOffice bridge test", NO_SOFFICE);
         return;
     }
 
@@ -11803,6 +11806,23 @@ fn soffice_binary() -> Option<PathBuf> {
     std::env::split_paths(&search)
         .flat_map(|directory| ["soffice", "libreoffice"].map(|name| directory.join(name)))
         .find(|candidate| candidate.is_file())
+}
+
+/// Why the bridge tests say they asserted nothing on this machine.
+const NO_SOFFICE: &str = "no soffice on PATH, so nothing was asserted";
+
+/// Say that a test asserted nothing, where `cargo test` will show it.
+///
+/// The harness captures a passing test's `println!`/`eprintln!` unless the run was
+/// given `--nocapture`, so a skip said that way is invisible — and on a machine
+/// with no LibreOffice every re-save and bridge test here returns without
+/// asserting, reporting the same `ok` as the tests that converted their fixtures
+/// and held the readings. A bridgeless runner's green would then look like a suite
+/// that re-saved something. The real stdout is not captured, so the line stands
+/// beside the test in the log of an ordinary run.
+fn skipped(what: &str, why: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stdout(), "SKIPPED: {what} — {why}");
 }
 
 /// The hash the CLI stamps into `origin.binary_hash` — FNV-1a, 64-bit — so a
@@ -11982,7 +12002,7 @@ fn first_difference(
 #[test]
 fn a_legacy_ppt_is_read_through_libreoffice_as_a_deck() {
     if !libreoffice_on_path() {
-        eprintln!("no soffice on PATH; skipping the .ppt bridge test");
+        skipped("the .ppt bridge test", NO_SOFFICE);
         return;
     }
 
@@ -12140,7 +12160,7 @@ fn a_legacy_ppt_is_read_through_libreoffice_as_a_deck() {
 #[test]
 fn a_bridged_comment_time_keeps_its_milliseconds() {
     if !libreoffice_on_path() {
-        eprintln!("no soffice on PATH; skipping the comment-time bridge test");
+        skipped("the comment-time bridge test", NO_SOFFICE);
         return;
     }
 
@@ -12244,7 +12264,7 @@ fn a_bridged_comment_time_keeps_its_milliseconds() {
 #[test]
 fn a_legacy_xls_is_read_through_libreoffice_as_a_workbook() {
     if !libreoffice_on_path() {
-        eprintln!("no soffice on PATH; skipping the .xls bridge test");
+        skipped("the .xls bridge test", NO_SOFFICE);
         return;
     }
 
@@ -12393,7 +12413,7 @@ fn a_legacy_xls_is_read_through_libreoffice_as_a_workbook() {
 #[test]
 fn a_legacy_doc_is_read_through_libreoffice_as_a_document() {
     if !libreoffice_on_path() {
-        eprintln!("no soffice on PATH; skipping the .doc bridge test");
+        skipped("the .doc bridge test", NO_SOFFICE);
         return;
     }
 
@@ -12529,7 +12549,7 @@ fn a_legacy_doc_is_read_through_libreoffice_as_a_document() {
 #[test]
 fn a_legacy_docs_date_and_time_fields_carry_the_conversions_clock() {
     if !libreoffice_on_path() {
-        eprintln!("no soffice on PATH; skipping the .doc stamp test");
+        skipped("the .doc stamp test", NO_SOFFICE);
         return;
     }
 

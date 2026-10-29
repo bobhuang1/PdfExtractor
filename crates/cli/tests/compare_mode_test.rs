@@ -90,6 +90,22 @@ fn soffice_on_path() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Why the bridge controls say they asserted nothing on this machine.
+const NO_LIBREOFFICE: &str = "no LibreOffice here, so nothing was asserted";
+
+/// Say that a control asserted nothing, where `cargo test` will show it.
+///
+/// The harness captures a passing test's `println!`/`eprintln!` unless the run was
+/// given `--nocapture`, so a skip said that way is invisible — and on a machine with
+/// no LibreOffice the three controls here return without asserting, which then
+/// reports the same `ok` as a control that read a legacy document through the bridge
+/// and held it. A bridgeless runner's green would look like a bridge that was
+/// checked. The real stdout is not captured, so the line stands beside the test.
+fn skipped(what: &str, why: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stdout(), "SKIPPED: {what} — {why}");
+}
+
 /// Everything the process said, wherever it said it.
 fn logs_of(output: &Output) -> String {
     let mut logs = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -528,7 +544,7 @@ fn a_document_the_bridge_reads_is_not_held_on_a_machine_without_one() {
 #[test]
 fn the_same_document_is_held_when_the_bridge_is_here() {
     let Some(soffice) = soffice_on_path() else {
-        println!("skipped: no LibreOffice here, so there is no bridge to hold it to");
+        skipped("the document held where the bridge is", NO_LIBREOFFICE);
         return;
     };
     let scratch = Scratch::holding("bridged", LEGACY_REFERENCE);
@@ -599,7 +615,7 @@ fn a_format_only_the_bridge_can_read_is_not_held_on_a_machine_without_one() {
 #[test]
 fn the_bridge_only_format_is_read_when_the_bridge_is_here() {
     let Some(soffice) = soffice_on_path() else {
-        println!("skipped: no LibreOffice here, so there is no bridge to read it through");
+        skipped("the document read where the bridge is", NO_LIBREOFFICE);
         return;
     };
     let scratch = Scratch::empty("bridge-only-bridged");
@@ -734,7 +750,10 @@ fn a_workbook_named_as_a_package_is_left_out_without_the_bridge() {
 #[test]
 fn the_misnamed_workbook_is_read_when_the_bridge_is_here() {
     let Some(soffice) = soffice_on_path() else {
-        println!("skipped: no LibreOffice here, so there is no bridge to read it through");
+        skipped(
+            "the renamed workbook read where the bridge is",
+            NO_LIBREOFFICE,
+        );
         return;
     };
     let scratch = Scratch::empty("bridge-only-misnamed-bridged");
