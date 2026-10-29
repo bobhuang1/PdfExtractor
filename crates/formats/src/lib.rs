@@ -268,11 +268,15 @@ fn zip_family(data: &[u8]) -> Format {
 /// has it (Word's four `.doc` fixtures all do). Legacy PowerPoint has no reader
 /// here — Impress does, and it writes a package the PPTX reader reads — so the
 /// stream sends the file to the bridge rather than to a parser, and BIFF's
-/// `Workbook` (or BIFF5's `Book`) does the same for a legacy workbook. Those
-/// three are the compound families whose bytes name them, so a file is read for
-/// what it holds even when the name promises something else; the rest — Works,
-/// WordPerfect, an older PowerPoint that named its stream otherwise — are the
-/// extension's to say, because nothing in their bytes is theirs alone.
+/// `Workbook` (or BIFF5's `Book`) does the same for a legacy workbook.
+/// WordPerfect's `PerfectOffice_MAIN` is the fourth: Corel's own writer named the
+/// stream it keeps the document in, and every `.wpd` carries it, so a WordPerfect
+/// file called `manual.docx` is Writer's business all the same — a reader chosen
+/// by the name would hand a package reader a binary it cannot open. Those four are
+/// the compound families whose bytes name them, so a file is read for what it
+/// holds even when the name promises something else; the rest — Works, an older
+/// PowerPoint that named its stream otherwise — are the extension's to say,
+/// because nothing in their bytes is theirs alone.
 fn compound_family(data: &[u8], ext: &str) -> Format {
     if contains_utf16(data, "WordDocument") {
         return Format::Doc;
@@ -290,6 +294,13 @@ fn compound_family(data: &[u8], ext: &str) -> Format {
             target: BridgeTarget::Xlsx,
             mimetype: EXCEL_MIME,
             label: "a legacy Excel workbook",
+        };
+    }
+    if contains_utf16(data, "PerfectOffice_MAIN") {
+        return Format::Bridge {
+            target: BridgeTarget::Docx,
+            mimetype: WORDPERFECT_MIME,
+            label: "a WordPerfect document",
         };
     }
     by_extension(ext).unwrap_or(match ext {
@@ -317,6 +328,9 @@ fn by_extension(ext: &str) -> Option<Format> {
             mimetype: WORKS_MIME,
             label: "a Microsoft Works database",
         },
+        // WordPerfect names its stream, so this is the fallback for a `.wpd`
+        // whose directory does not (a file saved before the stream was named,
+        // or one cut short): the promise is still the extension's.
         "wpd" => Format::Bridge {
             target: BridgeTarget::Docx,
             mimetype: WORDPERFECT_MIME,
@@ -715,6 +729,26 @@ mod tests {
                 label: "a WordPerfect document",
             }
         );
+    }
+
+    #[test]
+    fn a_wordperfect_stream_names_the_document_whatever_it_is_called() {
+        // The directory is the signature: Corel's writer named the stream the
+        // document lives in, and `.docx` is a name the built-in readers own. A
+        // reader chosen by that name would hand Writer's package reader a binary
+        // stream it cannot open; the bytes say the bridge is the only reader.
+        let wordperfect = compound(&["PerfectOffice_MAIN"]);
+        for name in ["manual.wpd", "manual.docx", "manual.wps"] {
+            assert_eq!(
+                detect_bytes(&named(name), &wordperfect),
+                Format::Bridge {
+                    target: BridgeTarget::Docx,
+                    mimetype: WORDPERFECT_MIME,
+                    label: "a WordPerfect document",
+                },
+                "{name}"
+            );
+        }
     }
 
     #[test]
