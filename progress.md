@@ -13438,3 +13438,38 @@ bridge tests do, which is why the scheduled bridge job matters for it.
 
 **Verification.** `cargo test -p pdfextractor-cli --test compare_mode_test` **16 passed**, 0
 failed, in 7.1 s on this machine, the three bridge controls asserting rather than skipping.
+
+## WordPerfect is named by its stream too
+
+**What was asked.** Recognise WordPerfect documents by their `PerfectOffice_MAIN` stream, with a
+formats test and a compare-gate test for a `.docx`-named one.
+
+**What it found first.** The section above leaves WordPerfect among the compound families the
+extension has to name, "because nothing in their bytes is theirs alone", and that is not true of
+it: Corel's writer names the directory entry the document lives in, and every `.wpd` carries
+`PerfectOffice_MAIN`. So a WordPerfect file called `manual.docx` was read as
+`Format::Unsupported` — "a compound (OLE2) file of no format this reads" — and was neither left out
+nor read: it failed the run on a name it never had, with or without LibreOffice, since an
+unsupported format is never sent to the bridge. The same shape of gap the `Workbook` stream had,
+one family over.
+
+**The change.** `compound_family` now reads the fourth stream: `PerfectOffice_MAIN` is a
+`Format::Bridge` to Writer, after the Word, PowerPoint and BIFF streams and before the extension.
+`by_extension` keeps `.wpd` for a file whose directory does not name the stream (saved before the
+stream was named, or cut short), and the block's own comment — which had counted three byte-named
+families and said WordPerfect's bytes were not its own — now counts four and says why.
+
+**Proven.** `a_wordperfect_stream_names_the_document_whatever_it_is_called` (formats, **17** in the
+crate) pins the bridge for one set of bytes under `manual.wpd`, `manual.docx` and `manual.wps`. In
+the gate, `a_wordperfect_document_named_as_a_package_is_left_out_without_the_bridge` writes those
+bytes as `manual.docx` — LibreOffice only *imports* WordPerfect, so there is no fixture to commit;
+the directory entry is all detection reads — and runs it on a machine named as bridgeless: exit 0,
+`manual.docx: not held · read through LibreOffice`, `1 document(s) not held`, and no output
+written. With the new branch short-circuited for one run both tests fail, so neither passes for
+the wrong reason; and no committed fixture carries the stream name, so no existing document's
+detection moved.
+
+**Verification.** `cargo test -p pdfextractor-formats` **17 passed**; `cargo test -p
+pdfextractor-cli --test compare_mode_test` **17 passed** in 3.1 s; `cargo test -p pdfextractor-ui
+--test formats_test` **1 passed**; `cargo fmt --all --check` clean; `cargo clippy -p
+pdfextractor-formats -p pdfextractor-cli --all-targets -- -D warnings` quiet.

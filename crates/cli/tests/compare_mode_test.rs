@@ -28,13 +28,15 @@
 //! finished document because there is no reading here to finish. Both are left
 //! out before anything is converted, on the same sentence and in the same count.
 //!
-//! The last three ask the same question of a **misnamed** file, because the run
+//! The last few ask the same question of a **misnamed** file, because the run
 //! decides on the bytes and the extension is the only other thing there is to
 //! decide on: a PDF called `report.doc` is read here with or without the bridge,
-//! a Word binary called `notes.pdf` is Writer's to read all the same, and a legacy
-//! workbook called `ledger.docx` is Calc's. A rule that looked at the name would
-//! hold the first to Writer's numbers on a machine that never read it, and convert
-//! the other two into a reader's failure.
+//! a Word binary called `notes.pdf` is Writer's to read all the same, a legacy
+//! workbook called `ledger.docx` is Calc's, and a WordPerfect document called
+//! `manual.docx` is Writer's too, its `PerfectOffice_MAIN` stream being the only
+//! name the family has. A rule that looked at the name would hold the first to
+//! Writer's numbers on a machine that never read it, and convert the others into a
+//! reader's failure.
 
 use pdfextractor_ui::diff::{Measurement, Memory, Numbers};
 use std::collections::BTreeMap;
@@ -139,6 +141,14 @@ impl Scratch {
         )
         .expect("copy the reference");
         Scratch(path)
+    }
+
+    /// Write a document into the scratch folder under `name`, and answer with
+    /// where it landed — for a file whose bytes no fixture can carry.
+    fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.0.join(name);
+        std::fs::write(&path, bytes).expect("write the document");
+        path
     }
 
     /// Copy a repository document into the scratch folder under `name`, and answer
@@ -749,5 +759,56 @@ fn the_misnamed_workbook_is_read_when_the_bridge_is_here() {
     assert!(
         scratch.0.join("out.json").exists(),
         "the workbook was not converted where the bridge is: {logs}"
+    );
+}
+
+/// The bytes of a WordPerfect document: a compound file's header and the directory
+/// entry naming the stream it keeps the document in.
+///
+/// Written here rather than committed, because no tool on this machine can write a
+/// WordPerfect file — LibreOffice only *imports* them — and the directory is all
+/// detection asks: the family has no reader here at all, so the gate decides before
+/// anything would be handed over, and this test is about that decision rather than
+/// about the reading a bridge would make of the stream.
+fn wordperfect() -> Vec<u8> {
+    let mut data = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    data.extend(
+        "PerfectOffice_MAIN"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes),
+    );
+    data.extend_from_slice(&[0, 0]);
+    data
+}
+
+/// The other bridge-only family, named as a package: WordPerfect's
+/// `PerfectOffice_MAIN` stream is what makes the file Writer's to read, and
+/// `.docx` promises a package these bytes are not. A gate that believed the name
+/// would send a binary to the package reader and fail on a document no name of
+/// this machine's readers belongs to.
+#[test]
+fn a_wordperfect_document_named_as_a_package_is_left_out_without_the_bridge() {
+    let scratch = Scratch::empty("wordperfect-named-docx");
+    scratch.remember(&a_memory_no_reading_can_meet("manual"));
+    let input = scratch.write("manual.docx", &wordperfect());
+
+    let output = scratch.compare_at(&input, "/nowhere/soffice");
+    let logs = logs_of(&output);
+
+    assert!(
+        output.status.success(),
+        "a document left to the bridge failed the run: {logs}"
+    );
+    assert!(
+        logs.contains("manual.docx: not held · read through LibreOffice"),
+        "the document was not said to be left out, nor why: {logs}"
+    );
+    assert!(
+        logs.contains("1 document(s) not held"),
+        "the run did not count what it left out: {logs}"
+    );
+    assert!(
+        !scratch.0.join("out.json").exists(),
+        "a WordPerfect document named `.docx` was converted by a run that left it out: {logs}"
     );
 }
