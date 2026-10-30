@@ -846,12 +846,14 @@ LibreOffice's reading anyway (as it is for legacy `.doc`), and the test that hol
 bridge to a real file is opt-in:
 
 ```bash
-PDFE_WORKS_SAMPLES=/path/to/works-wps cargo test -p pdfextractor-cli
+PDFE_WORKS_SAMPLES=/path/to/works-wps/wps cargo test -p pdfextractor-cli
 ```
 
-The three `curl` lines that fetch the corpus are in the main
-[README](../../README.md); the test skips itself when the variable is unset or no
-`soffice` is on `PATH`.
+The `curl` line that fetches the corpus, with the sha256 it is pinned to, is in the
+main [README](../../README.md); the test skips itself when the variable is unset or no
+`soffice` is on `PATH`. The weekly bridge job runs that fetch before its tests, so it
+is the one place the Works reading is asserted — and the corpus still never enters the
+repository.
 
 **`test-data/real/README.md` is itself a compared document.** It has a Docling
 reference of its own, so editing its prose moves the ratchet; notes about the corpus
