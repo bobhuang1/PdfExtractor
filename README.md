@@ -135,9 +135,10 @@ those four through the built-in reader — so the gate never puts the
 runner's LibreOffice build between the ratchet and the numbers the baseline was measured
 with. A run here is what a fresh checkout on a machine without LibreOffice gets. The
 bridge is not left untested for it: `.github/workflows/bridge.yml` runs weekly with
-LibreOffice installed — the re-save tests, the corpus report, the corpus comparison and
-the compare gate over a legacy `.doc`, the four suites whose readings change when the
-bridge is there — on a pinned
+LibreOffice installed — the re-save tests, the corpus report, the corpus comparison,
+the compare gate over a legacy `.doc`, and the Works test against libwps' corpus (which
+the job fetches, since no sample can be committed), the suites whose readings change
+when the bridge is there — on a pinned
 `ubuntu-24.04` image, because those readings depend on the LibreOffice build that writes
 them and `ubuntu-latest` would move it under the ratchet by itself.
 
@@ -958,18 +959,21 @@ golden suite compares against; see [test-data/golden/README.md](test-data/golden
 **Microsoft Works has no committed sample.** libwps' OSS-Fuzz corpus is the only
 public set of real Works documents, and it states no licence for its files — a
 fixture this repository cannot license is one it cannot hold. Fetch it and point
-`PDFE_WORKS_SAMPLES` at it to run the bridge test against 40 real Writer files:
+`PDFE_WORKS_SAMPLES` at the directory the archive unpacks to — 40 real Writer files,
+three of which the test converts — to run it:
 
 ```bash
-for f in wps wks wdb; do
-  curl -sfL -o "$f.zip" "https://downloads.sourceforge.net/project/libwps/corpus/${f}fuzzer_seed_corpus.zip"
-  unzip -oq "$f.zip" -d "works-$f"
-done
-PDFE_WORKS_SAMPLES=$PWD/works-wps cargo test -p pdfextractor-cli
+curl -sfL -o wps.zip "https://downloads.sourceforge.net/project/libwps/corpus/wpsfuzzer_seed_corpus.zip"
+echo "95c919a7506f6be30d90c100df6f5fa29bcf9e75a1bbef7a509de65b42e5aa5a  wps.zip" | sha256sum -c -
+unzip -oq wps.zip -d works-wps
+PDFE_WORKS_SAMPLES=$PWD/works-wps/wps cargo test -p pdfextractor-cli
 ```
 
-Without LibreOffice on `PATH`, that test says so and returns instead of failing:
-the bridge needs a converter, and a machine without one is a supported machine.
+The weekly bridge gate (`.github/workflows/bridge.yml`) runs that fetch itself before
+its tests, pinned to that sha256, so the Works test asserts there every week without a
+byte of the corpus entering the repository. Without LibreOffice on `PATH`,
+that test says so and returns instead of failing: the bridge needs a converter, and a
+machine without one is a supported machine.
 
 ## Layout
 

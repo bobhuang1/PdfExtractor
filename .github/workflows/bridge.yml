@@ -17,6 +17,11 @@
 # * `cli_test` — the re-save tests open a fixture with `soffice`, save it back and
 #   require the re-saved package to read the same as the fixture did. Without
 #   LibreOffice every one of them returns early having asserted nothing.
+# * `cli_test`'s Works test, which needs a real Works document beside the bridge.
+#   No sample is committed — libwps' corpus states no licence for its files — so
+#   the job fetches the corpus from SourceForge, pinned by the archive's sha256,
+#   and points `PDFE_WORKS_SAMPLES` at it. Everywhere else that variable is unset
+#   and the test skips; here it asserts.
 # * `corpus_report_test` — the corpus's four legacy `.doc` documents are read
 #   through the bridge and held to the ratchet's baseline, rather than keeping the
 #   entries they were given when no bridge could be found.
@@ -77,9 +82,29 @@ jobs:
             target
           key: ${{ runner.os }}-bridge-${{ hashFiles('**/Cargo.lock') }}
 
+      # The Works test's document. Fetched rather than committed, because the
+      # corpus states no licence for its files; pinned by the sha256 of the
+      # archive, so a mirror serving other bytes fails here rather than inside a
+      # test that would then be asserting against a corpus nobody measured. The
+      # bytes this pin names were read on this machine with LibreOffice 24.2.7 —
+      # the same build the baseline was measured with — where the test converts
+      # three of the archive's 40 `.wps` files in about 9 s.
+      - name: The Works corpus
+        run: |
+          set -euo pipefail
+          url=https://downloads.sourceforge.net/project/libwps/corpus/wpsfuzzer_seed_corpus.zip
+          pin=95c919a7506f6be30d90c100df6f5fa29bcf9e75a1bbef7a509de65b42e5aa5a
+          mkdir -p "$RUNNER_TEMP/works"
+          curl -sfL --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/works/wps.zip" "$url"
+          echo "$pin  $RUNNER_TEMP/works/wps.zip" | sha256sum -c -
+          unzip -oq "$RUNNER_TEMP/works/wps.zip" -d "$RUNNER_TEMP/works"
+
       # The fixture packages the CLI opens and saves again, held to the readings
-      # their fixtures gave.
+      # their fixtures gave — and, because the corpus is fetched above, a real
+      # Works document read through the bridge instead of skipped.
       - name: The re-save tests
+        env:
+          PDFE_WORKS_SAMPLES: ${{ runner.temp }}/works/wps
         run: cargo test -p pdfextractor-cli --test cli_test --locked
 
       # The four legacy `.doc` documents, read through the bridge and ratcheted.

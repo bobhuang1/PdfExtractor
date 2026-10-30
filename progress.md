@@ -13557,3 +13557,45 @@ for the same suite still said **27**. Both are corrected, and the suite was run 
 **Cross-checked on a runner.** The per-push test gate at `1cef33a` (run 40948692113) independently
 reports **984 passed across 70 suites**, 0 failed, so the headline figure is the runner's as well as
 this machine's. Its clippy and formatting gates are green beside it.
+
+## The Works corpus comes to the gate, not the repository
+
+**What was asked.** Have the bridge gate fetch the libwps corpus at run time, pinned by checksum, so
+the Works test actually asserts on the weekly run without committing unlicensed bytes.
+
+**What was silently wrong.** The weekly job installed LibreOffice and checked it was there, then ran
+`cli_test` with no `PDFE_WORKS_SAMPLES`, so `works_documents_are_read_through_libreoffice` printed
+its visible skip line and returned — the one test in the suite written for the Works family asserted
+nothing in any job, weekly or otherwise. The README had a matching trap: it fetched all three
+archives into `works-<f>` and then pointed `PDFE_WORKS_SAMPLES=$PWD/works-wps`, but the `wps` archive
+unpacks to `works-wps/wps/`, so a reader following the instructions landed on the test's own
+`no .wps under …` panic rather than a run.
+
+**What the gate does now.** A step before the tests fetches
+`https://downloads.sourceforge.net/project/libwps/corpus/wpsfuzzer_seed_corpus.zip`, verifies its
+**sha256** (`95c919a7…aa5a`), unpacks it under `$RUNNER_TEMP/works`, and the re-save step gets
+`PDFE_WORKS_SAMPLES=${{ runner.temp }}/works/wps`. Only the `wps` archive is fetched: the test reads
+only `.wps` files from the directory it is given, so the `wks`/`wdb` archives the README used to
+fetch could never reach an assertion — the README now fetches the one archive too, with the same
+checksum beside it, and says the weekly job runs the same commands.
+
+**Why a checksum rather than a tag or a date.** The licence is what keeps the bytes out of the tree,
+so the copy the assertions were read against has to be pinned by its content: a mirror serving
+something else fails the step naming the file and the expected digest, instead of letting the test
+pass or fail against a corpus nobody measured. Two independent downloads of the archive are
+byte-identical, so the pin names a real file rather than one mirror's answer.
+
+**Measured.** The step's own commands were run here with `RUNNER_TEMP` set the way Actions sets it:
+checksum `OK`, **40** files matched `.wps` after extraction (34 lower-case plus six upper-case — the
+test compares the extension case-insensitively — beside two `.wp` files it correctly ignores), and a
+copy with one byte appended fails the pin (`FAILED … did NOT match`, step exit 1). The re-save step's
+command then ran whole with the variable set: **128 passed, 0 failed, 0 skipped** in 566 s, with
+**no `SKIPPED` line anywhere** — where before this change the same binary printed the Works skip.
+The Works test alone converts three samples in about 9 s on this machine's LibreOffice 24.2.7, the
+same build `bridge.yml` pins its runner to.
+
+**What is still true.** Nothing about the corpus's licence changed, so nothing is committed and
+`PDFE_WORKS_SAMPLES` stays unset on every other machine: `test.yml`, `compare-gate.yml` and local
+runs still skip that test visibly, and the weekly job is the one place the Works reading is
+asserted. `test-data/golden/README.md` and the main README both now say so, beside the corrected
+path.
