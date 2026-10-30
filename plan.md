@@ -98,18 +98,18 @@ pdf-extractor/
 ### Phase 1: Research & Design (1-2 weeks) - Critical
 **Goal**: Reduce risk by clarifying scope and prototyping.
 
-- [ ] **Get Docling JSON schema**: Study [Docling](https://github.com/docling-project/docling) format. Create Rust types matching schema exactly. Collect example JSON outputs for test docs.
-- [ ] **Clarify "from ground up" boundaries**: Document what is allowed vs forbidden (image codecs, zip, wgpu, etc.). Get stakeholder alignment.
-- [ ] **Study PDF spec**: Read PDF 1.7 reference. Understand objects, streams, fonts, graphics.
-- [ ] **Study Tesseract**: Read Tesseract architecture docs, source layout. Focus on: binarization, page segmentation (PSM), layout analysis, line/word/char segmentation, recognition pipeline.
-- [ ] **Prototype PDF parsing**: Parse trivial "hello world" PDF from raw bytes. Validate feasibility.
-- [ ] **Prototype OCR pipeline**: Implement minimal binarization + line detection on simple test image.
+- [x] **Get Docling JSON schema**: Study [Docling](https://github.com/docling-project/docling) format. Create Rust types matching schema exactly. Collect example JSON outputs for test docs. **Done**: `test-data/golden/DoclingDocument.json` is committed and tracked, and `docling_golden_test`'s `schema()` loads it to hold every document we write to it; `the_document_version_is_the_one_the_schema_declares` pins the exporter's revision to the one the schema declares.
+- [x] **Clarify "from ground up" boundaries**: Document what is allowed vs forbidden (image codecs, zip, wgpu, etc.). Get stakeholder alignment. **Done**: `README.md` opens with the rule — commodity infrastructure (DEFLATE, ZIP, XML, image codecs, the GPU API) is reused, while the PDF object model, content-stream interpretation, layout analysis and the Docling export are written here — and each reuse is named by the crate that makes it, in that crate's own manifest (`zip`, `quick-xml`, `flate2`, `image`, `hayro-jpeg2000`, `leptess`, `imageproc`, `resvg`), so a later crate is judged against a stated line rather than the phrase itself.
+- [x] **Study PDF spec**: Read PDF 1.7 reference. Understand objects, streams, fonts, graphics. **Done**: the reader the study was for is the study's record — `crates/pdf-parser` reads objects and object streams (`objects.rs`), streams with `/DecodeParms` predictors and LZW `/EarlyChange` (`filters.rs`), simple and Type0 fonts with `/Widths` and a Type 1 program's own encoding (`encoding.rs`), and content-stream operators composed into the CTM (`content.rs`).
+- [x] **Study Tesseract**: Read Tesseract architecture docs, source layout. Focus on: binarization, page segmentation (PSM), layout analysis, line/word/char segmentation, recognition pipeline. **Done**: the integration the study was for reads its architecture directly — `crates/ocr-engine` drives Tesseract through `leptess` at the page-segmentation mode the run names (`--psm`), parses its TSV into words grouped into lines with a confidence floor, and decides a page's upright turn by scoring those readings — so `README.md` can state what each stage does rather than that a library was called.
+- [x] **Prototype PDF parsing**: Parse trivial "hello world" PDF from raw bytes. Validate feasibility. **Done**: `test-data/hello.pdf` is read end to end from its raw bytes, and the prototype has grown into `crates/pdf-parser`, whose tests are the corpus suites (`real_world_test`, `rotation_test`, `images_test`) rather than the trivial file alone.
+- [x] **Prototype OCR pipeline**: Implement minimal binarization + line detection on simple test image. **Done**: `crates/ocr-engine` runs a page's bitmap through `leptess`, reads Tesseract's TSV into words grouped into lines, and maps those boxes from pixels into points for the layout pass; `crates/ocr-engine/tests/ocr_integration.rs` holds the minimal case, and the photographed-page corpus scores the reading by character and word accuracy under `ocr_quality_test`.
 - [ ] **Define MVP scope**: Decide which features are must-have for first release vs later.
 
 ### Phase 2: Core Types & JSON Schema (3-5 days)
-- [ ] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata)
-- [ ] Implement serialization (serde) to match exact JSON format
-- [ ] Golden tests with known Docling outputs
+- [x] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata) **Done**: `crates/core/src/types.rs` carries `DoclingDocument` and every node the schema names — `Page`/`Size`, `TextItem`, `TableItem`/`TableData`/`TableCell`, `PictureItem` with its `tabular_chart`, `Group`, `KeyValueItem`, the furniture layers, `Provenance` and `Ref` — and the conformance test walks each against the schema's required fields and enum values.
+- [x] Implement serialization (serde) to match exact JSON format **Done**: `crates/json-exporter` writes the model with `serde_json` at the schema's key order and shape, and every committed golden is that output byte for byte.
+- [x] Golden tests with known Docling outputs **Done**: 44 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
 
 ### Phase 3: DOCX Parser (1-2 weeks) — largely done
 - [x] Parse DOCX as OPC package (ZIP of XML), reusing the `zip` crate.
@@ -364,11 +364,11 @@ pdf-extractor/
 - [ ] Feature flag/config to enable/disable
 
 ### Phase 10: Testing, Optimization, Docs (Ongoing)
-- [ ] Golden test suite (input docs → expected Docling JSON)
+- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — thirty tests in the binary: the corpus-wide conformance check, six fixture checks, a version check, twenty comparison units and two acceptance tests.
 - [ ] Performance tests with varied sizes
 - [ ] Cross-platform testing
-- [ ] Error handling tests (malformed docs)
-- [ ] Documentation (architecture, API, usage)
+- [x] Error handling tests (malformed docs) **Done**: `cli_test` holds the inputs a run must refuse rather than crash on — `a_failed_document_appears_in_the_progress_stream` (a `.docx` that is not a package), `an_unsupported_file_errors`, `a_missing_input_errors`, `an_empty_directory_errors` and `a_refused_name_is_explained_by_the_files_bytes` — and each asserts the exit status and the reason, not merely that something failed.
+- [x] Documentation (architecture, API, usage) **Done**: `README.md` documents the architecture (a crate per reader, one shared document tree, a writer per output), the CLI and every flag with its default, and the measurements the claims rest on; `test-data/golden/README.md` documents the corpus, its references and what the ratchet counts.
 - [ ] Benchmarks (CPU/GPU, parallelism scaling)
 
 ## Phase 11: The Next Phase (target v0.2.0) — outputs, OCR, and parity with the field
