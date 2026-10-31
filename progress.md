@@ -13599,3 +13599,53 @@ same build `bridge.yml` pins its runner to.
 runs still skip that test visibly, and the weekly job is the one place the Works reading is
 asserted. `test-data/golden/README.md` and the main README both now say so, beside the corrected
 path.
+
+## The per-push suite stops floating on an image it was not measured against
+
+**What was asked.** Decide whether the per-push test gate should pin its runner image instead
+of floating on `ubuntu-latest`, now that `ubuntu-latest` is migrating to Ubuntu 26.
+
+**Decision: pin it to `ubuntu-24.04` — the image `bridge.yml` already uses — and leave the other
+per-push gates floating.**
+
+**Why this gate and not the others.** The test gate is the only per-push job whose numbers are
+made by a package the image installs. `crates/cli/tests/ocr_quality_test.rs` runs every
+photograph through the real binary and holds the recognised text to eight per-page floors and a
+weighted corpus floor; those floors were recorded with Tesseract 5.3.4 and Leptonica 1.82 (the
+versions `plan.md` pinned), and the file says its margins are "the room a different Tesseract
+build or a reordered line is allowed" — room, not a promise. That a 26 build keeps every page
+above them is not something anyone has measured. The rest of the suite's readings are this
+repository's own: the corpus ratchet and the golden suite compare our parser's output with
+Docling's committed references, the picture fixtures are decoded by in-tree decoders and the
+`image` crate, and both the corpus report and the compare gate measure with `--ocr never`.
+Clippy, rustfmt and the compare gate therefore stay on `ubuntu-latest`: they hold no number a
+package version can move, so a break there on a new image is a real defect, and seeing it on the
+push that finds it is the point.
+
+**What the flip would have done.** A gate whose readings move without a commit saying so turns
+red on an unrelated push — and here the likeliest repair is lowering the floor that just failed,
+which is exactly the regression the floor exists to catch. It would also split the ratchet across
+two rails: the weekly bridge job is pinned at 24.04, so an OCR-driven red on the test gate beside
+a green bridge run could not be attributed to the code or to the image. Pinned, moving the image
+is a commit that re-measures the floors and moves them in the same commit — the rule `bridge.yml`
+already states for LibreOffice.
+
+**Measured, not assumed.** The last test-gate run on `2e933e6`
+([41070351319](https://github.com/bobhuang1/PdfExtractor/actions/runs/41070351319)) prints in its
+`Set up job` step `Image: ubuntu-24.04` and image version `20261025.353`: the alias has not
+flipped yet, so this change is a no-op today and says nothing new about the suite that just
+passed (**984 passed, 0 failed** across 70 binaries). What it changes is the day the alias moves.
+The annotation that raised the question is in that same run — *`ubuntu-latest` starts migrating to
+Ubuntu 26 from 19 October 2026*.
+
+**The trade it takes, written down.** What the pin hides is the engine's *reading*, not the
+package names: the floating clippy gate installs the same WebKitGTK, GTK, appindicator, xdo and
+Tesseract-development packages this job does, so a rename on 26 still fails a push. The two the
+pin does defer are `tesseract-ocr`/`tesseract-ocr-eng`, which only this job installs, and the OCR
+floors themselves — both read on the day the pin moves, in the same commit as the floors. Nothing
+here is 24.04-only in the meantime: the suite is green on this machine's Linux Mint 22.3 with the
+same Tesseract 5.3.4 / Leptonica 1.82, a different distribution from the pinned image.
+
+**Docs.** `test.yml` says beside its LibreOffice paragraph why the image is pinned and which gates
+still float; README's "Build and test" paragraph says the same for a reader running the suite by
+hand.
