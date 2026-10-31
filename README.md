@@ -140,7 +140,14 @@ the compare gate over a legacy `.doc`, and the Works test against libwps' corpus
 the job fetches, since no sample can be committed), the suites whose readings change
 when the bridge is there — on a pinned
 `ubuntu-24.04` image, because those readings depend on the LibreOffice build that writes
-them and `ubuntu-latest` would move it under the ratchet by itself.
+them and `ubuntu-latest` would move it under the ratchet by itself. The per-push suite is
+pinned to the same image for the same kind of reason: its OCR floors were recorded
+against the Tesseract and Leptonica that image installs, and `ubuntu-latest` migrating to
+Ubuntu 26 would swap the engine under those floors — a red run on an unchanged tree whose
+likeliest repair is a lower floor. Moving the image is therefore a commit that re-measures
+them. The gates that hold no number a package version can move — clippy, formatting, and
+the compare gate, which measures with `--ocr never` — still run on `ubuntu-latest`, so a
+package that disappears on a new image fails the push that finds it.
 
 ### Compatibility with Docling
 

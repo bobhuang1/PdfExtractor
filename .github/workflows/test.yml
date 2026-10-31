@@ -37,6 +37,23 @@
 # installed version, which is the same reason the compare gate measures with
 # `--ocr never`. A run here is therefore the suite a fresh checkout on a machine
 # without LibreOffice gets, and the bridge is gated on the machines that have it.
+#
+# The runner image is pinned rather than `ubuntu-latest`, for the reason
+# `bridge.yml` pins its own: this job's readings are made with the image's own
+# packages. The OCR floors in `crates/cli/tests/ocr_quality_test.rs` were recorded
+# with Tesseract 5.3.4 and Leptonica 1.82 — the engine family the 24.04 image
+# installs, and the one every push here has passed against — and their margins are
+# the room a different build is *allowed*, not a promise that any build stays
+# above them. `ubuntu-latest` is 24.04 today (image 20261025) and is migrating to
+# Ubuntu 26, which would exchange the OCR engine under those floors by itself: a
+# red run on an unchanged tree, whose likeliest repair is lowering a floor — the
+# very regression the floors exist to catch. Pinned, moving the image is a change
+# that says so, re-measures the floors and moves them in the same commit.
+#
+# The other per-push gates still float, deliberately. Clippy and rustfmt produce no
+# reading a package version can move, and the compare gate measures with `--ocr
+# never`, so every number it holds comes from this repository's own code; a break
+# there on a new image is a real defect and worth seeing on the push that finds it.
 
 name: the test gate
 
@@ -47,7 +64,7 @@ on:
 jobs:
   test:
     name: every crate, every test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
