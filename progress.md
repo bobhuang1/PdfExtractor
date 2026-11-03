@@ -13676,3 +13676,41 @@ commit does not touch them, since neither produces a reading a package version c
 repair is a decision of its own (pin them, or teach the bindings to parse 1.86).
 
 **Docs.** README's Releases section says which image the Linux artifacts are built on and why.
+
+## The gates that only compile stop floating too
+
+**What was asked.** Pin the clippy and compare gates to `ubuntu-24.04` so `main` stops being red
+on every push, and note the decision.
+
+**What they were failing on.** Not this repository's code. The first push after `ubuntu-latest`
+flipped to 26.04 ([41165221720](https://github.com/bobhuang1/PdfExtractor/actions/runs/41165221720))
+died in `leptonica-sys 0.4.9`'s bindgen step on both gates:
+
+    /usr/include/leptonica/environ.h:70:9: error: unknown type name 'atomic_int'
+    Unable to generate bindings: ClangDiagnostic(...)
+
+The image installs `libleptonica-dev 1.86.0-1`; 24.04 installs `1.82.0-3build4`, which the bindings
+parse. There is no newer `leptonica-sys` to take. Both jobs are pinned to `ubuntu-24.04`, joining
+the test gate, the bridge gate and the release workflow's Linux legs; `rustfmt` still floats,
+because it compiles nothing and so still meets a new image on the push that finds it.
+
+**Why the pin costs no coverage, where the previous note argued it would.** The earlier decision
+kept these two floating so that a package which disappears on a new image would fail the push that
+finds it. That reasoning was about a *missing* package, and it does not survive the observed
+failure: on a new image these jobs do not get as far as the package question, because the build
+script of a shared dependency cannot even generate bindings. A gate that fails before it reads
+anything is not coverage — it is a red push whose cheapest repair is lowering something, which is
+the failure mode the OCR-floor pin was written to avoid. And neither job holds a reading a package
+version can move: clippy lints code, the compare gate measures with `--ocr never`, so every number
+it holds comes from this repository.
+
+**What the pin defers.** `libleptonica-dev`/`libtesseract-dev` and `libclang-dev` renames on 26.04
+would now be seen on the day the pin moves rather than on the push that introduces them. The test
+gate — pinned for the same reason and running the same install — also exercises those names on
+every push, so the loss is in which job says it first.
+
+**Verified.** Both workflows parse and now read `runs-on: ubuntu-24.04`.
+
+**Docs.** Each workflow's header says why it is pinned and what the pin defers; `test.yml`'s
+paragraph about the gates that float is corrected to name rustfmt alone, and README's "Build and
+test" paragraph says the same for a reader running the suite by hand.

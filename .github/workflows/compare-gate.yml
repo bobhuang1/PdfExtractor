@@ -31,6 +31,15 @@
 # here instead would put the runner's LibreOffice build between the ratchet and
 # the numbers the baseline was measured with, which is what `test.yml` explains
 # the per-push gates do not do.
+#
+# The runner image is pinned to `ubuntu-24.04`, for the reason `test.yml` gives about
+# its own: both jobs build the command line, whose build scripts read
+# `libleptonica-dev`, and Ubuntu 26.04's Leptonica 1.86 cannot be bound by the
+# `leptonica-sys` 0.4.9 in the lockfile (`environ.h:70: error: unknown type name
+# 'atomic_int'`). A floating image fails in a build script before a document is
+# converted, so the pin is not hiding a reading the ratchet would otherwise catch —
+# this gate measures with `--ocr never` and every number it holds is this
+# repository's own.
 
 name: the compare gate
 
@@ -41,7 +50,7 @@ on:
 jobs:
   corpus:
     name: every document this runner reads, at or above the whole ratchet
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +93,7 @@ jobs:
 
   ratchet:
     name: the corpus report, worst first
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

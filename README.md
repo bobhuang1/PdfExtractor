@@ -150,9 +150,12 @@ pinned to the same image for the same kind of reason: its OCR floors were record
 against the Tesseract and Leptonica that image installs, and `ubuntu-latest` migrating to
 Ubuntu 26 would swap the engine under those floors — a red run on an unchanged tree whose
 likeliest repair is a lower floor. Moving the image is therefore a commit that re-measures
-them. The gates that hold no number a package version can move — clippy, formatting, and
-the compare gate, which measures with `--ocr never` — still run on `ubuntu-latest`, so a
-package that disappears on a new image fails the push that finds it.
+them. The other per-push gates sit on the same image, and not for a reading: clippy and
+the compare gate both compile the command line, whose build scripts read `libleptonica-dev`,
+and Ubuntu 26.04's Leptonica 1.86 cannot be bound by the `leptonica-sys` release in the
+lockfile — a floating gate there fails in a build script before it reads anything. Only
+formatting floats, since it compiles nothing; it still meets a new image on the push that
+finds it.
 
 ### Compatibility with Docling
 

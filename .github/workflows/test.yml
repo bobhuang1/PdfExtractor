@@ -50,10 +50,14 @@
 # very regression the floors exist to catch. Pinned, moving the image is a change
 # that says so, re-measures the floors and moves them in the same commit.
 #
-# The other per-push gates still float, deliberately. Clippy and rustfmt produce no
-# reading a package version can move, and the compare gate measures with `--ocr
-# never`, so every number it holds comes from this repository's own code; a break
-# there on a new image is a real defect and worth seeing on the push that finds it.
+# The other per-push gates are pinned to the same image, and not for a reading: clippy
+# and the compare gate both compile the command line, whose build scripts read
+# `libleptonica-dev`, and Ubuntu 26.04's Leptonica 1.86 cannot be bound by the
+# `leptonica-sys` 0.4.9 in the lockfile (`environ.h:70: error: unknown type name
+# 'atomic_int'`). Floating there does not catch a defect; it fails in a build script
+# before a lint or a document is read. `release.yml`'s Linux legs are pinned with them,
+# so a shipped binary links the libraries the floors were measured with. Rustfmt alone
+# floats, because it compiles nothing and so still meets a new image on the push.
 
 name: the test gate
 

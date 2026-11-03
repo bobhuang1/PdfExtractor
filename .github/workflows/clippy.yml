@@ -19,6 +19,16 @@
 # libclang, and the desktop shell's default features need the WebKitGTK and GTK
 # development packages. Without them the job fails in a build script, before a
 # single lint is asked.
+#
+# The runner image is pinned to `ubuntu-24.04` rather than `ubuntu-latest`, for the
+# reason `test.yml` pins its own: those build scripts read `libleptonica-dev`, and
+# Ubuntu 26.04 ships Leptonica 1.86, which `leptonica-sys 0.4.9` cannot generate
+# bindings for (`environ.h:70: error: unknown type name 'atomic_int'`, with no newer
+# release of that crate to take). On a floating image the job therefore dies in
+# bindgen before a lint exists — a failure that says nothing about this repository's
+# code, and that turns every push red until someone lowers a standard to quiet it.
+# Clippy holds no reading a package version can move, so the pin costs no coverage:
+# the first push on a new image is where a lint would still be found anyway.
 
 name: the clippy gate
 
@@ -29,7 +39,7 @@ on:
 jobs:
   clippy:
     name: every crate and target, warnings refused
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
