@@ -69,7 +69,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # The Linux leg is pinned to `ubuntu-24.04`, for the reason the test
+          # gate pins its own: the published binary links the Tesseract and
+          # Leptonica the OCR floors were measured with. `ubuntu-latest` now
+          # resolves to Ubuntu 26.04, whose Leptonica 1.86 `leptonica-sys`
+          # cannot bind (`environ.h: unknown type name 'atomic_int'`), so the
+          # build would fail before an artifact existed.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
           - os: windows-latest
@@ -217,7 +223,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned to `ubuntu-24.04` for the same reason as the command line's
+          # Linux leg: the bundle carries that binary and links the same libraries.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
           - os: windows-latest

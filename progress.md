@@ -13649,3 +13649,30 @@ same Tesseract 5.3.4 / Leptonica 1.82, a different distribution from the pinned 
 **Docs.** `test.yml` says beside its LibreOffice paragraph why the image is pinned and which gates
 still float; README's "Build and test" paragraph says the same for a reader running the suite by
 hand.
+
+## The release builds against the Leptonica it was measured on
+
+**What was asked.** Push to GitHub and deploy.
+
+**What deploying meant here.** `v0.1.0` was the only tag and the only release, and the workspace
+still said `0.1.0`, so there was nothing a new tag could publish without a version. The release is
+now `0.2.0`: `Cargo.toml`'s `[workspace.package]` and `crates/ui/tauri.conf.json` moved together —
+the `finalize` job refuses a tag that disagrees with either, and with the `VERSION` each archive
+reports — and `Cargo.lock`'s workspace entries were refreshed with `cargo update --workspace`, so
+every `--locked` build in the workflow still resolves.
+
+**The blocker the alias flip left behind.** `release.yml`'s two Linux legs floated on
+`ubuntu-latest`, which resolved to `Image: ubuntu-26.04` on the first push after the flip
+([41165221720](https://github.com/bobhuang1/PdfExtractor/actions/runs/41165221720)). That image's
+`libleptonica-dev (1.86.0-1)` cannot be bound by `leptonica-sys 0.4.9` — `environ.h:70: error:
+unknown type name 'atomic_int'`, with no newer release of the crate to take — so a tag on that
+image would have built nothing on Linux at all. Both legs are pinned to `ubuntu-24.04`
+(Leptonica `1.82.0-3build4`), the image `test.yml` and `bridge.yml` already use: a published Linux
+binary then links the libraries the OCR floors and the corpus ratchet were measured with, rather
+than whichever Leptonica the alias happens to point at on release day.
+
+**Still open.** The clippy and compare gates float and are red on 26.04 for the same reason; this
+commit does not touch them, since neither produces a reading a package version can move and the
+repair is a decision of its own (pin them, or teach the bindings to parse 1.86).
+
+**Docs.** README's Releases section says which image the Linux artifacts are built on and why.

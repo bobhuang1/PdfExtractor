@@ -3221,14 +3221,14 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-chart"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "quick-xml 0.36.2",
 ]
 
 [[package]]
 name = "pdfextractor-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3262,7 +3262,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -3273,14 +3273,14 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-doc-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "pdfextractor-docx-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3297,7 +3297,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-drawingml"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "pdfextractor-image-parser",
@@ -3309,7 +3309,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-formats"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-image-parser",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-image-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hayro-jpeg2000",
@@ -3328,7 +3328,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-json-exporter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-core",
@@ -3338,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-layout"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3350,7 +3350,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-md-exporter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-metafile"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "zip",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-ocr-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3382,7 +3382,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-pdf-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3395,11 +3395,11 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-picture-formats"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "pdfextractor-pptx-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3414,7 +3414,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-svg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "resvg",
@@ -3424,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-text-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pdfextractor-formats",
  "rfd",
@@ -3447,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "pdfextractor-xlsx-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",

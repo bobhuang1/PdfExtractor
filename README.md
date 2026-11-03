@@ -96,6 +96,11 @@ carries, for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon):
   deb declares `libtesseract5`/`liblept5` for apt to pull, and on macOS
   conversions need `brew install tesseract`.
 
+The Linux artifacts are built on a pinned `ubuntu-24.04` image, as the test gate is:
+a released binary links the Tesseract and Leptonica (1.82) the OCR floors were
+measured with, and `ubuntu-latest` resolving to Ubuntu 26.04 would build it against
+Leptonica 1.86, whose bindings `leptonica-sys` cannot generate yet.
+
 `SHA256SUMS.txt` covers every file of the release. The artifacts are **not
 code-signed** — signing keys are not in this repository — so Gatekeeper and
 SmartScreen will ask the first time you open one. The workflow also runs by
