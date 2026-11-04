@@ -13714,3 +13714,45 @@ every push, so the loss is in which job says it first.
 **Docs.** Each workflow's header says why it is pinned and what the pin defers; `test.yml`'s
 paragraph about the gates that float is corrected to name rustfmt alone, and README's "Build and
 test" paragraph says the same for a reader running the suite by hand.
+
+## The attribution comes out of every commit message
+
+**What was asked.** Remove Codebuff as co-author/contributor from the project, flattening commits if
+that was what it took.
+
+**What it turned out to be.** No file ever named it — `Cargo.toml` carries `authors =
+["PdfExtractor Team"]` and the tree had zero mentions — but all 54 commit messages ended with two
+lines GitHub reads as authorship:
+
+    🤖 Generated with Codebuff
+    Co-Authored-By: Codebuff <noreply@codebuff.com>
+
+So this was a message rewrite, not a flattening: no commit needed squashing and none was lost.
+
+**What was done.** A `--msg-filter` rewrite over `main` and both release tags dropped exactly those
+lines, nothing else. History shape is untouched (52 commits before, 52 after; every tree identical to
+its original, `main^{tree}` unchanged) and every author, committer and date tuple is byte-identical —
+only the message bodies differ, and only by the attribution.
+
+| ref | before | after |
+|---|---|---|
+| `main` | `00040a8` | `c2e32ed` |
+| `v0.2.0` tag → commit | `7ed6a78` → `2af2e4e` | `c5d30fd` → `ae4f14d` |
+| `v0.1.0` tag → commit | `5b4e413` → `e6c0520` | `bf6c40b` → `e5b7044` |
+
+Both annotated tags were re-pointed rather than replaced — names and tag messages kept — and the
+published `v0.2.0` release kept its published state and all eight assets: the binaries were built from
+a tree that did not change, only from a commit whose message did.
+
+**How it was checked before anything was pushed.** Each of the 52 new messages was asserted equal to
+its predecessor with only those two lines (and the blank line they left) removed; the push ran only
+after all 52 agreed. Afterwards `git log --all` and the remote head both return zero occurrences, the
+local-only `backup/pre-background-split` branch was rewritten the same way so no ref still carries
+it, and GitHub's contributor list for the repository is `bobhuang1` alone.
+
+**What it cost.** Every pushed SHA changed: run history for the old SHAs no longer matches the branch,
+and any other clone has to re-fetch rather than merge. Moving the tags also re-fired `release.yml`
+for both of them, because it triggers on `v*`; those runs were cancelled before they could republish
+anything, and two empty stray drafts they left (one from today, one left over from October's v0.1.0
+run) were deleted. The current head's own gates were re-run and the older per-push workflows that
+fired on the moved tags fail on `ubuntu-latest`, which is only the pin those commits predate.
