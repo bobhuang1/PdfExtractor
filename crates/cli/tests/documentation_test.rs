@@ -16,7 +16,11 @@
 //! The golden reference and baseline counts are held the same way: the number
 //! of `docling/*.json` references the plan, README and golden README state must
 //! equal the files on disk, and README's remembered baseline must equal the
-//! entries in `compare-baseline.json`.
+//! entries in `compare-baseline.json`. The same files split those references in
+//! two: a reference named after a document in `test-data/real` is a corpus
+//! document, one that is not is a fixture beside the corpus (`test-data/*`).
+//! Both counts, and the sum the reference count is made of, are read off the
+//! disk, so an added or renamed document cannot leave the prose behind.
 //!
 //! The workspace total is the Unix suite, because `crates/ui/tests/job_test.rs`
 //! is Unix-only. On another platform only that total is skipped; the target
@@ -69,7 +73,12 @@ fn listed_tests(root: &Path, args: &[&str]) -> Vec<String> {
 }
 
 /// A count written as digits (`1,046`) or as an English word (`eight`).
+///
+/// Prose often carries the count inside punctuation — `(37 corpus documents` —
+/// so the punctuation around the number is trimmed before it is read.
 fn count_from(token: &str) -> Option<usize> {
+    let token = token.trim_matches(|c: char| !c.is_alphanumeric() && c != ',' && c != '-');
+
     if let Ok(count) = token.replace(',', "").parse::<usize>() {
         return Some(count);
     }
@@ -156,18 +165,79 @@ fn assert_count(what: &str, documented: usize, listed: usize) {
     );
 }
 
+/// The file stems directly inside `dir`, ignoring directories.
+fn document_stems(dir: &Path) -> Vec<String> {
+    let mut stems: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", dir.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect();
+    stems.sort();
+    stems
+}
+
+/// The stems of the committed Docling references (`test-data/golden/docling/*.json`).
+fn reference_stems(root: &Path) -> Vec<String> {
+    let dir = root.join("test-data/golden/docling");
+    let mut stems: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", dir.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect();
+    stems.sort();
+    stems
+}
+
 /// The number of committed Docling references (`test-data/golden/docling/*.json`).
 fn reference_count(root: &Path) -> usize {
-    std::fs::read_dir(root.join("test-data/golden/docling"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("json")
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    reference_stems(root).len()
+}
+
+/// The corpus documents (`test-data/real`), every one of which must have a
+/// reference.
+fn corpus_document_count(root: &Path) -> usize {
+    let corpus = document_stems(&root.join("test-data/real"));
+    let references = reference_stems(root);
+    let missing: Vec<&String> = corpus
+        .iter()
+        .filter(|stem| !references.iter().any(|name| name == *stem))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the golden set has no Docling reference for corpus document(s) {missing:?}"
+    );
+    corpus.len()
+}
+
+/// The references that name no corpus document — the fixtures beside the corpus
+/// (`inventory.xlsx`, `q3_review_impress.odp`, …) — each of which must be a file
+/// committed under `test-data/`.
+fn fixture_count(root: &Path) -> usize {
+    let corpus = document_stems(&root.join("test-data/real"));
+    let fixtures: Vec<String> = reference_stems(root)
+        .into_iter()
+        .filter(|stem| !corpus.contains(stem))
+        .collect();
+    let present = document_stems(&root.join("test-data"));
+    let missing: Vec<&String> = fixtures
+        .iter()
+        .filter(|stem| !present.iter().any(|name| name == *stem))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these Docling references name no fixture under test-data/: {missing:?}"
+    );
+    fixtures.len()
 }
 
 /// The number of documents the ratchet baseline remembers.
@@ -207,10 +277,18 @@ fn documented_test_counts_match_the_test_list() {
         .unwrap_or_else(|error| panic!("could not read {}: {error}", golden_readme_path.display()));
     let references = reference_count(&root);
     let baseline_documents = baseline_document_count(&root);
+    let corpus_documents = corpus_document_count(&root);
+    let fixtures = fixture_count(&root);
     assert!(
-        references > 0 && baseline_documents > 0,
-        "a reference or baseline count came back empty, so this check would pass without \
-         checking anything"
+        references > 0 && baseline_documents > 0 && corpus_documents > 0 && fixtures > 0,
+        "a reference, baseline, corpus or fixture count came back empty, so this check \
+         would pass without checking anything"
+    );
+    assert_eq!(
+        references,
+        corpus_documents + fixtures,
+        "the {references} committed references are not the {corpus_documents} corpus \
+         documents plus the {fixtures} fixtures beside them"
     );
 
     let workspace = listed_tests(&root, &["test", "--workspace"]);
@@ -321,5 +399,31 @@ fn documented_test_counts_match_the_test_list() {
         "README.md",
         count_after_in(&readme, "docling · memory: ", "README.md"),
         baseline_documents,
+    );
+    assert_repository_count(
+        "the corpus documents",
+        "README.md",
+        count_before_in(&readme, " corpus documents", "README.md"),
+        corpus_documents,
+    );
+    assert_repository_count(
+        "the corpus documents",
+        "test-data/golden/README.md",
+        count_after_in(
+            &golden_readme,
+            "every one of the ",
+            "test-data/golden/README.md",
+        ),
+        corpus_documents,
+    );
+    assert_repository_count(
+        "the fixtures beside the corpus",
+        "test-data/golden/README.md",
+        count_before_in(
+            &golden_readme,
+            "fixtures beside the corpus",
+            "test-data/golden/README.md",
+        ),
+        fixtures,
     );
 }

@@ -9,8 +9,10 @@
 //! saved: a sheet is a page, a sheet group holds its tables, and the command
 //! line's page range names sheets. A cell's `draw:frame` is read too: a
 //! `draw:image` is a picture and a `draw:object` is an embedded chart, each
-//! placed in the cell that anchors its frame.
+//! placed in the cell that anchors its frame. A cell's comment is read as the
+//! remark it is, with the author and time its `office:annotation` states, rather
+//! than folded into the cell's text or skipped.
 
 mod parser;
 
-pub use parser::OdsDocument;
+pub use parser::{OdsDocument, SheetAnnotation};

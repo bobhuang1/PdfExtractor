@@ -1,0 +1,158 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/2'
+  - $ref: '#/texts/3'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/tables/1'
+  content_layer: body
+  label: unspecified
+  name: rich_cell_group_0_1_0
+  parent:
+    $ref: '#/tables/0'
+  self_ref: '#/groups/0'
+key_value_items: []
+name: notes_odt.odt
+origin:
+  binary_hash: 1769500768122919503
+  filename: notes_odt.odt
+  mimetype: application/vnd.oasis.opendocument.text
+pages: {}
+pictures: []
+schema_name: DoclingDocument
+tables:
+- children:
+  - $ref: '#/groups/0'
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 1
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Outer left
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      ref:
+        $ref: '#/groups/0'
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: |-
+        Inner A1
+        Inner B1
+        Inner A2
+        Inner B2
+  label: table
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/tables/0'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Inner A1
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Inner B1
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: true
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: Inner A2
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Inner B2
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov: []
+  self_ref: '#/tables/1'
+texts:
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Notes and nesting
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Notes and nesting
+- children: []
+  content_layer: body
+  label: text
+  orig: A note hangs off this sentence and the paragraph continues after it.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: A note hangs off this sentence and the paragraph continues after it.
+- children: []
+  content_layer: body
+  label: text
+  orig: A closing paragraph.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: A closing paragraph.
+- children: []
+  content_layer: body
+  label: footnote
+  orig: The footnote's own text.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/3'
+  text: The footnote's own text.
+version: 1.10.0

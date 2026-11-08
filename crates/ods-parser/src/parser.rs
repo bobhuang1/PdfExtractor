@@ -22,8 +22,12 @@
 //! uses. A picture keeps its media type and bytes; a chart is read from its
 //! object's `content.xml` as the same data table a worksheet's chart is.
 //!
-//! Not read yet: notes and annotations, comments and tracked changes, and the
-//! formula itself — only the value it displays is read.
+//! A cell's comment is read as well: the `office:annotation` Calc hangs on a
+//! cell keeps its author in `dc:creator`, its time in `dc:date` and its words in
+//! paragraphs, and it is a remark about the cell rather than the cell's text.
+//!
+//! Not read yet: tracked changes, and the formula itself — only the value it
+//! displays is read.
 
 use anyhow::{Context, Result};
 use quick_xml::events::{BytesStart, Event};
@@ -51,6 +55,28 @@ const ROW_PIXELS: f64 = 20.0;
 #[derive(Debug, Clone)]
 pub struct OdsDocument {
     pub sheets: Vec<Sheet>,
+    /// The comments the workbook hangs on its cells, in the order they are read.
+    pub annotations: Vec<SheetAnnotation>,
+}
+
+/// A comment on a cell.
+///
+/// It is about the cell, not a part of it: Calc writes it as an
+/// `office:annotation` beside the cell's paragraphs, so the words are a remark
+/// on the sheet rather than the cell's content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetAnnotation {
+    /// The sheet's number in the workbook, 1-based — the page it is read as.
+    pub sheet: usize,
+    /// The cell's row and column on the sheet, both 0-based.
+    pub row: usize,
+    pub col: usize,
+    /// The name the comment's `dc:creator` states, when it states one.
+    pub author: Option<String>,
+    /// The time its `dc:date` states, when it states one.
+    pub date: Option<String>,
+    /// Its words, one paragraph per line.
+    pub text: String,
 }
 
 impl OdsDocument {
@@ -70,8 +96,10 @@ impl OdsDocument {
         // A hidden sheet is named by its style, and the style is stated in the
         // same part: read the whole part before any sheet is.
         let hidden = hidden_sheet_styles(&content)?;
+        let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects)?;
         Ok(Self {
-            sheets: read_sheets(&content, &hidden, &media, &objects)?,
+            sheets,
+            annotations,
         })
     }
 }
@@ -165,17 +193,20 @@ fn read_sheets(
     hidden_styles: &HashSet<String>,
     media: &HashMap<String, Vec<u8>>,
     objects: &HashMap<String, Vec<u8>>,
-) -> Result<Vec<Sheet>> {
+) -> Result<(Vec<Sheet>, Vec<SheetAnnotation>)> {
     let mut pull = Pull::new(xml);
     let mut sheets = Vec::new();
     let mut frames = Vec::new();
+    let mut annotations = Vec::new();
     loop {
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table" => {
                 let index = sheets.len() + 1;
-                let (sheet, sheet_frames) = read_sheet(&mut pull, &attrs, index, hidden_styles)?;
+                let (sheet, sheet_frames, sheet_annotations) =
+                    read_sheet(&mut pull, &attrs, index, hidden_styles)?;
                 sheets.push(sheet);
                 frames.push(sheet_frames);
+                annotations.extend(sheet_annotations);
             }
             Tok::Eof => break,
             _ => {}
@@ -191,7 +222,7 @@ fn read_sheets(
         sheet.pictures = pictures;
         sheet.charts = charts;
     }
-    Ok(sheets)
+    Ok((sheets, annotations))
 }
 
 /// One `table:table`: its name, whether it is hidden, and the tables its cells
@@ -201,7 +232,7 @@ fn read_sheet(
     attrs: &[(String, String)],
     index: usize,
     hidden_styles: &HashSet<String>,
-) -> Result<(Sheet, Vec<Frame>)> {
+) -> Result<(Sheet, Vec<Frame>, Vec<SheetAnnotation>)> {
     let name = field(attrs, "name")
         .filter(|name| !name.is_empty())
         .map(str::to_string)
@@ -215,13 +246,15 @@ fn read_sheet(
     let mut covered: HashSet<(usize, usize)> = HashSet::new();
     let mut row = 0usize;
     let mut frames = Vec::new();
+    let mut annotations = Vec::new();
 
     loop {
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table-row" => {
                 let repeat = count(&attrs, "number-rows-repeated").min(MAX_REPEAT);
                 let mut row_frames = Vec::new();
-                let cells = read_row(pull, row, &mut row_frames)?;
+                let mut row_annotations = Vec::new();
+                let cells = read_row(pull, row, &mut row_frames, &mut row_annotations)?;
                 for copy in 0..repeat {
                     for cell in &cells {
                         place(&mut grid, &mut covered, row + copy, cell);
@@ -230,6 +263,18 @@ fn read_sheet(
                         let mut frame = frame.clone();
                         frame.row += copy;
                         frames.push(frame);
+                    }
+                    // A comment is repeated with the row it is on, so it stays
+                    // on the cell it was written against.
+                    for note in &row_annotations {
+                        annotations.push(SheetAnnotation {
+                            sheet: index,
+                            row: row + copy,
+                            col: note.col,
+                            author: note.author.clone(),
+                            date: note.date.clone(),
+                            text: note.text.clone(),
+                        });
                     }
                 }
                 row = row.saturating_add(repeat);
@@ -249,6 +294,7 @@ fn read_sheet(
             charts: Vec::new(),
         },
         frames,
+        annotations,
     ))
 }
 
@@ -289,6 +335,78 @@ impl Frame {
             top + self.height * PIXELS_PER_INCH / ROW_PIXELS,
         ]
     }
+}
+
+/// A comment found in a cell, before the sheet and row it sits on are known.
+#[derive(Clone)]
+struct CellAnnotation {
+    col: usize,
+    author: Option<String>,
+    date: Option<String>,
+    text: String,
+}
+
+/// Repeat one cell's frames and comments for the copies
+/// `table:number-columns-repeated` asks for, each in its own column.
+fn repeat_cell(
+    frames: &mut Vec<Frame>,
+    annotations: &mut Vec<CellAnnotation>,
+    cell_frames: &[Frame],
+    cell_annotations: &[CellAnnotation],
+    copy: usize,
+    col_span: usize,
+) {
+    for frame in cell_frames {
+        let mut frame = frame.clone();
+        frame.col = frame.col.saturating_add(copy * col_span);
+        frames.push(frame);
+    }
+    for annotation in cell_annotations {
+        let mut annotation = annotation.clone();
+        annotation.col = annotation.col.saturating_add(copy * col_span);
+        annotations.push(annotation);
+    }
+}
+
+/// Read one `office:annotation`: its author, its time and its words.
+///
+/// Calc writes a cell's comment as an `office:annotation` beside the cell's
+/// paragraphs, with the name in `dc:creator`, the time in `dc:date` and the
+/// words in one or more paragraphs joined by a newline. An annotation with no
+/// words is no remark and is not one.
+fn read_annotation(
+    pull: &mut Pull<'_>,
+) -> Result<Option<(Option<String>, Option<String>, String)>> {
+    let mut author = None;
+    let mut date = None;
+    let mut paragraphs: Vec<String> = Vec::new();
+    loop {
+        match pull.next()? {
+            Tok::Start { name, .. } => match name.as_str() {
+                "creator" => author = Some(read_inline(pull)?.trim().to_string()),
+                "date" => date = Some(read_inline(pull)?.trim().to_string()),
+                "p" | "h" => paragraphs.push(read_inline(pull)?),
+                _ => skip_element(pull)?,
+            },
+            Tok::End { .. } => break,
+            Tok::Eof => break,
+            _ => {}
+        }
+    }
+    let text = paragraphs
+        .iter()
+        .map(|paragraph| paragraph.trim())
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((
+        author.filter(|author| !author.is_empty()),
+        date.filter(|date| !date.is_empty()),
+        text,
+    )))
 }
 
 /// One cell of the grid a sheet is read onto.
@@ -333,7 +451,12 @@ fn place(
 /// the column without becoming a cell of its own. An empty repeated cell is the
 /// filler a producer writes for the rest of the sheet: it moves the column on
 /// without costing a cell.
-fn read_row(pull: &mut Pull<'_>, row: usize, frames: &mut Vec<Frame>) -> Result<Vec<RowCell>> {
+fn read_row(
+    pull: &mut Pull<'_>,
+    row: usize,
+    frames: &mut Vec<Frame>,
+    annotations: &mut Vec<CellAnnotation>,
+) -> Result<Vec<RowCell>> {
     let mut cells = Vec::new();
     let mut col = 0usize;
     loop {
@@ -344,14 +467,25 @@ fn read_row(pull: &mut Pull<'_>, row: usize, frames: &mut Vec<Frame>) -> Result<
                     let col_span = count(&attrs, "number-columns-spanned");
                     let repeat = count(&attrs, "number-columns-repeated");
                     let mut cell_frames = Vec::new();
-                    let text = read_cell(pull, &attrs, row, col, &mut cell_frames)?;
+                    let mut cell_annotations = Vec::new();
+                    let text = read_cell(
+                        pull,
+                        &attrs,
+                        row,
+                        col,
+                        &mut cell_frames,
+                        &mut cell_annotations,
+                    )?;
                     if text.trim().is_empty() && row_span == 1 && col_span == 1 {
                         for copy in 0..repeat.min(MAX_REPEAT) {
-                            for frame in &cell_frames {
-                                let mut frame = frame.clone();
-                                frame.col = frame.col.saturating_add(copy * col_span);
-                                frames.push(frame);
-                            }
+                            repeat_cell(
+                                frames,
+                                annotations,
+                                &cell_frames,
+                                &cell_annotations,
+                                copy,
+                                col_span,
+                            );
                         }
                         col = col.saturating_add(repeat);
                         continue;
@@ -363,11 +497,14 @@ fn read_row(pull: &mut Pull<'_>, row: usize, frames: &mut Vec<Frame>) -> Result<
                             row_span,
                             col_span,
                         });
-                        for frame in &cell_frames {
-                            let mut frame = frame.clone();
-                            frame.col = frame.col.saturating_add(copy * col_span);
-                            frames.push(frame);
-                        }
+                        repeat_cell(
+                            frames,
+                            annotations,
+                            &cell_frames,
+                            &cell_annotations,
+                            copy,
+                            col_span,
+                        );
                         col = col.saturating_add(col_span);
                     }
                 }
@@ -430,6 +567,7 @@ fn read_cell(
     row: usize,
     col: usize,
     frames: &mut Vec<Frame>,
+    annotations: &mut Vec<CellAnnotation>,
 ) -> Result<String> {
     let mut paragraphs: Vec<String> = Vec::new();
     let mut loose = String::new();
@@ -444,9 +582,21 @@ fn read_cell(
                 "s" => loose.push_str(&" ".repeat(count(&attrs, "c"))),
                 "tab" => loose.push('\t'),
                 "line-break" => loose.push('\n'),
-                // A comment is not the cell's text; a frame's words are the
-                // frame's, and the frame itself is a picture or a chart.
-                "annotation" | "note" | "object" => skip_element(pull)?,
+                // A cell's comment is not its text: it is read as the remark
+                // it is, with the author and time the file states, and the cell
+                // keeps only what it displays. A frame's words are the frame's,
+                // and the frame itself is a picture or a chart.
+                "annotation" => {
+                    if let Some((author, date, text)) = read_annotation(pull)? {
+                        annotations.push(CellAnnotation {
+                            col,
+                            author,
+                            date,
+                            text,
+                        });
+                    }
+                }
+                "note" | "object" => skip_element(pull)?,
                 "frame" => read_frame(pull, &attrs, row, col, frames)?,
                 _ => {}
             },
@@ -1059,6 +1209,51 @@ mod tests {
             ],
             "the empty slot after the row's last cell is padding, not a cell"
         );
+    }
+
+    #[test]
+    fn a_cells_comment_is_a_remark_not_its_text() {
+        let body = r#"
+            <table:table table:name="Review">
+              <table:table-row>
+                <table:table-cell><text:p>Widget</text:p></table:table-cell>
+                <table:table-cell office:value-type="float" office:value="2">
+                  <office:annotation office:display="true">
+                    <dc:creator>Ada Lovelace</dc:creator>
+                    <dc:date>2024-03-05T09:15:00</dc:date>
+                    <text:p>Checked against the invoice.</text:p>
+                  </office:annotation>
+                  <text:p>2</text:p>
+                </table:table-cell>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell/>
+                <table:table-cell>
+                  <office:annotation office:display="true">
+                    <dc:creator>Grace Hopper</dc:creator>
+                    <dc:date>2024-03-06T10:30:00</dc:date>
+                    <text:p>An empty cell has a remark too.</text:p>
+                  </office:annotation>
+                </table:table-cell>
+              </table:table-row>
+            </table:table>"#;
+        let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
+        assert_eq!(
+            texts(&document.sheets[0]),
+            ["Widget", "2"],
+            "a comment is not the cell's text"
+        );
+        assert_eq!(document.annotations.len(), 2, "both comments were read");
+        let first = &document.annotations[0];
+        assert_eq!(first.sheet, 1);
+        assert_eq!((first.row, first.col), (0, 1));
+        assert_eq!(first.author.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(first.date.as_deref(), Some("2024-03-05T09:15:00"));
+        assert_eq!(first.text, "Checked against the invoice.");
+        // A comment on a cell with no text is still a remark about it.
+        let second = &document.annotations[1];
+        assert_eq!((second.row, second.col), (1, 1));
+        assert_eq!(second.text, "An empty cell has a remark too.");
     }
 
     #[test]

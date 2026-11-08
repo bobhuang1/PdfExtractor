@@ -1391,6 +1391,15 @@ fn chunk_options(args: &Args) -> anyhow::Result<pdfextractor_md_exporter::chunks
     if args.chunks_tokenizer_encoding.is_some() && args.chunks_tokenizer.is_none() {
         anyhow::bail!("--chunks-tokenizer-encoding requires --chunks-tokenizer");
     }
+    // A tokenizer is a token budget, and only hybrid packing spends one:
+    // hierarchical chunks are made per item. Passing one anyway used to be
+    // silent, which reads as a budget that was applied when it was not.
+    if args.chunks_tokenizer.is_some() && args.chunks_type != ChunkType::Hybrid {
+        tracing::warn!(
+            "--chunks-tokenizer only counts tokens for --chunks-type hybrid; \
+             hierarchical chunks ignore it"
+        );
+    }
     let tokenizer = match args.chunks_tokenizer.as_deref() {
         Some(path) => {
             let encoding = args
@@ -2354,6 +2363,9 @@ fn convert_xlsx(
     let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
     convert_workbook(
         &parsed.sheets,
+        // The XLSX reader does not read a cell's comment yet, so there is none
+        // to place on the notes layer.
+        &[],
         &data,
         path,
         output_path,
@@ -2376,6 +2388,7 @@ fn convert_ods(
     let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes(&data)?;
     convert_workbook(
         &parsed.sheets,
+        &parsed.annotations,
         &data,
         path,
         output_path,
@@ -2390,9 +2403,13 @@ fn convert_ods(
 /// shape Docling's own sheet backend produces: a `sheet` group per worksheet
 /// with the worksheet's tables beneath it, and a provenance box in cell
 /// indices (0-based, top-left origin). A hidden worksheet stays in the
-/// document as the `invisible` layer rather than being dropped.
+/// document as the `invisible` layer rather than being dropped. A cell's
+/// comment is a remark about the sheet rather than part of its grid, so it is
+/// placed on the notes layer — one `comment_section` group per cell, named for
+/// the cell — rather than becoming words in a table.
 fn convert_workbook(
     workbook: &[pdfextractor_xlsx_parser::Sheet],
+    annotations: &[pdfextractor_ods_parser::SheetAnnotation],
     data: &[u8],
     path: &Path,
     output_path: &Path,
@@ -2597,6 +2614,30 @@ fn convert_workbook(
                 }
             }
         }
+        // A cell's comment is about the cell, not a place in it: each is one
+        // item on the notes layer, in a `comment_section` group of its own,
+        // named for the cell it was written against — the shape a deck's
+        // comments take. A page range leaves out the comments of the sheets it
+        // leaves out.
+        for annotation in annotations
+            .iter()
+            .filter(|annotation| annotation.sheet == page_no as usize)
+        {
+            let comment_group = builder.add_comment_group(&format!(
+                "comment-sheet{}-{}-{}",
+                page_no, annotation.row, annotation.col
+            ));
+            builder.add_comment_in(
+                &comment_text_parts(
+                    annotation.author.as_deref(),
+                    None,
+                    annotation.date.as_deref(),
+                    &annotation.text,
+                ),
+                &comment_group,
+            );
+        }
+
         // The page is the sheet's own extent in cells: the largest right and
         // bottom edge of anything on it, or 0×0 for an empty worksheet.
         builder.add_page(page_no, width, height);

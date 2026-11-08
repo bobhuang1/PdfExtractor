@@ -249,8 +249,7 @@ fn a_page_range_selects_a_sheet() {
     assert!(!out.status.success(), "a range past the last sheet passed");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("names no sheet")
-            && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
+        stderr.contains("names no sheet") && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
         "the refusal does not name the sheets there are: {stderr}"
     );
     assert!(!ws.join("none.json").exists(), "a refused run wrote a file");
@@ -436,5 +435,105 @@ fn a_file_that_is_not_a_package_is_refused_as_such() {
         !output.exists(),
         "a refused file still wrote {}",
         output.display()
+    );
+}
+
+/// A cell's comment is about the sheet rather than part of its grid: the
+/// workbook's comments land on the notes layer, one `comment_section` group per
+/// cell, named for the cell, and the cell keeps only its text — so a reading
+/// that did not ask for notes never sees a comment pretending to be a cell.
+#[test]
+fn a_sheets_cell_comments_land_on_the_notes_layer() {
+    let ws = Workspace::new("annotations");
+    let path = test_data("annotations_calc.ods");
+    let output = ws.join("annotations_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+        "--to",
+        "md",
+    ]);
+    let doc = json_of(&output);
+
+    let notes: Vec<&str> = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "[author: Ada Lovelace, time: 2024-03-05T00:00:00]: Checked against the invoice.",
+            "[author: Grace Hopper, time: 2024-03-06T00:00:00]: An empty cell's remark.",
+        ],
+        "the cell comments are on the notes layer, with the author and time the file states"
+    );
+
+    let body: Vec<&str> = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .filter(|item| item["content_layer"] != "notes")
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert!(
+        body.iter()
+            .all(|text| !text.contains("Checked against the invoice.")),
+        "a comment was written as a cell's text: {body:?}"
+    );
+
+    let comments: Vec<(&str, &str)> = doc["groups"]
+        .as_array()
+        .expect("a group list")
+        .iter()
+        .filter(|group| group["label"] == "comment_section")
+        .map(|group| {
+            (
+                group["name"].as_str().expect("a comment name"),
+                group["content_layer"].as_str().expect("a layer"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            ("comment-sheet1-1-1", "notes"),
+            ("comment-sheet1-3-2", "notes"),
+        ],
+        "each comment has its own notes-layer group, named for the cell"
+    );
+
+    // A reading that leaves the notes layer out does not show the remarks; one
+    // that asks for it writes each as a comment, not as a cell of the sheet.
+    let markdown = std::fs::read_to_string(ws.join("annotations_calc.md"))
+        .expect("the Markdown without notes");
+    assert!(
+        !markdown.contains("Checked against the invoice."),
+        "a comment was read without --include-notes: {markdown}"
+    );
+
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        ws.join("with_notes.md").to_str().expect("a UTF-8 path"),
+        "--to",
+        "md",
+        "--include-notes",
+    ]);
+    let with_notes =
+        std::fs::read_to_string(ws.join("with_notes.md")).expect("the Markdown with notes");
+    assert!(
+        with_notes.contains(
+            "> **Comment:** [author: Ada Lovelace, time: 2024-03-05T00:00:00]: \
+             Checked against the invoice."
+        ),
+        "the comment is not written as a remark: {with_notes}"
     );
 }

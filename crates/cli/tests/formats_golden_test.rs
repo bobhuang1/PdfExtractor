@@ -50,6 +50,7 @@ const CASES: &[&str] = &[
     "chart_deck.pptx",         // a deck whose only picture is a chart: no file to place
     "inventory_calc.ods",      // a workbook whose sheets are pages, its merge a span
     "brief_odt.odt",           // a Writer document: a flow with a picture, read as one
+    "notes_odt.odt",           // a Writer document with a footnote and a table inside a cell
     "rtf_bitmap.rtf",          // a word processor's own RTF export, control words and all
 ];
 
@@ -79,6 +80,7 @@ fn input_of(name: &str) -> PathBuf {
         | "chart_deck.pptx"
         | "inventory_calc.ods"
         | "brief_odt.odt"
+        | "notes_odt.odt"
         | "rtf_bitmap.rtf" => root.join(name),
         _ => root.join("real").join(name),
     }

@@ -231,6 +231,60 @@ fn a_real_tokenizer_file_counts_the_hybrid_budget() {
     );
 }
 
+/// A tokenizer only sets a token budget, which hierarchical chunks — the
+/// default — never spend. Passing one without `--chunks-type hybrid` warns and
+/// still writes the chunks, and a hybrid run says nothing.
+#[test]
+fn a_tokenizer_without_hybrid_chunks_is_warned_about() {
+    let ws = Workspace::new("tokenizer-hierarchical");
+    let input = ws.write("report.md", b"# Report\n\nabcdefgh abcdefgh.\n");
+    let tokenizer = tokenizer_fixture("tokenizer-mini.json");
+
+    let out = run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--to",
+        "chunks",
+        "--chunks-tokenizer",
+        tokenizer.to_str().unwrap(),
+    ]);
+    let logs = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        logs.contains("--chunks-tokenizer") && logs.contains("hierarchical chunks ignore it"),
+        "the run did not warn that hierarchical chunks ignore the tokenizer: {logs}"
+    );
+    assert!(
+        !records_of(&ws.join("report.jsonl")).is_empty(),
+        "the warned run wrote no chunks"
+    );
+
+    let out = run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--to",
+        "chunks",
+        "--chunks-type",
+        "hybrid",
+        "--chunks-max-tokens",
+        "8",
+        "--chunks-tokenizer",
+        tokenizer.to_str().unwrap(),
+    ]);
+    let logs = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !logs.contains("hierarchical chunks ignore it"),
+        "a hybrid run warned about a tokenizer it uses: {logs}"
+    );
+}
+
 /// Every accepted file format is loaded by the real binary and used for a
 /// hybrid run, not just the Hugging Face JSON the other tests exercise.
 #[test]
