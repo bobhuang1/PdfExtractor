@@ -263,6 +263,97 @@ fn every_supported_tokenizer_file_is_accepted() {
     }
 }
 
+/// A `.tiktoken` file whose name names no family is loaded with the family the
+/// caller states, rather than silently assuming cl100k_base.
+#[test]
+fn an_explicit_encoding_family_names_a_tiktoken_vocabulary() {
+    let ws = Workspace::new("ambiguous-tiktoken");
+    let input = ws.write("report.md", b"# Report\n\nabcdefgh abcdefgh abcdefgh.\n");
+    let vocabulary = std::fs::read(tokenizer_fixture("tokenizer-mini.tiktoken"))
+        .expect("read the tiktoken fixture");
+    let tokenizer = ws.write("vocabulary.tiktoken", &vocabulary);
+
+    for family in ["cl100k_base", "o200k_base", "p50k_base", "r50k_base"] {
+        run_ok(&[
+            "-i",
+            input.to_str().unwrap(),
+            "--to",
+            "chunks",
+            "--chunks-type",
+            "hybrid",
+            "--chunks-max-tokens",
+            "8",
+            "--chunks-tokenizer",
+            tokenizer.to_str().unwrap(),
+            "--chunks-tokenizer-encoding",
+            family,
+        ]);
+        assert!(
+            !records_of(&ws.join("report.jsonl")).is_empty(),
+            "{family} wrote no chunks"
+        );
+    }
+}
+
+/// An encoding family is part of a tokenizer: naming one without a tokenizer,
+/// or for a file that is not a tiktoken vocabulary, fails before conversion.
+#[test]
+fn an_encoding_family_needs_a_tiktoken_vocabulary() {
+    let ws = Workspace::new("bad-encoding");
+    let input = ws.write("report.md", DOC);
+
+    let missing = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--to",
+        "chunks",
+        "--chunks-type",
+        "hybrid",
+        "--chunks-tokenizer-encoding",
+        "cl100k_base",
+    ]);
+    assert!(
+        !missing.status.success(),
+        "an encoding family without a tokenizer was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        stderr.contains("--chunks-tokenizer-encoding"),
+        "the refusal does not name the flag: {stderr}"
+    );
+    assert!(
+        !ws.join("report.jsonl").exists(),
+        "a refused run wrote a chunk file"
+    );
+
+    let json = tokenizer_fixture("tokenizer-mini.json");
+    let wrong = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--to",
+        "chunks",
+        "--chunks-type",
+        "hybrid",
+        "--chunks-tokenizer",
+        json.to_str().unwrap(),
+        "--chunks-tokenizer-encoding",
+        "o200k_base",
+    ]);
+    assert!(
+        !wrong.status.success(),
+        "an encoding family was accepted for a Hugging Face file"
+    );
+    let stderr = String::from_utf8_lossy(&wrong.stderr);
+    assert!(
+        stderr.contains("--chunks-tokenizer-encoding") && stderr.contains("tiktoken"),
+        "the refusal does not say why: {stderr}"
+    );
+    assert!(
+        !ws.join("report.jsonl").exists(),
+        "a refused run wrote a chunk file"
+    );
+}
+
 /// A tokenizer that cannot be loaded is a broken configuration: the run fails
 /// before converting anything, names the flag, and writes no chunk file.
 #[test]

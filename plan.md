@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,069 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,074 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -548,7 +548,9 @@ heading levels, is exactly the input such a chunker wants.
   and its tokens are counted without special tokens, as Docling's tokenizer does; without
   the flag `count_tokens`'s documented approximation (whitespace words, one token per four
   characters) remains the reproducible default. A `.tiktoken` rank file names no split
-  pattern, so its filename selects the OpenAI family pattern (cl100k_base by default).
+  pattern, so its filename selects the OpenAI family pattern (cl100k_base by default);
+  `--chunks-tokenizer-encoding cl100k_base|o200k_base|p50k_base|r50k_base` states the
+  family explicitly when the filename names none, and is refused for any other format.
 - [x] Every chunk carries the provenance of its span (page + box) so a RAG consumer can
   cite and retrieve — the stable page/block-locator idea MinerU builds its library on.
 - [x] Tests: chunks join back to the body text, the token budget is respected, and a

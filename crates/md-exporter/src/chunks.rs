@@ -40,7 +40,10 @@
 //!   a Hugging Face `tokenizer.json`, a SentencePiece `.model`, or a tiktoken
 //!   vocabulary file, hybrid budgets are counted in that model's tokens instead.
 //!   The approximation remains the default, so a budget is reproducible unless
-//!   the caller deliberately supplies the model whose budget it is.
+//!   the caller deliberately supplies the model whose budget it is. A
+//!   `.tiktoken` rank file carries no split pattern, so its filename names the
+//!   encoding family; [`Tokenizer::from_file_with_tiktoken_encoding`] names it
+//!   explicitly for a vocabulary whose filename says nothing.
 //!
 //! A body item on the notes layer (a deck's speaker notes, a comment) is left
 //! out unless [`ChunkOptions::include_notes`] asks for it, exactly as the
@@ -240,12 +243,81 @@ const O200K_PATTERN: &str = concat!(
     r"|\s+",
 );
 
+/// The OpenAI tiktoken encoding family a `.tiktoken` rank file belongs to.
+///
+/// A rank file carries tokens and ranks but no split pattern, so the family is
+/// normally read from the filename. Naming it explicitly lets a vocabulary
+/// whose filename says nothing be loaded as the family it really is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TiktokenEncoding {
+    /// `cl100k_base`, the GPT-4/GPT-3.5-turbo family.
+    Cl100k,
+    /// `o200k_base`, the GPT-4o family.
+    O200k,
+    /// `p50k_base`, the older GPT-3 code family.
+    P50k,
+    /// `r50k_base`, the GPT-2/GPT-3 family.
+    R50k,
+}
+
+impl TiktokenEncoding {
+    /// The name tiktoken gives this family.
+    pub fn name(self) -> &'static str {
+        match self {
+            TiktokenEncoding::Cl100k => "cl100k_base",
+            TiktokenEncoding::O200k => "o200k_base",
+            TiktokenEncoding::P50k => "p50k_base",
+            TiktokenEncoding::R50k => "r50k_base",
+        }
+    }
+
+    /// The split pattern the family's encodings use.
+    fn pattern(self) -> &'static str {
+        match self {
+            TiktokenEncoding::Cl100k => CL100K_PATTERN,
+            TiktokenEncoding::O200k => O200K_PATTERN,
+            TiktokenEncoding::P50k | TiktokenEncoding::R50k => P50K_PATTERN,
+        }
+    }
+
+    /// The family a name states, with the short aliases a caller may type.
+    fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "cl100k_base" | "cl100k" => Some(TiktokenEncoding::Cl100k),
+            "o200k_base" | "o200k" => Some(TiktokenEncoding::O200k),
+            "p50k_base" | "p50k" => Some(TiktokenEncoding::P50k),
+            "r50k_base" | "r50k" | "gpt2" => Some(TiktokenEncoding::R50k),
+            _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for TiktokenEncoding {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::from_name(name).ok_or_else(|| {
+            format!(
+                "unknown tiktoken encoding family {name:?}; expected cl100k_base, o200k_base, \
+                 p50k_base or r50k_base"
+            )
+        })
+    }
+}
+
+impl std::fmt::Display for TiktokenEncoding {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(self.name())
+    }
+}
+
 /// A real tokenizer loaded from a Hugging Face `tokenizer.json`, a SentencePiece
 /// `.model`, or a tiktoken `.tiktoken` vocabulary.
 ///
 /// The file is the model's vocabulary and pipeline — not a model name resolved
 /// over a network. A tiktoken rank file has no split pattern of its own, so its
-/// name chooses the OpenAI family pattern; the default is cl100k_base.
+/// name chooses the OpenAI family pattern, or an explicit [`TiktokenEncoding`]
+/// overrides that choice; the default is cl100k_base.
 pub struct Tokenizer {
     inner: TokenizerKind,
 }
@@ -273,8 +345,27 @@ impl Tokenizer {
     /// document is converted, rather than a budget quietly falling back to the
     /// approximation.
     pub fn from_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::from_file_with_tiktoken_encoding(path, None)
+    }
+
+    /// Load a tokenizer file, stating the encoding family when it is a
+    /// `.tiktoken` vocabulary whose filename does not.
+    ///
+    /// `encoding` overrides the family the filename would select and is refused
+    /// for any other tokenizer format; `None` keeps the filename's choice
+    /// (cl100k_base when the name says nothing).
+    pub fn from_file_with_tiktoken_encoding(
+        path: impl AsRef<Path>,
+        encoding: Option<TiktokenEncoding>,
+    ) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let format = tokenizer_format(path)?;
+        if encoding.is_some() && format != TokenizerFormat::Tiktoken {
+            anyhow::bail!(
+                "{}: an encoding family only applies to a .tiktoken vocabulary",
+                path.display()
+            );
+        }
         let inner = match format {
             TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(
                 tokenizers::Tokenizer::from_file(path)
@@ -291,7 +382,7 @@ impl Tokenizer {
             TokenizerFormat::Tiktoken => {
                 let bytes = std::fs::read(path)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes)?)
+                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes, encoding)?)
             }
         };
         Ok(Self { inner })
@@ -383,7 +474,11 @@ fn looks_like_tiktoken(bytes: &[u8]) -> bool {
 
 /// Read a `.tiktoken` rank file: one base64 token and its integer rank per
 /// line. The file has no pattern or special tokens, so both are supplied here.
-fn load_tiktoken(path: &Path, bytes: &[u8]) -> anyhow::Result<tiktoken_rs::CoreBPE> {
+fn load_tiktoken(
+    path: &Path,
+    bytes: &[u8],
+    encoding: Option<TiktokenEncoding>,
+) -> anyhow::Result<tiktoken_rs::CoreBPE> {
     let text = std::str::from_utf8(bytes)
         .map_err(|error| anyhow::anyhow!("{}: not UTF-8 text: {error}", path.display()))?;
     let mut ranks = HashMap::new();
@@ -429,12 +524,15 @@ fn load_tiktoken(path: &Path, bytes: &[u8]) -> anyhow::Result<tiktoken_rs::CoreB
             path.display()
         );
     }
-    let pattern = tiktoken_pattern(path);
+    let pattern = tiktoken_pattern(path, encoding);
     tiktoken_rs::CoreBPE::new(ranks.into_iter().collect(), Default::default(), pattern)
         .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
-fn tiktoken_pattern(path: &Path) -> &'static str {
+fn tiktoken_pattern(path: &Path, encoding: Option<TiktokenEncoding>) -> &'static str {
+    if let Some(encoding) = encoding {
+        return encoding.pattern();
+    }
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())
@@ -1279,6 +1377,69 @@ mod tests {
             tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
             "the tiktoken vocabulary must count this word differently from the approximation"
         );
+    }
+
+    #[test]
+    fn an_explicit_encoding_family_overrides_the_filename() {
+        assert_eq!(
+            tiktoken_pattern(Path::new("vocab.tiktoken"), None),
+            CL100K_PATTERN
+        );
+        assert_eq!(
+            tiktoken_pattern(Path::new("o200k-vocab.tiktoken"), None),
+            O200K_PATTERN
+        );
+        assert_eq!(
+            tiktoken_pattern(
+                Path::new("o200k-vocab.tiktoken"),
+                Some(TiktokenEncoding::P50k)
+            ),
+            P50K_PATTERN,
+            "an explicit family must beat a hint in the filename"
+        );
+        assert_eq!(
+            tiktoken_pattern(Path::new("vocab.tiktoken"), Some(TiktokenEncoding::O200k)),
+            O200K_PATTERN
+        );
+
+        for (name, encoding) in [
+            ("cl100k_base", TiktokenEncoding::Cl100k),
+            ("cl100k", TiktokenEncoding::Cl100k),
+            ("o200k_base", TiktokenEncoding::O200k),
+            ("p50k_base", TiktokenEncoding::P50k),
+            ("r50k_base", TiktokenEncoding::R50k),
+        ] {
+            assert_eq!(name.parse::<TiktokenEncoding>(), Ok(encoding), "{name}");
+            assert_eq!(encoding.to_string(), encoding.name());
+        }
+        assert!("not-a-family".parse::<TiktokenEncoding>().is_err());
+    }
+
+    #[test]
+    fn a_tiktoken_vocabulary_loads_under_every_encoding_family() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/tokenizer-mini.tiktoken");
+        for encoding in [
+            TiktokenEncoding::Cl100k,
+            TiktokenEncoding::O200k,
+            TiktokenEncoding::P50k,
+            TiktokenEncoding::R50k,
+        ] {
+            let tokenizer = Tokenizer::from_file_with_tiktoken_encoding(&path, Some(encoding))
+                .unwrap_or_else(|error| panic!("{encoding} loads: {error}"));
+            assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
+        }
+    }
+
+    #[test]
+    fn an_encoding_family_is_refused_for_another_tokenizer_format() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/tokenizer-mini.json");
+        let error =
+            Tokenizer::from_file_with_tiktoken_encoding(&path, Some(TiktokenEncoding::Cl100k))
+                .expect_err("an encoding family must not apply to a Hugging Face file")
+                .to_string();
+        assert!(error.contains(".tiktoken"), "{error}");
     }
 
     #[test]

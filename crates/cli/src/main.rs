@@ -107,6 +107,31 @@ impl ChunkType {
     }
 }
 
+/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum TokenizerEncoding {
+    #[value(name = "cl100k_base", alias = "cl100k")]
+    Cl100kBase,
+    #[value(name = "o200k_base", alias = "o200k")]
+    O200kBase,
+    #[value(name = "p50k_base", alias = "p50k")]
+    P50kBase,
+    #[value(name = "r50k_base", alias = "r50k")]
+    R50kBase,
+}
+
+impl TokenizerEncoding {
+    fn encoding(self) -> pdfextractor_md_exporter::chunks::TiktokenEncoding {
+        use pdfextractor_md_exporter::chunks::TiktokenEncoding;
+        match self {
+            TokenizerEncoding::Cl100kBase => TiktokenEncoding::Cl100k,
+            TokenizerEncoding::O200kBase => TiktokenEncoding::O200k,
+            TokenizerEncoding::P50kBase => TiktokenEncoding::P50k,
+            TokenizerEncoding::R50kBase => TiktokenEncoding::R50k,
+        }
+    }
+}
+
 /// How a Markdown or HTML reading refers to its pictures.
 ///
 /// The names are Docling's `--image-export-mode` values, so the flag means the
@@ -224,6 +249,12 @@ struct Args {
     /// network
     #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     chunks_tokenizer: Option<PathBuf>,
+
+    /// The tiktoken encoding family a `.tiktoken` vocabulary belongs to, when
+    /// its filename does not name cl100k, o200k, p50k or r50k. Overrides a hint
+    /// in the name; only used with `--chunks-tokenizer`
+    #[arg(long, value_enum, value_name = "FAMILY")]
+    chunks_tokenizer_encoding: Option<TokenizerEncoding>,
 
     /// Number of parallel conversions (1-1000)
     #[arg(short, long, default_value = "1")]
@@ -1357,11 +1388,27 @@ fn chunk_options(args: &Args) -> anyhow::Result<pdfextractor_md_exporter::chunks
             args.chunks_max_tokens
         );
     }
+    if args.chunks_tokenizer_encoding.is_some() && args.chunks_tokenizer.is_none() {
+        anyhow::bail!("--chunks-tokenizer-encoding requires --chunks-tokenizer");
+    }
     let tokenizer = match args.chunks_tokenizer.as_deref() {
-        Some(path) => Some(Arc::new(
-            pdfextractor_md_exporter::chunks::Tokenizer::from_file(path)
-                .with_context(|| format!("--chunks-tokenizer {}", path.display()))?,
-        )),
+        Some(path) => {
+            let encoding = args
+                .chunks_tokenizer_encoding
+                .map(TokenizerEncoding::encoding);
+            let tokenizer =
+                pdfextractor_md_exporter::chunks::Tokenizer::from_file_with_tiktoken_encoding(
+                    path, encoding,
+                )
+                .with_context(|| match encoding {
+                    Some(encoding) => format!(
+                        "--chunks-tokenizer {} --chunks-tokenizer-encoding {encoding}",
+                        path.display()
+                    ),
+                    None => format!("--chunks-tokenizer {}", path.display()),
+                })?;
+            Some(Arc::new(tokenizer))
+        }
         None => None,
     };
     Ok(pdfextractor_md_exporter::chunks::ChunkOptions {
