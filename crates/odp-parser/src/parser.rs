@@ -8,6 +8,8 @@ use std::io::{Cursor, Read};
 
 use pdfextractor_picture_formats::{format_for_extension, format_for_mime};
 
+mod chart;
+
 /// Slide size when no page layout states one: 10 × 7.5 inches in EMU,
 /// PowerPoint's 4:3 default, which is also LibreOffice's common 25.4 × 19.05 cm
 /// presentation size.
@@ -29,7 +31,7 @@ pub struct OdpDocument {
 }
 
 /// One slide: its page number, whether it is hidden, its shapes in document
-/// order, and its speaker notes.
+/// order, its speaker notes and its comments.
 #[derive(Debug, Clone)]
 pub struct Slide {
     /// 1-based, the page number a reader gives the slide.
@@ -42,6 +44,21 @@ pub struct Slide {
     /// a newline and trimmed. `None` when the slide has no notes, or they are
     /// empty.
     pub notes: Option<String>,
+    /// The slide's `officeooo:annotation` comments, in file order.
+    pub comments: Vec<Comment>,
+}
+
+/// One comment on a slide.
+#[derive(Debug, Clone)]
+pub struct Comment {
+    /// 1-based within the slide, the number a reader gives the comment.
+    pub index: i32,
+    /// `dc:creator`, when the file names one.
+    pub author: Option<String>,
+    /// `dc:date`, when the file states one.
+    pub date: Option<String>,
+    /// The comment's paragraphs, joined by a newline and trimmed.
+    pub text: String,
 }
 
 /// One shape of a slide.
@@ -50,6 +67,7 @@ pub enum Shape {
     Text(TextShape),
     Table(TableShape),
     Picture(PictureShape),
+    Chart(pdfextractor_chart::ChartShape),
 }
 
 /// A text box, title, outline or custom shape with paragraphs.
@@ -124,6 +142,7 @@ impl OdpDocument {
             .transpose()?
             .unwrap_or_default();
         let media = read_parts(&mut archive, "Pictures/");
+        let objects = read_object_parts(&mut archive);
 
         let root = Node::parse(&content).context("malformed content.xml")?;
         let presentation = root
@@ -140,7 +159,7 @@ impl OdpDocument {
             for child in &page.children {
                 match child.name.as_str() {
                     "frame" | "custom-shape" | "caption" | "g" => {
-                        collect_shape(child, &media, &mut shapes)
+                        collect_shape(child, &media, &objects, &mut shapes)
                     }
                     "table" => shapes.push(Shape::Table(TableShape {
                         bbox: bbox(page),
@@ -160,6 +179,7 @@ impl OdpDocument {
                 hidden: is_hidden(page),
                 shapes,
                 notes: read_notes(page),
+                comments: read_comments(page),
             });
         }
 
@@ -198,6 +218,29 @@ fn read_parts(
         }
     }
     parts
+}
+
+/// The embedded objects a package holds, keyed by the directory a
+/// `draw:object` names (`Object 1`). Each is the object's `content.xml`.
+fn read_object_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, Vec<u8>> {
+    let mut objects = HashMap::new();
+    for index in 0..archive.len() {
+        let Ok(mut file) = archive.by_index(index) else {
+            continue;
+        };
+        let name = file.name().to_string();
+        let Some(object) = name.strip_suffix("/content.xml") else {
+            continue;
+        };
+        if !object.starts_with("Object ") {
+            continue;
+        }
+        let mut buffer = Vec::new();
+        if file.read_to_end(&mut buffer).is_ok() {
+            objects.insert(object.to_string(), buffer);
+        }
+    }
+    objects
 }
 
 /// The page size a slide's master page names, in EMU.
@@ -289,9 +332,28 @@ fn is_hidden(page: &Node) -> bool {
         .is_some_and(|show| show.eq_ignore_ascii_case("false") || show == "0")
 }
 
-fn collect_shape(node: &Node, media: &HashMap<String, Vec<u8>>, shapes: &mut Vec<Shape>) {
+fn collect_shape(
+    node: &Node,
+    media: &HashMap<String, Vec<u8>>,
+    objects: &HashMap<String, Vec<u8>>,
+    shapes: &mut Vec<Shape>,
+) {
     let bbox = bbox(node);
     let title = matches!(node.attr("class"), Some("title" | "ctrTitle"));
+
+    // An embedded chart is the object, not the preview image beside it: the
+    // preview is a rendering of the same chart, so reading both would report
+    // the chart twice.
+    let chart = node
+        .child("object")
+        .and_then(|object| object.attr("href"))
+        .map(|href| href.trim_start_matches("./"))
+        .and_then(|name| objects.get(name))
+        .and_then(|bytes| chart::read_chart(bytes, bbox));
+    let has_chart = chart.is_some();
+    if let Some(chart) = chart {
+        shapes.push(Shape::Chart(chart));
+    }
 
     let mut paragraphs = Vec::new();
     if let Some(text_box) = node.child("text-box") {
@@ -314,11 +376,14 @@ fn collect_shape(node: &Node, media: &HashMap<String, Vec<u8>>, shapes: &mut Vec
                 table: parse_table(child),
             })),
             "image" => {
-                if let Some(picture) = picture(child, bbox, media) {
-                    shapes.push(Shape::Picture(picture));
+                if !has_chart {
+                    if let Some(picture) = picture(child, bbox, media) {
+                        shapes.push(Shape::Picture(picture));
+                    }
                 }
             }
-            "frame" | "custom-shape" | "caption" => collect_shape(child, media, shapes),
+            "object" => {}
+            "frame" | "custom-shape" | "caption" => collect_shape(child, media, objects, shapes),
             _ => {}
         }
     }
@@ -393,6 +458,37 @@ fn inline_text(node: &Node, out: &mut String) {
     }
 }
 
+/// The slide's comments: `officeooo:annotation` children of its page.
+fn read_comments(page: &Node) -> Vec<Comment> {
+    page.children_named("annotation")
+        .enumerate()
+        .filter_map(|(position, annotation)| {
+            let mut paragraphs = Vec::new();
+            collect_paragraphs(annotation, &mut paragraphs);
+            let text = paragraphs
+                .iter()
+                .map(|paragraph| paragraph.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let text = text.trim();
+            if text.is_empty() {
+                return None;
+            }
+            Some(Comment {
+                index: (position + 1) as i32,
+                author: child_text(annotation, "creator"),
+                date: child_text(annotation, "date"),
+                text: text.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn child_text(node: &Node, name: &str) -> Option<String> {
+    let text = paragraph_text(node.child(name)?).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 fn read_notes(page: &Node) -> Option<String> {
     let notes = page.child("notes")?;
     let mut paragraphs = Vec::new();
@@ -451,7 +547,7 @@ fn parse_table(node: &Node) -> Table {
 fn collect_rows(node: &Node, rows: &mut Vec<Vec<TableCell>>, declared_cols: &mut usize) {
     for child in &node.children {
         match child.name.as_str() {
-            "table-header-rows" => collect_rows(child, rows, declared_cols),
+            "table-header-rows" | "table-rows" => collect_rows(child, rows, declared_cols),
             "table-row" => {
                 let repeat = count(child, "number-rows-repeated").min(MAX_REPEAT);
                 for _ in 0..repeat {
@@ -710,6 +806,15 @@ mod tests {
           <frame x="1cm" y="6cm" width="2cm" height="1cm">
             <image href="Pictures/p.png" mime-type="image/png"/>
           </frame>
+          <annotation>
+            <creator>Ada Lovelace</creator>
+            <date>2026-10-18T09:15:00</date>
+            <p>Check the numbers.</p>
+          </annotation>
+          <frame x="1cm" y="7cm" width="4cm" height="2cm">
+            <object href="./Object 1"/>
+            <image href="./ObjectReplacements/Object 1"/>
+          </frame>
           <notes>
             <frame class="notes"><text-box><p>Speak first.</p><p>Then pause.</p></text-box></frame>
             <p>A comment, not a speaker note.</p>
@@ -722,12 +827,30 @@ mod tests {
         <master-styles><master-page name="Master" page-layout-name="PL"/></master-styles>
       </document-styles>"#;
 
+    const CHART: &str = r#"<document-content><body><chart>
+        <chart class="chart:bar">
+          <title><text:p>Units by region</text:p></title>
+          <plot-area>
+            <axis dimension="x"><categories cell-range-address="local-table.$A$2:.$A$4"/></axis>
+            <series values-cell-range-address="local-table.$B$2:.$B$4" label-cell-address="local-table.$B$1"/>
+            <series values-cell-range-address="local-table.$C$2:.$C$4" label-cell-address="local-table.$C$1"/>
+          </plot-area>
+        </chart>
+        <table name="local-table">
+          <table-row><table-cell/><table-cell><p>Q2</p></table-cell><table-cell><p>Q3</p></table-cell></table-row>
+          <table-row><table-cell><p>North America</p></table-cell><table-cell><p>120</p></table-cell><table-cell><p>145</p></table-cell></table-row>
+          <table-row><table-cell><p>Europe</p></table-cell><table-cell><p>98</p></table-cell><table-cell><p>121</p></table-cell></table-row>
+          <table-row><table-cell><p>Asia Pacific</p></table-cell><table-cell><p>74</p></table-cell><table-cell><p>NaN</p></table-cell></table-row>
+        </table>
+      </chart></body></document-content>"#;
+
     #[test]
     fn a_slide_reads_text_lists_tables_pictures_and_notes() {
         let document = OdpDocument::parse_bytes(&package(&[
             ("content.xml", CONTENT.as_bytes()),
             ("styles.xml", STYLES.as_bytes()),
             ("Pictures/p.png", b"not decoded by the parser"),
+            ("Object 1/content.xml", CHART.as_bytes()),
         ]))
         .expect("the slide package parses");
 
@@ -787,6 +910,43 @@ mod tests {
             .expect("the picture");
         assert_eq!(picture.mime, "image/png");
         assert_eq!(picture.data, b"not decoded by the parser");
+
+        assert_eq!(slide.comments.len(), 1);
+        let comment = &slide.comments[0];
+        assert_eq!(comment.index, 1);
+        assert_eq!(comment.author.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(comment.date.as_deref(), Some("2026-10-18T09:15:00"));
+        assert_eq!(comment.text, "Check the numbers.");
+
+        let chart = slide
+            .shapes
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Chart(chart) => Some(chart),
+                _ => None,
+            })
+            .expect("the embedded chart");
+        assert_eq!(chart.title.as_deref(), Some("Units by region"));
+        assert_eq!(chart.kind, pdfextractor_chart::ChartKind::Bar);
+        assert_eq!(
+            chart.categories,
+            vec!["North America", "Europe", "Asia Pacific"]
+        );
+        assert_eq!(chart.series[0].name, "Q2");
+        assert_eq!(
+            chart.series[0].values,
+            vec![Some(120.0), Some(98.0), Some(74.0)]
+        );
+        assert_eq!(chart.series[1].name, "Q3");
+        assert_eq!(
+            chart.series[1].values,
+            vec![Some(145.0), Some(121.0), None],
+            "a missing plotted point stays a gap"
+        );
+        assert_eq!(
+            chart.bbox,
+            [360_000.0, 2_520_000.0, 1_800_000.0, 3_240_000.0]
+        );
     }
 
     #[test]

@@ -17,6 +17,9 @@ quick-xml.workspace = true
 pdfextractor-picture-formats = { path = "../picture-formats" }
 # A picture part with no draw:mime-type is named by its own bytes.
 pdfextractor-image-parser = { path = "../image-parser" }
+# An embedded chart object is read as the data it plots, in the same model a
+# PPTX or XLSX chart uses.
+pdfextractor-chart = { path = "../chart" }
 
 [dev-dependencies]
 # A slide package can be built in memory for a unit test.

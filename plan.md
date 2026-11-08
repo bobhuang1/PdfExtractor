@@ -109,7 +109,7 @@ pdf-extractor/
 ### Phase 2: Core Types & JSON Schema (3-5 days)
 - [x] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata) **Done**: `crates/core/src/types.rs` carries `DoclingDocument` and every node the schema names — `Page`/`Size`, `TextItem`, `TableItem`/`TableData`/`TableCell`, `PictureItem` with its `tabular_chart`, `Group`, `KeyValueItem`, the furniture layers, `Provenance` and `Ref` — and the conformance test walks each against the schema's required fields and enum values.
 - [x] Implement serialization (serde) to match exact JSON format **Done**: `crates/json-exporter` writes the model with `serde_json` at the schema's key order and shape, and every committed golden is that output byte for byte.
-- [x] Golden tests with known Docling outputs **Done**: 47 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
+- [x] Golden tests with known Docling outputs **Done**: 48 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
 
 ### Phase 3: DOCX Parser (1-2 weeks) — largely done
 - [x] Parse DOCX as OPC package (ZIP of XML), reusing the `zip` crate.
@@ -910,11 +910,17 @@ PDFBox and PDF.js.
 - [x] **ODF slides** (`odp`): every `draw:page` is a slide and a page, in the deck's
   order — a `chapter` group holding its title and outline text (nested list items),
   other paragraphs, a table with real spans, its `Pictures/` picture and its speaker
-  notes on the notes layer; a hidden slide stays on `invisible`, and `--page-range`
-  names slides. The page size is the slide's master page → page layout →
-  `style:page-layout-properties` rectangle, in EMU. The fixture is Impress's conversion
-  of `q3_review.pptx` (`test-data/make_q3_review_odp.py`), and it joins the committed
-  Docling schema check. **Done.** Not read yet: comments, chart objects, master-page
+  notes on the notes layer; its `officeooo:annotation` comments become notes-layer
+  `comment_section` groups with their author, time and words. An embedded chart
+  object's `Object N/content.xml` is read from its own `local-table` as a chart
+  picture with its title as a caption and its numbers as a tabular-chart grid. A
+  hidden slide stays on `invisible`, and `--page-range` names slides. The page size is
+  the slide's master page → page layout → `style:page-layout-properties` rectangle,
+  in EMU. The fixture is Impress's conversion of `q3_review.pptx`
+  (`test-data/make_q3_review_odp.py`), and it joins the committed Docling schema
+  check and comparison ratchet. Docling's ODP backend publishes no pages, so its
+  comparison is content-only (text agreement 1.000, three headings kept); the
+  slide/page count stays the ODP suite's. **Done.** Not read yet: master-page
   background shapes, animations and transitions.
 - [ ] Each format joins the golden corpus with real-world fixtures (POI/LibreOffice-
   saved, like the DOCX suite) and a Docling-converted reference under

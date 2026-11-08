@@ -12,12 +12,19 @@
 //! unit the PPTX reader reports — so a slide's box and its shapes are in one
 //! coordinate system.
 //!
-//! A slide's `presentation:notes` child is its speaker notes; the notes frame
-//! is read and comments written directly under the notes section are not. ODP
-//! comments and animation are not read yet.
+//! A slide's `presentation:notes` child is its speaker notes; only the notes
+//! frame is a speaker note. A slide's comments are `officeooo:annotation`
+//! children of its `draw:page`, read with their author, date and text.
+//!
+//! A `draw:frame` can hold an embedded chart object rather than a picture. Its
+//! `draw:object` names an `Object N` directory whose `content.xml` is read as
+//! the chart's title, family, categories and series, using the chart's own
+//! `local-table` for the plotted cells; the frame supplies the box. Master-page
+//! background shapes and animation are not read yet.
 
 mod parser;
 
 pub use parser::{
-    OdpDocument, Paragraph, PictureShape, Shape, Slide, Table, TableCell, TableShape, TextShape,
+    Comment, OdpDocument, Paragraph, PictureShape, Shape, Slide, Table, TableCell, TableShape,
+    TextShape,
 };

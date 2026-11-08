@@ -2,9 +2,9 @@
 //!
 //! `q3_review_impress.odp` is LibreOffice Impress' conversion of
 //! `q3_review.pptx`, so the fixture is what a real producer writes: three
-//! slides, a title and bulleted body, a table, a picture, and speaker notes.
-//! Its stem is the conversion's own, so it cannot be taken for the deck whose
-//! Docling reference is keyed by `q3_review`.
+//! slides, a title and bulleted body, a table, a picture, speaker notes, three
+//! comments and an embedded bar chart. Its stem is the conversion's own, so it
+//! cannot be taken for the deck whose Docling reference is keyed by `q3_review`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -109,6 +109,14 @@ fn an_odp_reads_as_slides() {
             .collect::<Vec<_>>(),
         ["slide-0", "slide-1", "slide-2"]
     );
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "comment_section")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["comment-slide1-1", "comment-slide1-2", "comment-slide3-1"]
+    );
 
     let texts = doc["texts"].as_array().expect("texts");
     let find = |text: &str| {
@@ -146,7 +154,7 @@ fn an_odp_reads_as_slides() {
     assert_eq!(cell("145")["start_row_offset_idx"], 1);
 
     let pictures = doc["pictures"].as_array().expect("pictures");
-    assert_eq!(pictures.len(), 1);
+    assert_eq!(pictures.len(), 2, "the picture and the chart");
     let image = &pictures[0]["image"];
     assert_eq!(image["mimetype"], "image/png");
     let uri = image["uri"].as_str().expect("a picture uri");
@@ -155,17 +163,67 @@ fn an_odp_reads_as_slides() {
         "the picture {uri} was not written beside the output"
     );
 
+    let chart = &pictures[1];
+    assert_eq!(
+        chart["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+    assert!(chart["image"].is_null(), "a chart was written as an image");
+    assert_eq!(chart["prov"][0]["page_no"], 3);
+    assert_eq!(find("Units by region")["label"], "caption");
+
+    // The chart's numbers are the data it plots, with its series across the
+    // header row and its categories down the first column.
+    let chart_data = &chart["meta"]["tabular_chart"]["chart_data"];
+    assert_eq!(chart_data["num_rows"], 4);
+    assert_eq!(chart_data["num_cols"], 3);
+    let chart_cells = chart_data["table_cells"].as_array().expect("cells");
+    let chart_cell = |text: &str| {
+        chart_cells
+            .iter()
+            .find(|cell| cell["text"] == text)
+            .unwrap_or_else(|| panic!("no chart cell {text:?} in {chart_cells:#?}"))
+    };
+    assert_eq!(chart_cell("Q2")["start_row_offset_idx"], 0);
+    assert_eq!(chart_cell("Q2")["start_col_offset_idx"], 1);
+    assert_eq!(chart_cell("145")["start_row_offset_idx"], 1);
+    assert_eq!(chart_cell("145")["start_col_offset_idx"], 2);
+    assert_eq!(chart_cell("Asia Pacific")["start_row_offset_idx"], 3);
+    assert!(
+        chart_cells.iter().all(|cell| cell["text"] != "NaN"),
+        "a missing plotted point is a gap, not the word for it: {chart_cells:#?}"
+    );
+
     let notes: Vec<&serde_json::Value> = texts
         .iter()
         .filter(|item| item["content_layer"] == "notes")
         .collect();
-    assert_eq!(notes.len(), 2);
+    assert_eq!(notes.len(), 5, "two speaker notes and three comments");
     assert!(notes.iter().any(|note| note["text"]
         .as_str()
         .is_some_and(|text| text.contains("Open with the revenue line"))));
     assert!(notes.iter().any(|note| note["text"]
         .as_str()
         .is_some_and(|text| text.contains("Say the picture is the growth by quarter"))));
+    let comment = |text: &str| {
+        notes
+            .iter()
+            .find(|note| note["text"] == text)
+            .unwrap_or_else(|| panic!("no comment {text:?} in {notes:#?}"))
+    };
+    assert_eq!(
+        comment(
+            "[author: Ada Lovelace, time: 2026-10-18T09:15:00]: \
+             Check the Q3 numbers against the ledger."
+        )["prov"],
+        serde_json::json!([]),
+        "a comment is about the slide, not a place on it"
+    );
+    comment(
+        "[author: Grace Hopper, time: 2026-10-18T10:30:00]: \
+         Add the regional split to slide 2.",
+    );
+    comment("[author: Grace Hopper, time: 2026-10-18T16:05:00]: Ship this one.");
 }
 
 #[test]

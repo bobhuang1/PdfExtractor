@@ -1550,6 +1550,18 @@ const LABEL_BUDGETS: [(&str, usize, usize); 9] = [
 /// duplicate is held. Everything not listed keeps the global floor.
 const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
 
+/// Documents whose reference publishes no pages although ours does, with the
+/// reason the page count is not compared.
+///
+/// Docling's ODP backend reads a presentation as a flow document: it publishes
+/// no `pages` map, while our reader pages every slide. The content is still
+/// Docling's reading and is compared in full; the slide count is held by the ODP
+/// suite, which converts the same fixture and checks its three pages.
+const PAGE_COUNT_EXEMPT: [(&str, &str); 1] = [(
+    "q3_review_impress",
+    "Docling's ODP backend publishes no pages; the slides are pages in ours",
+)];
+
 /// How many of each document's footnotes must be *held* — labelled `footnote`
 /// or, failing that, still in the body — and how many must be **labelled**, by
 /// stem: `(stem, held, labelled)`.
@@ -1637,6 +1649,7 @@ fn our_output_agrees_with_real_docling_conversions() {
             agreement.formulas_theirs,
             agreement.formulas_reproduced
         );
+        let page_count_checked = !PAGE_COUNT_EXEMPT.iter().any(|(name, _)| *name == stem);
         println!(
             "    labels: {} heading(s) kept, {} read as body text, {} block(s) merged, \
              table cells {} in a table / {} prose / {} uncovered",
@@ -1647,7 +1660,17 @@ fn our_output_agrees_with_real_docling_conversions() {
             agreement.table_cells_in_prose.len(),
             agreement.table_cells_uncovered
         );
-        if agreement.pages_ours != agreement.pages_theirs {
+        if !page_count_checked {
+            println!(
+                "    pages: Docling publishes none for this format ({}); \
+                 the page count is held by the format's own suite",
+                PAGE_COUNT_EXEMPT
+                    .iter()
+                    .find(|(name, _)| *name == stem)
+                    .map_or("", |(_, reason)| *reason)
+            );
+        }
+        if page_count_checked && agreement.pages_ours != agreement.pages_theirs {
             mismatches.push(format!(
                 "{stem}: {} page(s), Docling saw {}",
                 agreement.pages_ours, agreement.pages_theirs

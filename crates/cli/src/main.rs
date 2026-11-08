@@ -3076,6 +3076,32 @@ fn convert_odp(
                     };
                     builder.add_table_grid_in(&grid, page_no, table.bbox, &group);
                 }
+                pdfextractor_odp_parser::Shape::Chart(chart) => {
+                    // A chart is a picture of its data, and its own title is
+                    // the picture's caption — the same shape a PPTX slide's
+                    // chart takes.
+                    let caption = chart.title.as_deref().map(|title| {
+                        builder.add_text_item_in(
+                            title,
+                            page_no,
+                            chart.bbox,
+                            TextLabel {
+                                label: "caption".to_string(),
+                                ..Default::default()
+                            },
+                            &group,
+                        )
+                    });
+                    let table = chart_table(chart);
+                    builder.add_chart_picture_in(
+                        page_no,
+                        chart.bbox,
+                        chart.kind.class_name(),
+                        table.as_ref(),
+                        caption.as_ref(),
+                        &group,
+                    );
+                }
                 pdfextractor_odp_parser::Shape::Picture(picture) => {
                     image_seq += 1;
                     let points = (picture.bbox[2] - picture.bbox[0]) / EMU_PER_POINT;
@@ -3110,6 +3136,21 @@ fn convert_odp(
         if let Some(notes) = &slide.notes {
             builder.add_notes_item_in(notes, page_no, [0.0, 0.0, 0.0, 0.0], &group);
         }
+        // Comments are the slide's own remarks, not places on it: each is one
+        // item on the notes layer, in a `comment_section` group of its own.
+        for comment in &slide.comments {
+            let comment_group =
+                builder.add_comment_group(&format!("comment-slide{}-{}", page_no, comment.index));
+            builder.add_comment_in(
+                &comment_text_parts(
+                    comment.author.as_deref(),
+                    None,
+                    comment.date.as_deref(),
+                    &comment.text,
+                ),
+                &comment_group,
+            );
+        }
     }
 
     Ok(builder.build())
@@ -3126,27 +3167,39 @@ fn convert_odp(
 /// [`comment_timestamp`]), so the same deck bridged through LibreOffice says
 /// what the native one does.
 fn comment_text(comment: &pdfextractor_pptx_parser::Comment) -> String {
+    comment_text_parts(
+        comment.author.as_deref(),
+        comment.initials.as_deref(),
+        comment.date.as_deref(),
+        &comment.text,
+    )
+}
+
+/// The composition both deck formats use. An ODP comment has no initials, so
+/// its author is written without them.
+fn comment_text_parts(
+    author: Option<&str>,
+    initials: Option<&str>,
+    date: Option<&str>,
+    text: &str,
+) -> String {
     let mut parts = Vec::new();
     // A name the file left blank is no name: the author's whole field is left
     // out, initials and all, which is where Docling draws the same line.
-    if let Some(author) = comment.author.as_deref().filter(|name| !name.is_empty()) {
+    if let Some(author) = author.filter(|name| !name.is_empty()) {
         let mut named = format!("author: {author}");
-        if let Some(initials) = comment
-            .initials
-            .as_deref()
-            .filter(|initials| !initials.is_empty())
-        {
+        if let Some(initials) = initials.filter(|initials| !initials.is_empty()) {
             named.push_str(&format!(" ({initials})"));
         }
         parts.push(named);
     }
-    if let Some(date) = comment.date.as_deref().filter(|date| !date.is_empty()) {
+    if let Some(date) = date.filter(|date| !date.is_empty()) {
         parts.push(format!("time: {}", comment_timestamp(date)));
     }
     if parts.is_empty() {
-        comment.text.clone()
+        text.to_string()
     } else {
-        format!("[{}]: {}", parts.join(", "), comment.text)
+        format!("[{}]: {text}", parts.join(", "))
     }
 }
 
