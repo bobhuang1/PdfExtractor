@@ -27,8 +27,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use pdfextractor_ui::{
-    chooser_filters, diff, gate, locate_cli, outcome, pump, AcceptedFormats, DiffLine, Finished,
-    Formats, Job, LogLine, PlanLine, ProgressLine, RunEvent, Settings, Started,
+    chooser_filters, diff, gate, locate_cli, outcome, pump, AcceptedFormats, ChunkType, DiffLine,
+    Finished, Formats, Job, LogLine, OutputFormat, PlanLine, ProgressLine, RunEvent, Settings,
+    Started,
 };
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -43,7 +44,8 @@ const POLL: Duration = Duration::from_millis(40);
 
 /// The events the page listens for.
 const STARTED: &str = "conversion-started";
-/// Sent to the page only by `--selftest`, which asks it to report what it drew.
+/// Sent to the page only by `--selftest`, which asks it to report what it drew
+/// and, for `--selftest-chunks`, to tick the chunking row the run uses.
 const SELFTEST_ON: &str = "selftest-enabled";
 const PLAN: &str = "conversion-plan";
 const PROGRESS: &str = "conversion-progress";
@@ -66,6 +68,11 @@ static SELFTEST_STOP: OnceLock<Option<u64>> = OnceLock::new();
 /// `--selftest-ref PATH`: with `--selftest`, turn the Compare mode on for the
 /// run, so the smoke test can check that a comparison reaches the page.
 static SELFTEST_REFERENCE: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-chunks`: with `--selftest`, tick Retrieval chunks and choose the
+/// hybrid chunker, so the smoke test checks the row's shown state as well as the
+/// run it describes.
+static SELFTEST_CHUNKS: OnceLock<bool> = OnceLock::new();
 
 /// The conversion in flight, if any.
 #[derive(Default)]
@@ -156,18 +163,85 @@ async fn ask(
         .map_err(|error| format!("could not ask the CLI which formats it reads: {error}"))?
 }
 
-/// Open a folder with the desktop's own file manager.
+/// Show a path with the desktop: a folder opens, and a file is selected in the
+/// folder it sits in.
 ///
-/// The platform's opener is run rather than linked to (`xdg-open`, `open`,
-/// `explorer`), so one action costs no plugin, no capability and no dependency.
-/// The page asks only for the folder a run reported, and a path that is not a
-/// folder is refused rather than handed to an opener.
+/// The platform's own tools are run rather than linked to, so one action costs
+/// no plugin, no capability and no dependency. The result pane names a single
+/// converted document by its file rather than by the folder it was written
+/// into, so the action has to reach that file: Finder and Explorer select an
+/// item natively, the freedesktop file-manager interface does on Linux, and a
+/// desktop without it still gets the file itself rather than nothing. A path
+/// that is not there is refused rather than handed to an opener.
 #[tauri::command]
-fn open_folder(path: String) -> Result<(), String> {
-    let folder = PathBuf::from(&path);
-    if !folder.is_dir() {
-        return Err(format!("There is no folder at {path}."));
+fn reveal_path(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("There is nothing at {path}."));
     }
+    if target.is_file() && select_file(&target) {
+        return Ok(());
+    }
+    opener(&target)
+        .spawn()
+        .map_err(|error| format!("Could not show {}: {error}", target.display()))?;
+    Ok(())
+}
+
+/// Whether the desktop selected `target` in its own file manager.
+fn select_file(target: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        return std::process::Command::new("open")
+            .arg("-R")
+            .arg(target)
+            .spawn()
+            .is_ok();
+    }
+    if cfg!(target_os = "windows") {
+        // Explorer wants the selection in the same argument as the switch.
+        return std::process::Command::new("explorer")
+            .arg(format!("/select,{}", target.display()))
+            .spawn()
+            .is_ok();
+    }
+    // FileManager1 is the freedesktop interface a desktop's file manager
+    // registers; `dbus-send` fails when there is no session bus or no file
+    // manager, which is when the caller falls back to opening the file.
+    let Some(uri) = file_uri(target) else {
+        return false;
+    };
+    std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--type=method_call",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+        ])
+        .arg(format!("array:string:{uri}"))
+        .arg("string:")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// A path as the absolute, percent-encoded `file://` URI FileManager1 takes.
+fn file_uri(target: &Path) -> Option<String> {
+    let absolute = std::fs::canonicalize(target).ok()?;
+    let mut uri = String::from("file://");
+    for byte in absolute.to_string_lossy().bytes() {
+        match byte {
+            b'/' | b'-' | b'_' | b'.' | b'~' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' => {
+                uri.push(byte as char)
+            }
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    Some(uri)
+}
+
+/// The desktop's own opener for a path (`xdg-open`, `open`, `explorer`).
+fn opener(target: &Path) -> std::process::Command {
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {
@@ -175,11 +249,9 @@ fn open_folder(path: String) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(program)
-        .arg(&folder)
-        .spawn()
-        .map_err(|error| format!("Could not open {}: {error}", folder.display()))?;
-    Ok(())
+    let mut command = std::process::Command::new(program);
+    command.arg(target);
+    command
 }
 
 /// Validate the form and start the CLI in the background.
@@ -380,18 +452,26 @@ fn frontend_ready(app: tauri::AppHandle) {
         return;
     }
 
-    // Told before the run starts, so the page knows to report what it rendered.
-    let _ = app.emit(SELFTEST_ON, ());
+    // Told before the run starts, so the page knows to report what it rendered;
+    // `--selftest-chunks` also tells it which row to tick.
+    let chunks = SELFTEST_CHUNKS.get().copied().unwrap_or(false);
+    let _ = app.emit(SELFTEST_ON, serde_json::json!({ "chunks": chunks }));
 
     // `Settings::selftest` rather than the form as typed: a smoke test is pointed at
     // the corpus itself, so it writes what it converts into a temporary directory of
     // its own instead of beside the documents and the committed references it read.
+    // The chunking row is the page's, not the form's, so the one the page ticks and
+    // the one the run uses are made here to be the same reading.
     let reference = SELFTEST_REFERENCE
         .get()
         .cloned()
         .flatten()
         .unwrap_or_default();
-    let settings = Settings::selftest(&selftest_input, &reference);
+    let mut settings = Settings::selftest(&selftest_input, &reference);
+    if chunks {
+        settings.to.push(OutputFormat::Chunks);
+        settings.chunks_type = ChunkType::Hybrid;
+    }
     match start_conversion(app.clone(), app.state::<ActiveRun>(), settings) {
         Ok(started) => println!(
             "selftest-started run={} command={}",
@@ -440,6 +520,11 @@ fn selftest_stop_mode(args: &[String]) -> Option<u64> {
     args.get(position + 1)?.parse().ok()
 }
 
+/// Parse `--selftest-chunks`: tick the chunking row for a self-test run.
+fn selftest_chunks(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--selftest-chunks")
+}
+
 /// Parse `--selftest-ref PATH`, the Compare mode's reference for a smoke test.
 fn selftest_reference(args: &[String]) -> Option<String> {
     let position = args.iter().position(|arg| arg == "--selftest-ref")?;
@@ -454,13 +539,15 @@ fn main() {
         println!(
             "pdfextractor-ui - graphical front end for pdfextractor-cli\n\n\
              Usage: pdfextractor-ui [--selftest [INPUT]] [--selftest-stop MILLIS]\n\
-                                   [--selftest-ref PATH] [-h]\n\n\
+                                   [--selftest-ref PATH] [--selftest-chunks] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
              Compare mode shows each document beside a Docling reference.\n\
              --selftest mounts the window, and if INPUT is given converts it\n\
              through the CLI, then exits; --selftest-ref turns Compare on for\n\
-             that run. What such a run converts is written into a temporary\n\
+             that run; --selftest-chunks ticks Retrieval chunks and the hybrid\n\
+             chunker before it, so that row is checked too. What such a run\n\
+             converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
              smoke-testing the corpus never writes beside it. Set\n\
              PDFEXTRACTOR_CLI to choose the command line binary; otherwise it\n\
@@ -471,6 +558,7 @@ fn main() {
     let _ = SELFTEST.set(selftest_mode(&args));
     let _ = SELFTEST_STOP.set(selftest_stop_mode(&args));
     let _ = SELFTEST_REFERENCE.set(selftest_reference(&args));
+    let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
 
     tauri::Builder::default()
         .manage(ActiveRun::default())
@@ -508,7 +596,7 @@ fn main() {
             cli_program,
             refresh_input_formats,
             start_conversion,
-            open_folder,
+            reveal_path,
             cancel_conversion,
             frontend_ready,
             selftest_rendered

@@ -180,6 +180,11 @@ pub struct Settings {
     /// `--preview-dpi`: the resolution of the preview's page backdrop.
     #[serde(default = "default_preview_dpi")]
     pub preview_dpi: u32,
+    /// Whether the Compare mode is on. The reference path alone cannot say:
+    /// the window blanks the box when the mode is off, so an empty reference
+    /// with the mode on is a path not chosen yet rather than a mode switched off.
+    #[serde(default)]
+    pub compare: bool,
     /// The Compare mode's reference: a Docling document, or a folder of them
     /// named after the documents they belong to. Empty means "do not compare".
     pub reference: String,
@@ -206,6 +211,7 @@ impl Default for Settings {
             chunks_overlap_tokens: 0,
             preview: false,
             preview_dpi: default_preview_dpi(),
+            compare: false,
             reference: String::new(),
         }
     }
@@ -395,6 +401,9 @@ impl Settings {
             return Some("Page segmentation mode must be between 0 and 13.".to_string());
         }
         let reference = self.reference.trim();
+        if self.compare && reference.is_empty() {
+            return Some("Choose a reference to compare with.".to_string());
+        }
         if !reference.is_empty() && !PathBuf::from(reference).exists() {
             return Some(format!("Reference does not exist: {reference}"));
         }
@@ -1622,7 +1631,8 @@ mod tests {
             "chunksType": "hybrid",
             "chunksTokenizer": "test-data/tokenizer-mini.json",
             "preview": false,
-            "reference": ""
+            "compare": true,
+            "reference": "test-data/golden/docling"
         });
         let settings: Settings = serde_json::from_value(payload).expect("the page's payload");
         assert_eq!(settings.page_range, "2-3");
@@ -1632,6 +1642,7 @@ mod tests {
         assert_eq!(settings.to, vec![OutputFormat::Md, OutputFormat::Chunks]);
         assert_eq!(settings.chunks_type, ChunkType::Hybrid);
         assert_eq!(settings.chunks_tokenizer, "test-data/tokenizer-mini.json");
+        assert!(settings.compare);
         let args = settings.to_args().join(" ");
         assert!(args.contains("--page-range 2-3"), "{args}");
         assert!(args.contains("--ocr-lang eng,deu"), "{args}");
@@ -1818,8 +1829,14 @@ mod tests {
         s.reference = "/definitely/not/here".to_string();
         assert!(s.problem().unwrap().contains("Reference does not exist"));
 
-        // An empty reference is the mode being off, which is not a problem.
+        // The mode on with nothing chosen is a path not chosen yet, not a mode
+        // switched off: the window sends the switch beside the box.
+        s.compare = true;
         s.reference = "   ".to_string();
+        assert!(s.problem().unwrap().contains("Choose a reference"));
+
+        // With the mode off, an empty reference is simply no comparison.
+        s.compare = false;
         assert_eq!(s.problem(), None);
     }
 

@@ -1,0 +1,29 @@
+Q3 Review
+
+- Revenue grew across every region.
+
+- North America led with 145 units.
+
+- Europe followed at 121 units.
+
+Prepared for the board.
+
+Regional performance
+
+| Region    | Q2  | Q3  |
+|-----------|-----|-----|
+| North     | 120 | 145 |
+| South     | 98  | 121 |
+| Total 218 |     | 266 |
+
+- Open the dashboard.
+
+- Filter by region.
+
+- Export the summary.
+
+Where the growth came from
+
+Revenue grew 12% year over year (constant currency)
+
+Units by region

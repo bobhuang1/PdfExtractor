@@ -308,6 +308,9 @@
           stopped = true;
           return run;
         }
+        // The result pane's action: the stand-in accepts either the folder or
+        // the single file the page reveals.
+        if (command === "reveal_path") return null;
         if (command === "start_conversion") {
           comparing = Boolean(args.settings.reference);
           const started = start(args.settings.input);

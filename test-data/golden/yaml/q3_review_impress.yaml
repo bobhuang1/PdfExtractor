@@ -1,0 +1,704 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  - $ref: '#/groups/1'
+  - $ref: '#/groups/2'
+  - $ref: '#/groups/3'
+  - $ref: '#/groups/4'
+  - $ref: '#/groups/5'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/texts/2'
+  - $ref: '#/texts/3'
+  - $ref: '#/texts/4'
+  - $ref: '#/texts/12'
+  content_layer: body
+  label: chapter
+  name: slide-0
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+- children:
+  - $ref: '#/texts/13'
+  content_layer: notes
+  label: comment_section
+  name: comment-slide1-1
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/1'
+- children:
+  - $ref: '#/texts/14'
+  content_layer: notes
+  label: comment_section
+  name: comment-slide1-2
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/2'
+- children:
+  - $ref: '#/texts/5'
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/6'
+  - $ref: '#/texts/7'
+  - $ref: '#/texts/8'
+  content_layer: body
+  label: chapter
+  name: slide-1
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/3'
+- children:
+  - $ref: '#/texts/9'
+  - $ref: '#/texts/10'
+  - $ref: '#/pictures/0'
+  - $ref: '#/texts/11'
+  - $ref: '#/pictures/1'
+  - $ref: '#/texts/15'
+  content_layer: body
+  label: chapter
+  name: slide-2
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/4'
+- children:
+  - $ref: '#/texts/16'
+  content_layer: notes
+  label: comment_section
+  name: comment-slide3-1
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/5'
+key_value_items: []
+name: q3_review_impress
+origin:
+  binary_hash: 5740225086575924053
+  filename: q3_review_impress.odp
+  mimetype: application/vnd.oasis.opendocument.presentation
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 6858000.0
+      width: 9144000.0
+  '2':
+    page_no: 2
+    size:
+      height: 6858000.0
+      width: 9144000.0
+  '3':
+    page_no: 3
+    size:
+      height: 6858000.0
+      width: 9144000.0
+pictures:
+- children: []
+  content_layer: body
+  image:
+    dpi: 67
+    mimetype: image/png
+    size:
+      height: 80.0
+      width: 160.0
+    uri: q3_review_impress_images/slide3_1.png
+  label: picture
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 2559960.0
+      coord_origin: TOPLEFT
+      l: 5669280.0
+      r: 7863480.0
+      t: 1463040.0
+    charspan:
+    - 0
+    - 0
+    page_no: 3
+  self_ref: '#/pictures/0'
+- captions:
+  - $ref: '#/texts/14'
+  children: []
+  content_layer: body
+  label: picture
+  meta:
+    classification:
+      predictions:
+      - class_name: bar_chart
+    tabular_chart:
+      chart_data:
+        num_cols: 3
+        num_rows: 4
+        table_cells:
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 1
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 0
+          text: ''
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 2
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 0
+          text: Q2
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 3
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 0
+          text: Q3
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 2
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 1
+          text: North America
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 1
+          text: '120'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 1
+          text: '145'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 3
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 2
+          text: Europe
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 2
+          text: '98'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 2
+          text: '121'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 4
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 3
+          text: Asia Pacific
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 4
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 3
+          text: '74'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 4
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 3
+          text: ''
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 6034680.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 8046360.0
+      t: 3108960.0
+    charspan:
+    - 0
+    - 0
+    page_no: 3
+  self_ref: '#/pictures/1'
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 3
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Region
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Q2
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 0
+      text: Q3
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: North
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '120'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: '145'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: South
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '98'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 2
+      text: '121'
+    - col_span: 2
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: |-
+        Total
+        218
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 3
+      text: '266'
+  label: table
+  parent:
+    $ref: '#/groups/3'
+  prov:
+  - bbox:
+      b: 4005360.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 7131240.0
+      t: 1645920.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/0'
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Q3 Review
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 1417320.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 274680.0
+    charspan:
+    - 0
+    - 9
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: Q3 Review
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Revenue grew across every region.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6125760.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 1600200.0
+    charspan:
+    - 0
+    - 33
+    page_no: 1
+  self_ref: '#/texts/1'
+  text: Revenue grew across every region.
+- children: []
+  content_layer: body
+  label: list_item
+  orig: North America led with 145 units.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6125760.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 1600200.0
+    charspan:
+    - 0
+    - 33
+    page_no: 1
+  self_ref: '#/texts/2'
+  text: North America led with 145 units.
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Europe followed at 121 units.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6125760.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 1600200.0
+    charspan:
+    - 0
+    - 29
+    page_no: 1
+  self_ref: '#/texts/3'
+  text: Europe followed at 121 units.
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Prepared for the board.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 5484600.0
+      coord_origin: TOPLEFT
+      l: 2121120.0
+      r: 4827600.0
+      t: 5120640.0
+    charspan:
+    - 0
+    - 23
+    page_no: 1
+  self_ref: '#/texts/4'
+  text: Prepared for the board.
+- children: []
+  content_layer: body
+  label: title
+  orig: Regional performance
+  parent:
+    $ref: '#/groups/3'
+  prov:
+  - bbox:
+      b: 1417320.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 274680.0
+    charspan:
+    - 0
+    - 20
+    page_no: 2
+  self_ref: '#/texts/5'
+  text: Regional performance
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Open the dashboard.
+  parent:
+    $ref: '#/groups/3'
+  prov:
+  - bbox:
+      b: 5118840.0
+      coord_origin: TOPLEFT
+      l: 2606040.0
+      r: 5257080.0
+      t: 4206240.0
+    charspan:
+    - 0
+    - 19
+    page_no: 2
+  self_ref: '#/texts/6'
+  text: Open the dashboard.
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Filter by region.
+  parent:
+    $ref: '#/groups/3'
+  prov:
+  - bbox:
+      b: 5118840.0
+      coord_origin: TOPLEFT
+      l: 2606040.0
+      r: 5257080.0
+      t: 4206240.0
+    charspan:
+    - 0
+    - 17
+    page_no: 2
+  self_ref: '#/texts/7'
+  text: Filter by region.
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Export the summary.
+  parent:
+    $ref: '#/groups/3'
+  prov:
+  - bbox:
+      b: 5118840.0
+      coord_origin: TOPLEFT
+      l: 2606040.0
+      r: 5257080.0
+      t: 4206240.0
+    charspan:
+    - 0
+    - 19
+    page_no: 2
+  self_ref: '#/texts/8'
+  text: Export the summary.
+- children: []
+  content_layer: body
+  label: title
+  orig: Where the growth came from
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 1417320.0
+      coord_origin: TOPLEFT
+      l: 457200.0
+      r: 8686440.0
+      t: 274680.0
+    charspan:
+    - 0
+    - 26
+    page_no: 3
+  self_ref: '#/texts/9'
+  text: Where the growth came from
+- children: []
+  content_layer: body
+  label: paragraph
+  orig: Revenue grew 12% year over year (constant currency)
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 1857600.0
+      coord_origin: TOPLEFT
+      l: -113760.0
+      r: 6331320.0
+      t: 1463040.0
+    charspan:
+    - 0
+    - 51
+    page_no: 3
+  self_ref: '#/texts/10'
+  text: Revenue grew 12% year over year (constant currency)
+- children: []
+  content_layer: body
+  label: caption
+  orig: Units by region
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 6034680.0
+      coord_origin: TOPLEFT
+      l: 731520.0
+      r: 8046360.0
+      t: 3108960.0
+    charspan:
+    - 0
+    - 15
+    page_no: 3
+  self_ref: '#/texts/11'
+  text: Units by region
+- children: []
+  content_layer: notes
+  label: text
+  orig: |-
+    Open with the revenue line, then the regions.
+    The board asked for the unit numbers first.
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 0.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 0.0
+      t: 0.0
+    charspan:
+    - 0
+    - 89
+    page_no: 1
+  self_ref: '#/texts/12'
+  text: |-
+    Open with the revenue line, then the regions.
+    The board asked for the unit numbers first.
+- children: []
+  content_layer: notes
+  label: text
+  orig: '[author: Ada Lovelace, time: 2026-10-18T09:15:00]: Check the Q3 numbers against the ledger.'
+  parent:
+    $ref: '#/groups/1'
+  prov: []
+  self_ref: '#/texts/13'
+  text: '[author: Ada Lovelace, time: 2026-10-18T09:15:00]: Check the Q3 numbers against the ledger.'
+- children: []
+  content_layer: notes
+  label: text
+  orig: '[author: Grace Hopper, time: 2026-10-18T10:30:00]: Add the regional split to slide 2.'
+  parent:
+    $ref: '#/groups/2'
+  prov: []
+  self_ref: '#/texts/14'
+  text: '[author: Grace Hopper, time: 2026-10-18T10:30:00]: Add the regional split to slide 2.'
+- children: []
+  content_layer: notes
+  label: text
+  orig: Say the picture is the growth by quarter; do not read the table aloud.
+  parent:
+    $ref: '#/groups/4'
+  prov:
+  - bbox:
+      b: 0.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 0.0
+      t: 0.0
+    charspan:
+    - 0
+    - 70
+    page_no: 3
+  self_ref: '#/texts/15'
+  text: Say the picture is the growth by quarter; do not read the table aloud.
+- children: []
+  content_layer: notes
+  label: text
+  orig: '[author: Grace Hopper, time: 2026-10-18T16:05:00]: Ship this one.'
+  parent:
+    $ref: '#/groups/5'
+  prov: []
+  self_ref: '#/texts/16'
+  text: '[author: Grace Hopper, time: 2026-10-18T16:05:00]: Ship this one.'
+version: 1.10.0

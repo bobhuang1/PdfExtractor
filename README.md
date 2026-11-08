@@ -339,7 +339,8 @@ overlap, and the preview's resolution — each passed only when it differs from 
 CLI's own default. A page range is parsed by the same code a run uses, before the
 CLI is started, so a typo is refused in the window instead of becoming a process
 that fails on its first argument. The result pane names the folder a run wrote into and opens it with the desktop's
-own file manager. The window offers no PDF password: an encrypted PDF is refused,
+own file manager; a run that converted a single document names that file instead
+and reveals it in its folder. The window offers no PDF password: an encrypted PDF is refused,
 and the CLI takes no password flag to wire a field to.
 
 ```bash
@@ -626,7 +627,7 @@ stem, and `-o -` with a single format writes that one document to stdout.
   byte-identical.
 
 Each format is pinned byte for byte under `test-data/golden/{html,text,yaml}/` for
-the nineteen documents they cover, including `social_cards.html`: its committed HTML
+the twenty-one documents they cover, including `social_cards.html`: its committed HTML
 golden pins the description, canonical URL and every Open Graph and Twitter card
 line, escaped and in the head's order, while its text and YAML goldens pin that none
 of those statements becomes body content. A deliberate change regenerates the
@@ -909,6 +910,8 @@ re-save route.
 `--selftest [INPUT]` opens the window, proves the webview and IPC round-trip,
 converts the given path through the CLI, and prints what the page actually drew;
 `--selftest-ref PATH` turns Compare on for that run, so the panel is exercised too.
+`--selftest-chunks` ticks Retrieval chunks and chooses the hybrid chunker before
+that run, so the chunking row the page draws is part of what comes back.
 
 ```bash
 # Smoke-test the whole stack without a human: the window opens, the webview
@@ -924,6 +927,11 @@ cargo run -p pdfextractor-ui -- --selftest ./docs --selftest-stop 2500
 cargo run -p pdfextractor-ui -- --selftest test-data/real/math-nary.docx \
   --selftest-ref test-data/golden/docling
 #   … diffs=1 diff-agreement="100.0%" diff-verdict="same=0 notation=3 differs=0 contained=0 ours-only=0 theirs-only=0 placed=0 paired-by-position=0 truncated=0" placed-drawn=0 placed-pages=0 diff-rows=3 floors=0 held=floor
+
+# The chunking row, driven the way a person drives it: Retrieval chunks ticked
+# and the hybrid chunker chosen, with the row's own shown state reported back.
+cargo run -p pdfextractor-ui -- --selftest test-data/real/math-nary.docx --selftest-chunks
+#   … chunk-controls=shown chunk-type=hybrid chunk-fields=on|on|on
 
 # A PDF reference carries the boxes the two readings found each block at, so those
 # boxes take part in the matching, the rows they leave one-sided are joined by page
@@ -952,7 +960,10 @@ named when the page asked it again, the refresh being the ask the smoke test
 exercises (the page asks on load too) — `families="..."`, the headings those
 formats were drawn under, and `cli="..."`, the binary named beside them, so both
 asks, the IPC, the grouped formats and the binary line are covered by the same
-smoke test as the conversion.
+smoke test as the conversion. The chunking row is reported as the page draws it
+— `chunk-controls=shown|hidden`, `chunk-type=...`, and `chunk-fields=on|off|...`
+for the tokenizer, budget and overlap — so `--selftest-chunks` checks the gating
+as well as the run behind it.
 
 The self-test converts into a directory of its own under the system temporary
 directory, never beside the document it read, so pointing one at the corpus leaves the

@@ -65,7 +65,10 @@ function readSettings() {
     preview: el("preview").checked,
     previewDpi: whole(el("preview-dpi").value, 110),
     // The mode switch decides whether a path is sent at all: an input left in
-    // the box while Compare is off is not a request to compare.
+    // the box while Compare is off is not a request to compare. The switch
+    // travels too, so an empty box with it on is refused rather than read as
+    // an off mode.
+    compare: el("compare").checked,
     reference: el("compare").checked ? el("reference").value.trim() : "",
   };
 }
@@ -111,6 +114,19 @@ function whole(value, fallback) {
   const raw = String(value).trim();
   const n = Math.trunc(Number(raw));
   return raw === "" || !Number.isFinite(n) ? fallback : Math.max(0, n);
+}
+
+// The hybrid chunker's two counts are whole numbers: a fraction or a typo is
+// refused rather than rounded into a budget nobody asked for. An empty box is
+// the CLI's own default, which `whole` reads it as.
+function countProblem(box, label) {
+  const raw = String(box.value).trim();
+  if (raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    return `The ${label} must be a whole number.`;
+  }
+  return null;
 }
 
 function baseName(path) {
@@ -215,6 +231,7 @@ function handleProgress(progress) {
   if (progress.total) display.total = progress.total;
   if (progress.ok) display.converted += 1;
   else display.failed += 1;
+  if (progress.ok && progress.output) display.outputs.push(progress.output);
 
   const entry = display.rows.get(progress.input);
   if (entry) {
@@ -683,10 +700,20 @@ function handleFinished(finished) {
   el("command").hidden = false;
   el("verdict").textContent = verdictFor(finished);
 
-  // Where the run put its files, with the action that opens it. A run that has
-  // no folder to open (one whose output could not be created) shows neither.
-  el("open-output").classList.toggle("hidden", !display.folder);
-  el("output-folder").textContent = display.folder || "";
+  // Where the run put its files, with the action that reaches them: a run that
+  // converted exactly one document names that file, so the action reaches the
+  // reading rather than only the folder it sits in. A run that wrote several,
+  // or none, keeps the folder. With neither there is nothing to show.
+  display.file =
+    finished.tally.converted === 1 && display.outputs.length === 1
+      ? display.outputs[0]
+      : "";
+  const target = display.file || display.folder || "";
+  el("open-output").textContent = display.file
+    ? "Show output file"
+    : "Open output folder";
+  el("open-output").classList.toggle("hidden", !target);
+  el("output-folder").textContent = target;
 
   display.outcome = finished;
   el("convert").disabled = false;
@@ -716,6 +743,10 @@ function beginRun(started) {
     converted: 0,
     failed: 0,
     rows: new Map(),
+    // The files this run reported writing, in the order they finished: when
+    // there is exactly one, that file is what the result pane reaches.
+    outputs: [],
+    file: "",
     finished: false,
   };
   showProgress();
@@ -754,6 +785,10 @@ function renderedSummary() {
     `folder="${el("output-folder").textContent}"`,
     `folder-action=${el("open-output").classList.contains("hidden") ? 0 : 1}`,
     `chunk-controls=${el("chunk-options").classList.contains("hidden") ? "hidden" : "shown"}`,
+    `chunk-type=${el("chunks-type").value}`,
+    `chunk-fields=${["chunks-tokenizer", "chunks-max-tokens", "chunks-overlap-tokens"]
+      .map((id) => (el(id).disabled ? "off" : "on"))
+      .join("|")}`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
     // as rendered: the ask round-tripped and the page used its families.
@@ -779,6 +814,16 @@ function handle(kind, payload) {
 function dispatch(kind, payload) {
   if (kind === "selftest-enabled") {
     selftest = true;
+    // `--selftest-chunks` ticks the boxes a person would tick, so the row is
+    // drawn by its own gating rather than assumed: the report then says what
+    // the window shows, not what the run was told.
+    if (payload && payload.chunks) {
+      const box = document.querySelector('#to input[value="chunks"]');
+      box.checked = true;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      el("chunks-type").value = "hybrid";
+      el("chunks-type").dispatchEvent(new Event("change", { bubbles: true }));
+    }
     // The smoke test asks the CLI again on the path a person uses after replacing
     // the binary: `formats=` in its report is then the refresh's answer, so the
     // re-ask is checked end to end with the rest of the window.
@@ -803,6 +848,18 @@ async function start() {
   if (!settings.input) {
     showMessage("Choose an input file or folder.");
     return;
+  }
+  // The budget and the overlap are typed, so they can be malformed before the
+  // page's payload reaches the CLI. They are refused here, the way a bad page
+  // range is: before a process exists, with the box named.
+  if (settings.to.includes("chunks") && settings.chunksType === "hybrid") {
+    const problem =
+      countProblem(el("chunks-max-tokens"), "chunk token budget") ||
+      countProblem(el("chunks-overlap-tokens"), "chunk overlap");
+    if (problem) {
+      showMessage(problem);
+      return;
+    }
   }
   const previous = display;
   el("summary").textContent = "Starting…";
@@ -1019,13 +1076,13 @@ function wire() {
   el("pick-reference-folder").addEventListener("click", () => pick("folder", "reference"));
   el("reference").addEventListener("input", refreshSummary);
   el("open-output").addEventListener("click", async () => {
-    const folder = display && display.folder;
-    if (!folder) return;
+    const target = (display && (display.file || display.folder)) || "";
+    if (!target) return;
     try {
-      await invoke("open_folder", { path: folder });
-      appendLog(`opened ${folder}`);
+      await invoke("reveal_path", { path: target });
+      appendLog(`showed ${target}`);
     } catch (error) {
-      appendLog(`could not open ${folder}: ${error}`);
+      appendLog(`could not show ${target}: ${error}`);
     }
   });
   el("pick-chunks-tokenizer").addEventListener("click", async () => {

@@ -288,8 +288,9 @@ pdf-extractor/
 - [x] **Stop**, including on window close: the child process stays reachable, and the
   answer to a click is the run's own exit status, so a stop that arrives after the last
   document does not misreport a completed run
-- [x] Minimal, functional UI, with `--selftest [INPUT] [--selftest-stop MS]` to smoke-test
-  the whole stack headlessly — including what the page actually rendered, and the stop path
+- [x] Minimal, functional UI, with `--selftest [INPUT] [--selftest-stop MS]
+  [--selftest-chunks]` to smoke-test the whole stack headlessly — including what the page
+  actually rendered, the chunking row's shown state, and the stop path
 - [x] A dev stand-in for the Tauri API (`dist/mock.js`) so the page can be driven in an
   ordinary browser without rebuilding the app
 - [x] **Compare mode**: give the window a Docling reference — a file, or a folder of them
@@ -493,13 +494,13 @@ a renderer needs.
   reordering is lossless and the file still parses as the same document; keys come
   out in `--to json`'s order, so two runs of one extract are byte-identical.
 - [x] Golden tests: committed `.md` expectations under `test-data/golden/markdown/`,
-  byte-exact for twenty-one documents (a one-line PDF, a real form with tables, a paper
+  byte-exact for twenty-three documents (a one-line PDF, a real form with tables, a paper
   fixture, a DOCX with lists/tables/pictures, a DOCX with Office Math, an HTML file,
   a Markdown file read back as Markdown, a Markdown file whose picture is a real file
   beside it — copied beside the output and referenced as
   `![Image](pictures_images/img1.jpg)` — a DOCX whose table merges cells, and a PDF
   whose link annotation must come out as `[text](url)`), regenerated deliberately with
-  `UPDATE_GOLDEN_MD=1`. The nineteen documents the format goldens share with that set are
+  `UPDATE_GOLDEN_MD=1`. The twenty-one documents the format goldens share with that set are
   pinned as `.html`, `.txt` and `.yaml` under
   `test-data/golden/{html,text,yaml}/`, regenerated with
   `UPDATE_GOLDEN_FORMATS=1`, and a run asking for all five formats at once is pinned
@@ -958,7 +959,8 @@ PDFBox and PDF.js.
   token budget and overlap, and the preview's resolution — each passed only when it
   differs from the CLI's own default; a page range a run could not read is refused in
   the window before the CLI is started; and the result pane names the folder the run
-  wrote into and opens it through the platform's own opener. The window's tests pin
+  wrote into and opens it through the platform's own opener, naming and revealing the
+  file itself when the run converted a single document. The window's tests pin
   the argument vector they build. No password field is offered: the CLI accepts no
   `--pdf-password` (an encrypted PDF is refused, see W4), so a field would have
   nothing to send.

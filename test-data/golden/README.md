@@ -300,7 +300,11 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
   reader pages the three slides; the comparison therefore holds this fixture's
   content, not its page count. It reports **3/0 pages, text agreement 1.000**, three
   headings kept and no table cell read as prose, and joins the ratchet with its own
-  baseline entry.
+  baseline entry. Its four renderings are pinned beside it too: the three slides as
+  `chapter` groups, the third slide's picture and the table in each notation, and —
+  in the Markdown rendering, which is written with `--include-notes` — the speaker
+  notes and the comment sections on the notes layer. The Writer, Calc and Impress
+  readers therefore each have committed render bytes beside their Docling reference.
 * **Legacy `.doc`** is not: Docling shells out to **LibreOffice** to turn a `.doc`
   into a `.docx` and reads that (`convert_to_modern_format` in
   `docling.backend.docx.drawingml.utils`). The four `.doc` references are therefore
@@ -324,7 +328,7 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
 
 Beside Docling's *references* — one file per document holding the other tool's
 reading, compared for content — four directories pin what **our own writers
-produce**, byte for byte, for nineteen documents they all share: a one-line PDF
+produce**, byte for byte, for twenty-one documents they all share: a one-line PDF
 (`hello.pdf`), a one-paragraph PDF (`dummy.pdf`), a long form with tables and
 furniture (`irs_f1040.pdf`), a DOCX with lists/tables/pictures
 (`calibre_demo.docx`), a DOCX of Office Math (`math-accents.docx`), an HTML file
@@ -338,7 +342,8 @@ processor's own RTF export (`merged_table.rtf`), the link fixture
 (`link_annotations.pdf`), a deck whose only picture is a drawing with no file
 (`chart_deck.pptx`, below), a Calc workbook whose sheets are pages
 (`inventory_calc.ods`), an ODT Writer document whose flow, table and picture are
-read as one (`brief_odt.odt`), and an RTF export whose content is a picture
+read as one (`brief_odt.odt`), the ODP deck as Impress saved it
+(`q3_review_impress.odp`), and an RTF export whose content is a picture
 (`rtf_bitmap.rtf`). The two merged-table fixtures are one reading in two
 languages: HTML writes `rowspan="2"` and `colspan="2"` for each, Markdown and
 text flatten the cells the spans cover to empty ones, and YAML states every
