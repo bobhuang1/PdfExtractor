@@ -255,9 +255,71 @@ fn a_workbook_is_read_as_the_sheets_named() {
         "a range past the last sheet was accepted"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("names no sheet"), "{stderr}");
-    assert!(stderr.contains("sheet(s)"), "{stderr}");
+    assert!(
+        stderr.contains("names no sheet")
+            && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
+        "the refusal does not name the sheets there are: {stderr}"
+    );
     assert!(!ws.join("none.json").exists(), "a refused run wrote a file");
+}
+
+/// A presentation's slides are its pages too: the range selects among them, each
+/// keeps the number it has in the deck, and a range past the last slide fails
+/// naming the slides there were. Both presentation families are read the same
+/// way — `q3_review.pptx` and Impress' conversion of it.
+#[test]
+fn a_presentation_is_read_as_the_slides_named() {
+    let ws = Workspace::new("slides");
+    for (tag, input) in [
+        ("pptx", fixture("test-data/q3_review.pptx")),
+        ("odp", fixture("test-data/q3_review_impress.odp")),
+    ] {
+        let kept = ws.join(&format!("{tag}-slide2.json"));
+        run_ok(&[
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            kept.to_str().unwrap(),
+            "--page-range",
+            "2",
+            "--ocr",
+            "never",
+        ]);
+        let doc = json_of(&kept);
+        assert_eq!(page_numbers(&doc), vec![2], "{tag}: the range kept more than slide 2");
+        let texts = doc["texts"].as_array().expect("texts");
+        assert!(
+            texts
+                .iter()
+                .any(|item| item["text"] == "Regional performance"),
+            "{tag}: slide 2's title is missing"
+        );
+        assert!(
+            !texts.iter().any(|item| item["text"] == "Q3 Review"),
+            "{tag}: slide 1 was read too"
+        );
+
+        let none = ws.join(&format!("{tag}-none.json"));
+        let out = run(&[
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            none.to_str().unwrap(),
+            "--page-range",
+            "9",
+        ]);
+        assert!(
+            !out.status.success(),
+            "{tag}: a range past the deck was accepted"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("names no slide")
+                && stderr.contains("(the deck has 3 slide(s); 1-3)"),
+            "{tag}: the refusal does not name the slides there are: {stderr}"
+        );
+        assert!(!none.exists(), "{tag}: a refused range still wrote a file");
+    }
 }
 
 /// An animation's frames are its pages: the range selects among the frames,
@@ -278,6 +340,42 @@ fn an_animations_frames_are_pages_of_their_own() {
 
     let doc = json_of(&ws.join("frames.json"));
     assert_eq!(page_numbers(&doc), vec![2, 3]);
+}
+
+/// A range past the last frame fails naming how many pages the file has, in the
+/// unit the reader counted them: an image's frames are pages, whether the file
+/// is a GIF, an animated WebP or a TIFF's directories.
+#[test]
+fn an_out_of_range_frame_names_the_count_and_its_page_unit() {
+    let ws = Workspace::new("frames-out-of-range");
+    for (tag, relative) in [
+        ("gif", "test-data/images/turning.gif"),
+        ("webp", "test-data/images/turning.webp"),
+        ("tiff", "test-data/images/pages.tiff"),
+    ] {
+        let output = ws.join(&format!("{tag}.json"));
+        let out = run(&[
+            "-i",
+            fixture(relative).to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--page-range",
+            "9",
+            "--ocr",
+            "never",
+        ]);
+        assert!(
+            !out.status.success(),
+            "{tag}: a range past the last frame was accepted"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("names no page")
+                && stderr.contains("(the file has 3 page(s); 1-3)"),
+            "{tag}: the refusal does not name the pages there are: {stderr}"
+        );
+        assert!(!output.exists(), "{tag}: a refused range wrote a file");
+    }
 }
 
 /// A TIFF's directories are its pages — a scanner's batch is a page per sheet —

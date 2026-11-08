@@ -162,9 +162,41 @@
             </select>
           </label>
         </div>
+        <div class="row wrap stacked-row">
+          <label class="stacked">
+            Images in Markdown / HTML
+            <select id="image-export-mode">
+              <option value="referenced" selected>Referenced beside the document</option>
+              <option value="embedded">Embedded as data URIs</option>
+              <option value="placeholder">Placeholder comment</option>
+            </select>
+          </label>
+          <label class="stacked">
+            Preview resolution (DPI)
+            <input
+              id="preview-dpi"
+              type="number"
+              min="1"
+              max="600"
+              value="110"
+              disabled
+            />
+          </label>
+        </div>
+        <div class="row wrap">
+          <label class="check">
+            <input id="include-notes" type="checkbox" />
+            Include notes and comments
+          </label>
+          <label class="check">
+            <input id="text-dehyphenate" type="checkbox" checked />
+            Join words split across lines
+          </label>
+        </div>
         <p class="hint">
           A page is a PDF's page, a workbook's sheet, or an image's frame. OCR
           languages are Tesseract codes; the language's data must be installed.
+          Notes reach Markdown, HTML and text; JSON and YAML always carry them.
         </p>
 
         <div class="row wrap" id="to">
@@ -191,6 +223,59 @@
           </label>
           <span class="hint">JSON is always written beside them.</span>
         </div>
+
+        <!-- The chunking controls belong to the Retrieval chunks box: shown with
+             it, because a type, a budget and an overlap mean nothing while no
+             chunk file is written. -->
+        <div id="chunk-options" class="row wrap stacked-row hidden">
+          <label class="stacked">
+            Chunking
+            <select id="chunks-type">
+              <option value="hierarchical" selected>Hierarchical — one per item</option>
+              <option value="hybrid">Hybrid — sentence budget</option>
+            </select>
+          </label>
+          <div class="stacked tokenizer-field">
+            <label for="chunks-tokenizer">Tokenizer file (optional)</label>
+            <div class="row">
+              <input
+                id="chunks-tokenizer"
+                type="text"
+                placeholder="tokenizer.json, .model or .tiktoken"
+                disabled
+              />
+              <button id="pick-chunks-tokenizer" type="button" disabled>File…</button>
+            </div>
+          </div>
+          <label class="stacked">
+            Token budget
+            <input
+              id="chunks-max-tokens"
+              type="number"
+              min="1"
+              value="512"
+              disabled
+            />
+          </label>
+          <label class="stacked">
+            Overlap
+            <input
+              id="chunks-overlap-tokens"
+              type="number"
+              min="0"
+              value="0"
+              disabled
+            />
+          </label>
+        </div>
+        <p id="chunk-hint" class="hint hidden">
+          Retrieval chunks are written with the reading chosen here. Hybrid chunks
+          pack sentences up to the token budget, carrying that many tokens of one
+          chunk into the next; a Hugging Face tokenizer.json, SentencePiece .model
+          or tiktoken .tiktoken file counts the budget in the model's own tokens
+          instead of the built-in approximation. The tokenizer, budget and overlap
+          belong to the hybrid chunker; a hierarchical chunk is one per item.
+        </p>
       </section>
 
       <section class="actions">
@@ -214,6 +299,12 @@
         <h2 id="result-title">Result</h2>
         <code id="command" class="command"></code>
         <p id="verdict" class="verdict"></p>
+        <div class="row">
+          <button id="open-output" type="button" class="hidden">
+            Open output folder
+          </button>
+          <span id="output-folder" class="hint"></span>
+        </div>
       </section>
 
       <section id="compare-result" class="hidden">

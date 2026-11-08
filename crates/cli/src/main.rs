@@ -1,6 +1,9 @@
 mod compare;
-mod page_range;
 mod preview;
+
+// The range grammar is the window's too: a typo is refused there before a run
+// starts, with the message a process would have printed.
+use pdfextractor_core::page_range;
 
 // `relabel` reads the original file back to hash it, and says which file it
 // could not read when it cannot.
@@ -214,8 +217,9 @@ struct Args {
     #[arg(long, default_value_t = 0, value_name = "N")]
     chunks_overlap_tokens: usize,
 
-    /// Count hybrid chunk budgets with a real Hugging Face `tokenizer.json`
-    /// file instead of the built-in approximation. The file is read and
+    /// Count hybrid chunk budgets with a real tokenizer file instead of the
+    /// built-in approximation: a Hugging Face `tokenizer.json`, a SentencePiece
+    /// `.model`, or a tiktoken `.tiktoken` vocabulary. The file is read and
     /// validated before conversion; it is not a model name fetched over the
     /// network
     #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
@@ -237,8 +241,9 @@ struct Args {
     recursive: bool,
 
     /// Read only these pages: `1-4,9`, and `7-` for page 7 to the end (1-based,
-    /// inclusive). A page is a PDF's page, a workbook's sheet (XLSX or ODS), or an
-    /// image's frame (a GIF's or an animated WebP's frame, a TIFF's directory).
+    /// inclusive). A page is a PDF's page, a workbook's sheet (XLSX or ODS), a
+    /// presentation's slide (PPTX or ODP), or an image's frame (a GIF's or an
+    /// animated WebP's frame, a TIFF's directory).
     /// Applied before layout analysis, so the furniture and footnotes are found
     /// among the pages kept, and each page keeps the number it has in the file. A
     /// format with no pages is read whole, and the log says so
@@ -700,8 +705,8 @@ fn walk_dir(dir: &Path, depth_left: Option<usize>, found: &mut Found) -> anyhow:
 /// picture table, so a format it carries as a readable page is one the CLI
 /// accepts without another edit.
 const DOCUMENT_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "odt", "ods", "xlsx", "pptx", "ppt", "doc", "wps", "wp", "wks", "wdb", "wpd",
-    "xls", "rtf", "html", "htm", "txt", "md", "markdown", "csv", "tsv",
+    "pdf", "docx", "odt", "ods", "odp", "xlsx", "pptx", "ppt", "doc", "wps", "wp", "wks", "wdb",
+    "wpd", "xls", "rtf", "html", "htm", "txt", "md", "markdown", "csv", "tsv",
 ];
 
 /// The picture extensions an input can be read under: every format the shared
@@ -789,7 +794,7 @@ const DOCUMENT_FAMILIES: &[(&str, &[&str])] = &[
     ("Word", &["docx", "doc"]),
     ("Excel", &["xlsx", "xls"]),
     ("PowerPoint", &["pptx", "ppt"]),
-    ("OpenDocument", &["odt", "ods"]),
+    ("OpenDocument", &["odt", "ods", "odp"]),
     ("Works/WordPerfect", &["wps", "wp", "wks", "wdb", "wpd"]),
     (
         "Text and markup",
@@ -968,6 +973,10 @@ fn bytes_say_what_it_is(path: &Path, ext: &str) -> Option<String> {
             "an OpenDocument spreadsheet (ODS)",
             Some("rename the file to .ods".to_string()),
         ),
+        Format::Odp => (
+            "an OpenDocument presentation (ODP)",
+            Some("rename the file to .odp".to_string()),
+        ),
         Format::Xlsx => (
             "an Excel workbook (XLSX)",
             Some("rename the file to .xlsx".to_string()),
@@ -1132,18 +1141,23 @@ fn build_document(
     // and says so rather than silently ignoring the flag.
     let paginated = matches!(
         &detected,
-        Format::Pdf | Format::Ods | Format::Xlsx | Format::Image { .. }
+        Format::Pdf
+            | Format::Ods
+            | Format::Odp
+            | Format::Xlsx
+            | Format::Pptx
+            | Format::Image { .. }
     ) || matches!(
         &detected,
         Format::Bridge {
-            target: BridgeTarget::Xlsx,
+            target: BridgeTarget::Xlsx | BridgeTarget::Pptx,
             ..
         }
     );
     if args.page_range.is_some() && !paginated {
         tracing::info!(
-            "{}: --page-range applies to pages — a PDF's, a workbook's sheets, an image's \
-             frames; this format is read whole",
+            "{}: --page-range applies to pages — a PDF's, a workbook's sheets, a \
+             presentation's slides, an image's frames; this format is read whole",
             path.display()
         );
     }
@@ -1180,6 +1194,15 @@ fn build_document(
             }
             convert_ods(path, output_path, args.page_range.as_ref())?
         }
+        Format::Odp => {
+            if args.preview {
+                tracing::info!(
+                    "{}: the preview draws PDF page images; a presentation has none, skipping",
+                    path.display()
+                );
+            }
+            convert_odp(path, output_path, args.page_range.as_ref())?
+        }
         Format::Xlsx => {
             if args.preview {
                 tracing::info!(
@@ -1196,7 +1219,7 @@ fn build_document(
                     path.display()
                 );
             }
-            convert_pptx(path, output_path)?
+            convert_pptx(path, output_path, args.page_range.as_ref())?
         }
         Format::Image { .. } => {
             if args.preview {
@@ -1280,7 +1303,9 @@ fn build_document(
                     convert_xlsx(bridged.path(), output_path, args.page_range.as_ref())?
                 }
                 BridgeTarget::Csv => convert_text("csv", bridged.path(), output_path)?,
-                BridgeTarget::Pptx => convert_pptx(bridged.path(), output_path)?,
+                BridgeTarget::Pptx => {
+                    convert_pptx(bridged.path(), output_path, args.page_range.as_ref())?
+                }
             };
             relabel(doc, path, mimetype)?
         }
@@ -2647,12 +2672,37 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
 /// picture background is the page's `image`, written beside the JSON as the
 /// backdrop it is, not a picture item in the slide's group. A hidden slide
 /// stays in the document on the `invisible` layer rather than being dropped.
+/// `--page-range` selects slides before any item is emitted, so a deck's page
+/// number is still the slide's number in the document.
 fn convert_pptx(
     path: &Path,
     output_path: &Path,
+    range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = std::fs::read(path)?;
     let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes(&data)?;
+
+    let total = parsed.slides.len();
+    let slides: Vec<_> = parsed
+        .slides
+        .iter()
+        .filter(|slide| range.is_none_or(|range| range.contains(slide.number)))
+        .collect();
+    if let Some(range) = range {
+        if slides.is_empty() {
+            anyhow::bail!(
+                "--page-range {range} names no slide of {} (the deck has {total} slide(s); \
+                 1-{total})",
+                path.display()
+            );
+        }
+        tracing::info!(
+            "{}: reading {} of {} slide(s) ({range})",
+            path.display(),
+            slides.len(),
+            total
+        );
+    }
 
     let name = path
         .file_name()
@@ -2677,7 +2727,7 @@ fn convert_pptx(
 
     let mut image_dir: Option<PathBuf> = None;
     let mut image_seq = 0usize;
-    for slide in &parsed.slides {
+    for slide in slides {
         let page_no = slide.number;
         let layer = if slide.hidden { "invisible" } else { "body" };
         // Docling names a slide's group `slide-<index>`, 0-based.
@@ -2854,6 +2904,164 @@ fn convert_pptx(
             let comment_group =
                 builder.add_comment_group(&format!("comment-slide{}-{}", page_no, comment.index));
             builder.add_comment_in(&comment_text(comment), &comment_group);
+        }
+    }
+
+    Ok(builder.build())
+}
+
+/// Build a `DoclingDocument` from an ODP presentation.
+///
+/// A slide is a page, as it is for PPTX, and the page is the slide size in EMU.
+/// Each slide is a `chapter` group holding its text paragraphs, table and
+/// pictures; a slide's speaker notes are one item on the notes layer inside the
+/// same group. A hidden slide stays on the `invisible` layer rather than being
+/// dropped. `--page-range` selects slides before any item is emitted, so a
+/// deck's page number is still the slide's number in the document.
+fn convert_odp(
+    path: &Path,
+    output_path: &Path,
+    range: Option<&page_range::PageRange>,
+) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    let data = std::fs::read(path)?;
+    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes(&data)?;
+
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("presentation.odp");
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("presentation");
+
+    let total = parsed.slides.len();
+    let slides: Vec<&pdfextractor_odp_parser::Slide> = parsed
+        .slides
+        .iter()
+        .filter(|slide| range.is_none_or(|range| range.contains(slide.number)))
+        .collect();
+    if let Some(range) = range {
+        if slides.is_empty() {
+            anyhow::bail!(
+                "--page-range {range} names no slide of {} (the deck has {total} slide(s); \
+                 1-{total})",
+                path.display()
+            );
+        }
+        tracing::info!(
+            "{}: reading {} of {} slide(s) ({range})",
+            path.display(),
+            slides.len(),
+            total
+        );
+    }
+
+    let mut builder = DocumentBuilder::new(stem);
+    builder.set_origin(Origin {
+        mimetype: Some("application/vnd.oasis.opendocument.presentation".to_string()),
+        binary_hash: Some(fnv1a(&data)),
+        filename: Some(name.to_string()),
+        uri: None,
+    });
+
+    let mut image_dir: Option<PathBuf> = None;
+    let mut image_seq = 0usize;
+    for slide in slides {
+        let page_no = slide.number;
+        let layer = if slide.hidden { "invisible" } else { "body" };
+        let group = builder.add_group("chapter", &format!("slide-{}", page_no - 1), layer);
+        builder.add_page(page_no, parsed.width, parsed.height);
+
+        for shape in &slide.shapes {
+            match shape {
+                pdfextractor_odp_parser::Shape::Text(text) => {
+                    for paragraph in &text.paragraphs {
+                        if paragraph.text.trim().is_empty() {
+                            continue;
+                        }
+                        let label = if paragraph.list {
+                            TextLabel {
+                                label: "list_item".to_string(),
+                                level: paragraph.level,
+                                ..Default::default()
+                            }
+                        } else if text.title {
+                            TextLabel {
+                                label: "title".to_string(),
+                                ..Default::default()
+                            }
+                        } else {
+                            TextLabel {
+                                label: "paragraph".to_string(),
+                                ..Default::default()
+                            }
+                        };
+                        builder.add_text_item_in(
+                            &paragraph.text,
+                            page_no,
+                            text.bbox,
+                            label,
+                            &group,
+                        );
+                    }
+                }
+                pdfextractor_odp_parser::Shape::Table(table) => {
+                    let grid = GridTable {
+                        num_rows: table.table.num_rows,
+                        num_cols: table.table.num_cols,
+                        cells: table
+                            .table
+                            .cells
+                            .iter()
+                            .map(|cell| GridCell {
+                                text: cell.text.clone(),
+                                start_row: cell.row,
+                                start_col: cell.col,
+                                row_span: cell.row_span,
+                                col_span: cell.col_span,
+                                column_header: cell.row == 0,
+                                row_header: false,
+                                pictures: Vec::new(),
+                                tables: Vec::new(),
+                            })
+                            .collect(),
+                    };
+                    builder.add_table_grid_in(&grid, page_no, table.bbox, &group);
+                }
+                pdfextractor_odp_parser::Shape::Picture(picture) => {
+                    image_seq += 1;
+                    let points = (picture.bbox[2] - picture.bbox[0]) / EMU_PER_POINT;
+                    let height = (picture.bbox[3] - picture.bbox[1]) / EMU_PER_POINT;
+                    let (mime, data) = office_media(
+                        picture.mime,
+                        picture.data.clone(),
+                        Some(points),
+                        Some(height),
+                    );
+                    let image = image_dimensions(&data).and_then(|(width, height)| {
+                        let uri = write_image(
+                            &mut image_dir,
+                            output_path,
+                            &format!("slide{page_no}_{image_seq}"),
+                            mime,
+                            &data,
+                        )?;
+                        Some(PictureData {
+                            mimetype: mime.to_string(),
+                            width: Some(width),
+                            height: Some(height),
+                            dpi: effective_dpi(width, points),
+                            uri,
+                        })
+                    });
+                    builder.add_picture_in(page_no, picture.bbox, "picture", image, &group);
+                }
+            }
+        }
+
+        if let Some(notes) = &slide.notes {
+            builder.add_notes_item_in(notes, page_no, [0.0, 0.0, 0.0, 0.0], &group);
         }
     }
 

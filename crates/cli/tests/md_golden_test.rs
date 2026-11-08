@@ -42,6 +42,8 @@ const CASES: &[&str] = &[
     "q3_review.pptx",    // a deck: its slide and comment groups are marked
     "chart_deck.pptx",   // a deck whose only picture is a chart, so nothing is written for it
     "inventory.xlsx",    // a workbook: a `sheet` group per worksheet, a merge, a hidden sheet
+    "inventory_calc.ods", // the same workbook as an OpenDocument package: those sheets again
+    "brief_odt.odt",      // a Writer document: the brief as a package, its flow and picture
     "rtf_bitmap.rtf",    // a word processor's own RTF export: a heading, paragraphs, a picture
 ];
 
@@ -68,6 +70,8 @@ fn input_of(name: &str) -> PathBuf {
         | "q3_review.pptx"
         | "chart_deck.pptx"
         | "inventory.xlsx"
+        | "inventory_calc.ods"
+        | "brief_odt.odt"
         | "rtf_bitmap.rtf" => root.join(name),
         _ => root.join("real").join(name),
     }

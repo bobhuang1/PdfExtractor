@@ -1,0 +1,23 @@
+[package]
+name = "pdfextractor-odp-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# An ODP is an OpenDocument ZIP package: content.xml holds the slides and
+# styles.xml holds the page layouts their size comes from.
+zip.workspace = true
+quick-xml.workspace = true
+# A picture's media type is named by the shared picture-format table, the same
+# list the CLI writes a picture under.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# A picture part with no draw:mime-type is named by its own bytes.
+pdfextractor-image-parser = { path = "../image-parser" }
+
+[dev-dependencies]
+# A slide package can be built in memory for a unit test.
+zip.workspace = true

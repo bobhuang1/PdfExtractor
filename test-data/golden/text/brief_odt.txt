@@ -1,0 +1,24 @@
+Quarterly Brief
+
+Summary
+
+The quarter closed ahead of plan. The filing explains why.
+
+- First bullet
+
+- Second bullet
+
+- Numbered one
+
+- Numbered two
+
+| Region      | Revenue |   |
+|-------------|---------|---|
+| North South | 42      | 7 |
+|             | 18      | 3 |
+
+Picture
+
+The chart below is the whole story.
+
+Supply is tight.

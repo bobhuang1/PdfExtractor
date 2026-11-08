@@ -1,0 +1,386 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  - $ref: '#/groups/1'
+  - $ref: '#/groups/2'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/tables/0'
+  - $ref: '#/tables/1'
+  content_layer: body
+  label: sheet
+  name: Inventory
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+- children:
+  - $ref: '#/tables/2'
+  content_layer: body
+  label: sheet
+  name: Notes
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/1'
+- children:
+  - $ref: '#/tables/3'
+  content_layer: invisible
+  label: sheet
+  name: Hidden
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/2'
+key_value_items: []
+name: inventory_calc
+origin:
+  binary_hash: 14682175783119423654
+  filename: inventory_calc.ods
+  mimetype: application/vnd.oasis.opendocument.spreadsheet
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 6.0
+      width: 4.0
+  '2':
+    page_no: 2
+    size:
+      height: 3.0
+      width: 2.0
+  '3':
+    page_no: 3
+    size:
+      height: 2.0
+      width: 1.0
+pictures: []
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 4
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Item
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Qty
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 0
+      text: Price
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 4
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 0
+      text: In stock
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: Widget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '12'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: '1.5'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 1
+      text: 'True'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: Gadget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '3'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 2
+      text: '22.75'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 4
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 3
+      start_row_offset_idx: 2
+      text: 'False'
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 3.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 4.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/0'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 3
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: ''
+    - col_span: 2
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Shipping included
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: Total
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '15'
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 3.0
+      t: 4.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/1'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: note
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: value
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: owner
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Ada
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: updated
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: 2024-03-05
+  label: table
+  parent:
+    $ref: '#/groups/1'
+  prov:
+  - bbox:
+      b: 3.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 2.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/2'
+- children: []
+  content_layer: invisible
+  data:
+    num_cols: 1
+    num_rows: 2
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: internal
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: '42'
+  label: table
+  parent:
+    $ref: '#/groups/2'
+  prov:
+  - bbox:
+      b: 2.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 1.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 3
+  self_ref: '#/tables/3'
+texts: []
+version: 1.10.0

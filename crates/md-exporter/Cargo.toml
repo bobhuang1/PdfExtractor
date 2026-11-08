@@ -21,6 +21,12 @@ pulldown-latex.workspace = true
 # order `--to json` writes them (serde_json's map is sorted).
 serde_json.workspace = true
 serde_yaml.workspace = true
-# `--chunks-tokenizer` counts hybrid budgets in a real Hugging Face
-# `tokenizer.json`; no training, progress bar or Oniguruma regex is needed.
+# The Hugging Face loader for `--chunks-tokenizer` needs no training, progress
+# bar or Oniguruma regex; the other two formats use the crates below.
 tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+# A SentencePiece `.model` is read by its own pure-Rust runtime, without a C++
+# build or a model download.
+sentencepiece-rs = "0.2"
+# A tiktoken vocabulary is a rank file, not a full tokenizer; the ranks are
+# loaded into this implementation and counted with the same BPE rules.
+tiktoken-rs = { version = "0.12", default-features = false }

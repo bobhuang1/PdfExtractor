@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,047 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,069 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -28,8 +28,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 > Docling writes them). **Legacy
 > `.doc`** (OLE compound file: container, Fib, piece table) and a **flow-format parser**
 > (RTF, HTML, Markdown, plain text, CSV/TSV) are implemented. **v0.1.0 is released**: a
-> `v*` tag builds every installer in CI and publishes the GitHub release. GPU, the
-> OpenDocument presentation family and the remaining OOXML containers are not yet
+> `v*` tag builds every installer in CI and publishes the GitHub release. GPU and the remaining OOXML containers are not yet
 > implemented; `.doc` character formatting
 > (styles, table grids, raster Art) is not read. What Docling and its competitors have
 > that we do not yet, and the plan to close it, is written up as **Phase 11** below.
@@ -110,7 +109,7 @@ pdf-extractor/
 ### Phase 2: Core Types & JSON Schema (3-5 days)
 - [x] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata) **Done**: `crates/core/src/types.rs` carries `DoclingDocument` and every node the schema names — `Page`/`Size`, `TextItem`, `TableItem`/`TableData`/`TableCell`, `PictureItem` with its `tabular_chart`, `Group`, `KeyValueItem`, the furniture layers, `Provenance` and `Ref` — and the conformance test walks each against the schema's required fields and enum values.
 - [x] Implement serialization (serde) to match exact JSON format **Done**: `crates/json-exporter` writes the model with `serde_json` at the schema's key order and shape, and every committed golden is that output byte for byte.
-- [x] Golden tests with known Docling outputs **Done**: 46 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
+- [x] Golden tests with known Docling outputs **Done**: 47 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
 
 ### Phase 3: DOCX Parser (1-2 weeks) — largely done
 - [x] Parse DOCX as OPC package (ZIP of XML), reusing the `zip` crate.
@@ -162,7 +161,7 @@ pdf-extractor/
   leaves.
 - [x] Headers/footers parsed from their own parts and reported as furniture.
 - [x] Office Math (`m:oMath`) linearised, with operators read from `m:chr` attributes.
-- [x] Unit tests, plus `real_docx_test.rs` over 19 real fixtures (POI, LibreOffice, calibre).
+- [x] Unit tests, plus `real_docx_test.rs` over 22 real fixtures (POI, LibreOffice, calibre).
 - [x] Numbering definitions (`numbering.xml`) — `numId`/`abstractNum` resolved, markers
   expanded from `lvlText` with per-level counters that restart, bullet glyphs mapped out
   of the symbol private-use area, and `level` reported.
@@ -365,7 +364,7 @@ pdf-extractor/
 - [ ] Feature flag/config to enable/disable
 
 ### Phase 10: Testing, Optimization, Docs (Ongoing)
-- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — thirty-two tests in the binary: the corpus-wide conformance check, eight fixture checks, a version check, twenty comparison units and two acceptance tests.
+- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — thirty-four tests in the binary: the corpus-wide conformance check, ten fixture checks, a version check, twenty comparison units and two acceptance tests.
 - [ ] Performance tests with varied sizes
 - [ ] Cross-platform testing
 - [x] Error handling tests (malformed docs) **Done**: `cli_test` holds the inputs a run must refuse rather than crash on — `a_failed_document_appears_in_the_progress_stream` (a `.docx` that is not a package), `an_unsupported_file_errors`, `a_missing_input_errors`, `an_empty_directory_errors` and `a_refused_name_is_explained_by_the_files_bytes` — and each asserts the exit status and the reason, not merely that something failed.
@@ -399,7 +398,7 @@ at the end.*
 | Malformed PDFs | qpdf-based parser repairs | | MuPDF repairs, PDFBox lenient | no xref rebuild |
 | Merged table cells | TableFormer predicts spans; our own references carry 27 spanned cells | Surya full-mode HTML spans | | DOCX `gridSpan`/`vMerge`/`tblHeader` now read into real spans; **PDF cells still 1×1** |
 | Formulas | layout model labels `formula` (132 labels in our references), optional LaTeX enrichment | Marker/Surya/Nougat → LaTeX | | DOCX math linearised to Unicode under label `formula`; **no PDF formula detection**; notation deliberately not compared |
-| New inputs | PPTX, XLSX, ODF, images, HTML family, markup, mail, … | Marker: +EPUB; MinerU: +EPUB/OFD | | pdf/docx/doc/odt/ods/rtf/html/txt/md/csv/pptx/images/legacy `.ppt` (bridged) — ODP, mail and EPUB still out |
+| New inputs | PPTX, XLSX, ODF, images, HTML family, markup, mail, … | Marker: +EPUB; MinerU: +EPUB/OFD | | pdf/docx/doc/odt/ods/odp/rtf/html/txt/md/csv/pptx/images/legacy `.ppt` (bridged) — mail and EPUB still out |
 | Image embedding | `--image-export-mode embedded/referenced/placeholder` | Marker embeds in md | | all three modes under the same names: images written beside the JSON (the default, *referenced*), base64 `data:` URIs inside md/html (*embedded*), or `<!-- image -->` where a picture stood (*placeholder*); a Markdown `![alt](source)` or HTML `<img src>` is read back — from beside its file, or, for an embedded page, by decoding its `data:` URI (base64, or the percent-encoded form RFC 2397 allows) into the picture's own bytes — and copied the same way, so both a referenced and an embedded round trip keep their pictures |
 | Service mode | docling-serve REST (+demo UI) | MinerU API/WebUI; Unstructured API | | none (desktop window + CLI) |
 
@@ -494,13 +493,13 @@ a renderer needs.
   reordering is lossless and the file still parses as the same document; keys come
   out in `--to json`'s order, so two runs of one extract are byte-identical.
 - [x] Golden tests: committed `.md` expectations under `test-data/golden/markdown/`,
-  byte-exact for ten documents (a one-line PDF, a real form with tables, a paper
+  byte-exact for twenty-one documents (a one-line PDF, a real form with tables, a paper
   fixture, a DOCX with lists/tables/pictures, a DOCX with Office Math, an HTML file,
   a Markdown file read back as Markdown, a Markdown file whose picture is a real file
   beside it — copied beside the output and referenced as
   `![Image](pictures_images/img1.jpg)` — a DOCX whose table merges cells, and a PDF
   whose link annotation must come out as `[text](url)`), regenerated deliberately with
-  `UPDATE_GOLDEN_MD=1`. The nine documents the format goldens share with that set are
+  `UPDATE_GOLDEN_MD=1`. The nineteen documents the format goldens share with that set are
   pinned as `.html`, `.txt` and `.yaml` under
   `test-data/golden/{html,text,yaml}/`, regenerated with
   `UPDATE_GOLDEN_FORMATS=1`, and a run asking for all five formats at once is pinned
@@ -543,12 +542,13 @@ heading levels, is exactly the input such a chunker wants.
   (a run of list items is one chunk, and each chunk carries its heading path); hybrid
   packs sentences to `--chunks-max-tokens` with `--chunks-overlap-tokens` carried into
   the next chunk, never cutting a sentence, and opens a new chunk at each section header.
-- [x] `--chunks-tokenizer <FILE>`: count the budget with a real byte-pair tokenizer (the
-  `tokenizers` crate) loaded from a Docling-compatible Hugging Face `tokenizer.json`.
-  The tokenizer is read and validated before conversion, and its tokens are counted
-  without special tokens, as Docling's tokenizer does; without the flag `count_tokens`'s
-  documented approximation (whitespace words, one token per four characters) remains the
-  reproducible default.
+- [x] `--chunks-tokenizer <FILE>`: count the budget with a real tokenizer loaded from
+  a Docling-compatible Hugging Face `tokenizer.json`, a SentencePiece `.model`, or a
+  tiktoken `.tiktoken` vocabulary. The tokenizer is read and validated before conversion,
+  and its tokens are counted without special tokens, as Docling's tokenizer does; without
+  the flag `count_tokens`'s documented approximation (whitespace words, one token per four
+  characters) remains the reproducible default. A `.tiktoken` rank file names no split
+  pattern, so its filename selects the OpenAI family pattern (cl100k_base by default).
 - [x] Every chunk carries the provenance of its span (page + box) so a RAG consumer can
   cite and retrieve — the stable page/block-locator idea MinerU builds its library on.
 - [x] Tests: chunks join back to the body text, the token budget is respected, and a
@@ -878,19 +878,42 @@ PDFBox and PDF.js.
   (`test-data/golden/docling/brief_odt.json`): a flow document, so Docling publishes
   no page either — 14 text items, one table and one picture, with text agreement
   1.000 — so the schema layer and the corpus ratchet both cover the ODT reading.
+  A second fixture, `notes_odt.odt` (`test-data/make_notes_odt.py`, flat ODF re-saved
+  by LibreOffice), asks the two questions `brief_odt.odt` cannot: a footnote, which
+  both readings report as body content after the flow, and a table inside a table
+  cell, which both readings hold as a table of its own beside the outer one. Its
+  reference (`notes_odt.json`) is 0 pages, 4 text items and 2 tables, with text
+  agreement 1.000 in six rows, and joins the same ratchet. The nested table is read
+  as a table of its own and its cells' words are also the holding cell's text — the
+  flattening Docling reports — so no word lives only on one side.
 - [x] **ODF sheets** (`ods`): `content.xml`'s `office:spreadsheet` is walked sheet by
   sheet and each `table:table` becomes a page — a `sheet` group holding the tables its
   cells form, a connected block per table the way a worksheet is read, merges kept as
   `row_span`/`col_span` with the covered slots not written, repeats honoured while the
   filler Calc writes for the rest of a sheet is left out, a hidden sheet on the
   `invisible` layer, and `--page-range` naming sheets. The fixture is Calc's conversion
-  of `inventory.xlsx` (`test-data/make_inventory_ods.py`). **Done**, and it carries a
-  real Docling reference of its own (`test-data/golden/docling/inventory_calc.json`,
-  read through Docling's OpenDocument backend): three pages and four tables, the same
-  workbook Docling reads from the XLSX fixture, so the schema layer and the corpus
-  ratchet both cover the ODS reading.
-- [ ] **ODF slides** (`odp`): the remaining OpenDocument family. It is detected by its
-  stored `mimetype` and refused by name rather than misread as a text document.
+  of  `inventory.xlsx` (`test-data/make_inventory_ods.py`). **Pictures and charts are
+  read too**: a cell's `draw:frame` names a `Pictures/` image or an embedded
+  `draw:object` chart, and the frame's anchoring cell is the box it occupies; the
+  picture keeps its bytes and media type while the chart's categories and series
+  are resolved from the sheet's cells, its title becoming a caption. The picture
+  and chart fixtures are Calc's conversions of `worksheet_pictures.xlsx` and
+  `chart_sheet.xlsx` (`test-data/worksheet_pictures_calc.ods`,
+  `chart_sheet_calc.ods`, written by `test-data/make_sheet_drawings_ods.py`).
+  **Done**, and it carries a real Docling reference of its own
+  (`test-data/golden/docling/inventory_calc.json`, read through Docling's
+  OpenDocument backend): three pages and four tables, the same workbook Docling
+  reads from the XLSX fixture, so the schema layer and the corpus ratchet both
+  cover the ODS reading.
+- [x] **ODF slides** (`odp`): every `draw:page` is a slide and a page, in the deck's
+  order — a `chapter` group holding its title and outline text (nested list items),
+  other paragraphs, a table with real spans, its `Pictures/` picture and its speaker
+  notes on the notes layer; a hidden slide stays on `invisible`, and `--page-range`
+  names slides. The page size is the slide's master page → page layout →
+  `style:page-layout-properties` rectangle, in EMU. The fixture is Impress's conversion
+  of `q3_review.pptx` (`test-data/make_q3_review_odp.py`), and it joins the committed
+  Docling schema check. **Done.** Not read yet: comments, chart objects, master-page
+  background shapes, animations and transitions.
 - [ ] Each format joins the golden corpus with real-world fixtures (POI/LibreOffice-
   saved, like the DOCX suite) and a Docling-converted reference under
   `test-data/golden/docling/`, so the schema layer and the ratchet cover it with no new
@@ -910,21 +933,27 @@ PDFBox and PDF.js.
   points at the page a reader of the original would turn to; a flow format is read
   whole and says so in the log, and a range naming no page fails with the file's count.
 - [x] `--page-range` for a page-per-frame image (a GIF's or WebP's frames, a TIFF's
-  directories) and a workbook's sheets, where a "page" is a frame or a sheet rather than
-  a PDF page. Each keeps the number it has in the file, and a range that names none
-  fails with the count — naming "sheet(s)" for a workbook. **Done**: the filter runs on
-  the page list before recognition (`convert_image`) or before the first sheet is read
-  (`convert_workbook`, the path both XLSX and ODS take), so a range costs only what it
-  keeps; the bridged `.xls` path passes the same range through, and the "read whole" log
+  directories), a workbook's sheets and a presentation's slides (PPTX or ODP), where a
+  "page" is a frame, a sheet or a slide rather than a PDF page. Each keeps the number it
+  has in the file, and a range that names none fails with the count — naming "sheet(s)"
+  for a workbook and "slide(s)" for a deck. **Done**: the filter runs on the page list
+  before recognition (`convert_image`), before the first sheet is read
+  (`convert_workbook`, the path both XLSX and ODS take) and before the first slide is
+  emitted (`convert_pptx`, `convert_odp`), so a range costs only what it keeps; the
+  bridged `.xls` and `.ppt` paths pass the same range through, and the "read whole" log
   is only for formats that really have no pages.
-- [ ] Wire W1–W3's flags into the window's settings — formats, OCR languages, PSM, page
-  range, a password field that never echoes — and let the result pane open the output
-  folder. **Started**: the settings form now forwards the page range, OCR languages,
-  PSM and the W1 format picker (`--to json` plus Markdown, HTML, text, YAML or chunks
-  beside it), and the window's tests pin the argument vector they build. No password
-  field is offered: the CLI accepts no `--pdf-password` (an encrypted PDF is refused,
-  see W4), so a field would have nothing to send; the result pane's output-folder
-  action is still open.
+- [x] Wire W1–W3's flags into the window's settings — formats, OCR languages, PSM, page
+  range — and let the result pane open the output folder. **Done**: the settings form
+  forwards the page range, OCR languages, PSM, the W1 format picker (`--to json` plus
+  Markdown, HTML, text, YAML or chunks beside it), and the finer reading knobs — the
+  notes layer, hyphenation, how Markdown and HTML refer to pictures, a hybrid chunk's
+  token budget and overlap, and the preview's resolution — each passed only when it
+  differs from the CLI's own default; a page range a run could not read is refused in
+  the window before the CLI is started; and the result pane names the folder the run
+  wrote into and opens it through the platform's own opener. The window's tests pin
+  the argument vector they build. No password field is offered: the CLI accepts no
+  `--pdf-password` (an encrypted PDF is refused, see W4), so a field would have
+  nothing to send.
 - [ ] `--selftest` grows one case per new flag; the README flag table gains the same
   rows; the v0.2.0 release notes list them.
 

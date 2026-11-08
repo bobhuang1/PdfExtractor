@@ -48,6 +48,8 @@ const CASES: &[&str] = &[
     "merged_table.rtf",        // the same merged table as a word processor's own RTF export
     "link_annotations.pdf",    // a PDF whose link is an `<a href>` in the HTML
     "chart_deck.pptx",         // a deck whose only picture is a chart: no file to place
+    "inventory_calc.ods",      // a workbook whose sheets are pages, its merge a span
+    "brief_odt.odt",           // a Writer document: a flow with a picture, read as one
     "rtf_bitmap.rtf",          // a word processor's own RTF export, control words and all
 ];
 
@@ -75,6 +77,8 @@ fn input_of(name: &str) -> PathBuf {
         | "merged_table.rtf"
         | "link_annotations.pdf"
         | "chart_deck.pptx"
+        | "inventory_calc.ods"
+        | "brief_odt.odt"
         | "rtf_bitmap.rtf" => root.join(name),
         _ => root.join("real").join(name),
     }

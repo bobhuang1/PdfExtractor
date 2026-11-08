@@ -37,10 +37,10 @@
 //!   splits on whitespace and counts each word as one token per four characters.
 //!   That is stable and identical on every machine, but it is not a model's own
 //!   count. When [`ChunkOptions::tokenizer`] carries a [`Tokenizer`] loaded from
-//!   a Hugging Face `tokenizer.json`, hybrid budgets are counted in that model's
-//!   tokens instead — encoded without special tokens, as Docling's tokenizer
-//!   does. The approximation remains the default, so a budget is reproducible
-//!   unless the caller deliberately supplies the model whose budget it is.
+//!   a Hugging Face `tokenizer.json`, a SentencePiece `.model`, or a tiktoken
+//!   vocabulary file, hybrid budgets are counted in that model's tokens instead.
+//!   The approximation remains the default, so a budget is reproducible unless
+//!   the caller deliberately supplies the model whose budget it is.
 //!
 //! A body item on the notes layer (a deck's speaker notes, a comment) is left
 //! out unless [`ChunkOptions::include_notes`] asks for it, exactly as the
@@ -48,10 +48,12 @@
 //! because a running head repeated on every page is not something to retrieve.
 
 use crate::walk::{walk_body_with, Visitor};
+use base64::Engine as _;
 use pdfextractor_core::{
     DoclingDocument, Group, Origin, PictureItem, Provenance, TableItem, TextItem,
 };
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -209,12 +211,49 @@ pub fn count_tokens(text: &str) -> usize {
         .sum()
 }
 
-/// A real tokenizer loaded from a Hugging Face `tokenizer.json`.
+/// The three tokenizer files the chunker accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenizerFormat {
+    HuggingFace,
+    SentencePiece,
+    Tiktoken,
+}
+
+/// The cl100k_base split pattern, used by OpenAI's tiktoken vocabularies when
+/// the file itself cannot name a pattern. A `.tiktoken` file carries only ranks;
+/// the pattern belongs to the encoding family, not the rank file.
+const CL100K_PATTERN: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
+
+/// The p50k_base/r50k_base split pattern, the older GPT-3-era family.
+const P50K_PATTERN: &str = r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+";
+
+/// The o200k_base split pattern, selected by the vocabulary's own name because
+/// that is the only place a `.tiktoken` file says which family it belongs to.
+const O200K_PATTERN: &str = concat!(
+    r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+",
+    r"(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+    r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*",
+    r"(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+    r"|\p{N}{1,3}",
+    r"| ?[^\s\p{L}\p{N}]+[\r\n/]*",
+    r"|\s*[\r\n]+",
+    r"|\s+",
+);
+
+/// A real tokenizer loaded from a Hugging Face `tokenizer.json`, a SentencePiece
+/// `.model`, or a tiktoken `.tiktoken` vocabulary.
 ///
-/// The file is the model's vocabulary, merges and pipeline — the same file a
-/// Docling-compatible chunker reads — not a model name resolved over a network.
+/// The file is the model's vocabulary and pipeline — not a model name resolved
+/// over a network. A tiktoken rank file has no split pattern of its own, so its
+/// name chooses the OpenAI family pattern; the default is cl100k_base.
 pub struct Tokenizer {
-    inner: tokenizers::Tokenizer,
+    inner: TokenizerKind,
+}
+
+enum TokenizerKind {
+    HuggingFace(tokenizers::Tokenizer),
+    SentencePiece(sentencepiece_rs::SentencePieceProcessor),
+    Tiktoken(tiktoken_rs::CoreBPE),
 }
 
 impl std::fmt::Debug for Tokenizer {
@@ -224,15 +263,37 @@ impl std::fmt::Debug for Tokenizer {
 }
 
 impl Tokenizer {
-    /// Load a Hugging Face tokenizer file from `path`.
+    /// Load a tokenizer file from `path`.
+    ///
+    /// The extension names the format, so a malformed `tokenizer.json` fails as
+    /// JSON rather than being mistaken for a binary model. A name with no
+    /// recognized extension is recognized by its contents.
     ///
     /// A missing, unreadable or malformed file is an error here, before any
     /// document is converted, rather than a budget quietly falling back to the
     /// approximation.
     pub fn from_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let inner = tokenizers::Tokenizer::from_file(path)
-            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+        let format = tokenizer_format(path)?;
+        let inner = match format {
+            TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(
+                tokenizers::Tokenizer::from_file(path)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?,
+            ),
+            TokenizerFormat::SentencePiece => {
+                let bytes = std::fs::read(path)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+                TokenizerKind::SentencePiece(
+                    sentencepiece_rs::SentencePieceProcessor::from_serialized_model(&bytes)
+                        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?,
+                )
+            }
+            TokenizerFormat::Tiktoken => {
+                let bytes = std::fs::read(path)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes)?)
+            }
+        };
         Ok(Self { inner })
     }
 
@@ -242,10 +303,148 @@ impl Tokenizer {
     /// A span the model's own pipeline refuses falls back to [`count_tokens`],
     /// so one pathological string cannot abort a whole export.
     pub fn count_tokens(&self, text: &str) -> usize {
-        self.inner
-            .encode(text, false)
-            .map(|encoding| encoding.get_ids().len())
-            .unwrap_or_else(|_| count_tokens(text))
+        match &self.inner {
+            TokenizerKind::HuggingFace(tokenizer) => tokenizer
+                .encode(text, false)
+                .map(|encoding| encoding.get_ids().len())
+                .unwrap_or_else(|_| count_tokens(text)),
+            TokenizerKind::SentencePiece(tokenizer) => tokenizer
+                .encode_to_ids(text)
+                .map(|ids| ids.len())
+                .unwrap_or_else(|_| count_tokens(text)),
+            TokenizerKind::Tiktoken(tokenizer) => tokenizer.encode_ordinary(text).len(),
+        }
+    }
+}
+
+/// The format named by the extension, or by the bytes when the extension is
+/// unfamiliar.
+fn tokenizer_format(path: &Path) -> anyhow::Result<TokenizerFormat> {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("json") => Ok(TokenizerFormat::HuggingFace),
+        Some("model" | "spm") => Ok(TokenizerFormat::SentencePiece),
+        Some("tiktoken") => Ok(TokenizerFormat::Tiktoken),
+        _ => {
+            let bytes = std::fs::read(path)
+                .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+            if looks_like_tiktoken(&bytes) {
+                Ok(TokenizerFormat::Tiktoken)
+            } else if looks_like_json(&bytes) {
+                Ok(TokenizerFormat::HuggingFace)
+            } else if looks_like_sentencepiece(&bytes) {
+                Ok(TokenizerFormat::SentencePiece)
+            } else {
+                anyhow::bail!(
+                    "{}: not a tokenizer.json, SentencePiece .model or tiktoken vocabulary",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+fn looks_like_json(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| *byte == b'{')
+}
+
+fn looks_like_sentencepiece(bytes: &[u8]) -> bool {
+    // A ModelProto starts with `pieces` (field 1, length-delimited), so a
+    // non-empty model's first key is 0x0a. The parser remains the authority:
+    // this only decides which error a malformed file gets.
+    bytes.first() == Some(&0x0a)
+}
+
+fn looks_like_tiktoken(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    text.lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| {
+            let mut fields = line.split_whitespace();
+            matches!(
+                (fields.next(), fields.next(), fields.next()),
+                (Some(token), Some(rank), None)
+                    if base64::engine::general_purpose::STANDARD
+                        .decode(token)
+                        .is_ok()
+                        && rank.parse::<u32>().is_ok()
+            )
+        })
+}
+
+/// Read a `.tiktoken` rank file: one base64 token and its integer rank per
+/// line. The file has no pattern or special tokens, so both are supplied here.
+fn load_tiktoken(path: &Path, bytes: &[u8]) -> anyhow::Result<tiktoken_rs::CoreBPE> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| anyhow::anyhow!("{}: not UTF-8 text: {error}", path.display()))?;
+    let mut ranks = HashMap::new();
+    let mut seen_ranks = HashSet::new();
+    for (line_no, raw) in text.lines().enumerate() {
+        let number = line_no + 1;
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(token), Some(rank), None) = (fields.next(), fields.next(), fields.next()) else {
+            anyhow::bail!(
+                "{}:{number}: expected one base64 token and one rank",
+                path.display()
+            );
+        };
+        let token = base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .map_err(|error| {
+                anyhow::anyhow!("{}:{number}: invalid base64 token: {error}", path.display())
+            })?;
+        let rank: u32 = rank.parse().map_err(|error| {
+            anyhow::anyhow!("{}:{number}: invalid rank: {error}", path.display())
+        })?;
+        if !seen_ranks.insert(rank) {
+            anyhow::bail!("{}:{number}: rank {rank} appears twice", path.display());
+        }
+        ranks.insert(token, rank);
+    }
+    if ranks.is_empty() {
+        anyhow::bail!("{}: the tiktoken vocabulary is empty", path.display());
+    }
+    // BPE falls back to single bytes, so every byte must have a rank even when
+    // the vocabulary also holds longer merges. A file missing one would panic
+    // on ordinary text; refuse it here instead.
+    if let Some(missing) = (0u16..=255).find(|byte| {
+        let token = [*byte as u8];
+        !ranks.contains_key(token.as_slice())
+    }) {
+        anyhow::bail!(
+            "{}: the tiktoken vocabulary has no rank for single byte 0x{missing:02X}",
+            path.display()
+        );
+    }
+    let pattern = tiktoken_pattern(path);
+    tiktoken_rs::CoreBPE::new(ranks.into_iter().collect(), Default::default(), pattern)
+        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
+}
+
+fn tiktoken_pattern(path: &Path) -> &'static str {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if name.contains("o200k") {
+        O200K_PATTERN
+    } else if name.contains("p50k") || name.contains("r50k") || name.contains("gpt2") {
+        P50K_PATTERN
+    } else {
+        CL100K_PATTERN
     }
 }
 
@@ -1049,11 +1248,37 @@ mod tests {
         assert_eq!(with[1].meta.doc_items[0].content_layer, "notes");
     }
 
-    fn mini_tokenizer() -> Tokenizer {
+    fn tokenizer_fixture(name: &str) -> Tokenizer {
         Tokenizer::from_file(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/tokenizer-mini.json"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test-data")
+                .join(name),
         )
-        .expect("the mini tokenizer loads")
+        .unwrap_or_else(|error| panic!("the {name} tokenizer loads: {error}"))
+    }
+
+    fn mini_tokenizer() -> Tokenizer {
+        tokenizer_fixture("tokenizer-mini.json")
+    }
+
+    #[test]
+    fn a_sentencepiece_model_counts_a_hybrid_budget() {
+        let tokenizer = tokenizer_fixture("tokenizer-mini.model");
+        assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
+        assert!(
+            tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
+            "the SentencePiece model must count this word differently from the approximation"
+        );
+    }
+
+    #[test]
+    fn a_tiktoken_vocabulary_counts_a_hybrid_budget() {
+        let tokenizer = tokenizer_fixture("tokenizer-mini.tiktoken");
+        assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
+        assert!(
+            tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
+            "the tiktoken vocabulary must count this word differently from the approximation"
+        );
     }
 
     #[test]

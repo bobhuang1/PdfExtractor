@@ -83,10 +83,14 @@ const DOC: &[u8] = b"# Annual Report\n\nRevenue grew by 9%. Every region contrib
 
 const META_SCHEMA: &str = "docling_core.transforms.chunker.DocMeta";
 
-/// A tiny real Hugging Face BPE file: its model splits `abcdefgh` into more
-/// tokens than the approximation, so a budget measured by it behaves differently.
-fn tokenizer_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/tokenizer-mini.json")
+/// One of the tiny real tokenizer files. The Hugging Face model splits
+/// `abcdefgh` into more tokens than the approximation, so a budget measured by
+/// it behaves differently; the SentencePiece and tiktoken files are the same
+/// vocabulary in the other two accepted formats.
+fn tokenizer_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-data")
+        .join(name)
 }
 
 /// `--to chunks` writes `<stem>.jsonl` beside the input, one whole record a
@@ -215,7 +219,7 @@ fn a_real_tokenizer_file_counts_the_hybrid_budget() {
     run_ok(&base);
     let approximate = records_of(&ws.join("report.jsonl")).len();
 
-    let tokenizer = tokenizer_fixture();
+    let tokenizer = tokenizer_fixture("tokenizer-mini.json");
     let tokenizer = tokenizer.to_str().unwrap();
     let mut with_file = base.to_vec();
     with_file.extend(["--chunks-tokenizer", tokenizer]);
@@ -225,6 +229,38 @@ fn a_real_tokenizer_file_counts_the_hybrid_budget() {
         real > approximate,
         "the tokenizer made {real} chunk(s), the approximation {approximate}"
     );
+}
+
+/// Every accepted file format is loaded by the real binary and used for a
+/// hybrid run, not just the Hugging Face JSON the other tests exercise.
+#[test]
+fn every_supported_tokenizer_file_is_accepted() {
+    for (name, tag) in [
+        ("tokenizer-mini.json", "hf"),
+        ("tokenizer-mini.model", "sentencepiece"),
+        ("tokenizer-mini.tiktoken", "tiktoken"),
+    ] {
+        let ws = Workspace::new(tag);
+        let input = ws.write(
+            "report.md",
+            b"# Report\n\nabcdefgh abcdefgh abcdefgh abcdefgh.\n",
+        );
+        let tokenizer = tokenizer_fixture(name);
+        run_ok(&[
+            "-i",
+            input.to_str().unwrap(),
+            "--to",
+            "chunks",
+            "--chunks-type",
+            "hybrid",
+            "--chunks-max-tokens",
+            "8",
+            "--chunks-tokenizer",
+            tokenizer.to_str().unwrap(),
+        ]);
+        let records = records_of(&ws.join("report.jsonl"));
+        assert!(!records.is_empty(), "{name} wrote no chunks");
+    }
 }
 
 /// A tokenizer that cannot be loaded is a broken configuration: the run fails

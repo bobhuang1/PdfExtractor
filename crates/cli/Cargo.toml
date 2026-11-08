@@ -29,6 +29,7 @@ pdfextractor-pdf-parser = { path = "../pdf-parser" }
 pdfextractor-docx-parser = { path = "../docx-parser" }
 pdfextractor-odt-parser = { path = "../odt-parser" }
 pdfextractor-ods-parser = { path = "../ods-parser" }
+pdfextractor-odp-parser = { path = "../odp-parser" }
 pdfextractor-doc-parser = { path = "../doc-parser" }
 pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
 pdfextractor-pptx-parser = { path = "../pptx-parser" }

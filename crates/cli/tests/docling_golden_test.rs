@@ -694,12 +694,29 @@ fn an_odt_document_conforms_to_the_docling_schema() {
     assert_fixture_conforms("brief_odt.odt", "brief_odt", "odt-schema");
 }
 
+/// The second Writer fixture adds what `brief_odt.odt` has no instance of: a
+/// footnote, whose text both readings report as body content after the flow,
+/// and a table inside a table cell, which both readings hold as a table of its
+/// own beside the outer one. Its reference is measured by the same ratchet.
+#[test]
+fn an_odt_document_with_notes_and_a_nested_table_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("notes_odt.odt", "notes_odt", "odt-notes-schema");
+}
+
 /// A deck adds things no corpus document has: `chapter` groups that hold
 /// their slide's items, list items with a `marker` and `enumerated`, and a
 /// table whose cell spans two columns.
 #[test]
 fn a_presentation_conforms_to_the_docling_schema() {
     assert_fixture_conforms("q3_review.pptx", "q3_review", "pptx-schema");
+}
+
+/// The same deck as an OpenDocument presentation is a deck too: slide groups,
+/// a title and list items, a table, a picture and speaker notes all have to be
+/// a document Docling accepts.
+#[test]
+fn an_odp_presentation_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("q3_review_impress.odp", "q3_review_impress", "odp-schema");
 }
 
 /// A plain image is a page whose origin names the image's own media type —
@@ -1784,7 +1801,9 @@ fn docling_core_accepts_our_documents() {
         ("inventory.xlsx", "inventory"),
         ("inventory_calc.ods", "inventory_calc"),
         ("brief_odt.odt", "brief_odt"),
+        ("notes_odt.odt", "notes_odt"),
         ("q3_review.pptx", "q3_review"),
+        ("q3_review_impress.odp", "q3_review_impress"),
         ("invoice_scan.png", "invoice_scan"),
     ] {
         let input = repository_root().join("test-data").join(file);

@@ -16,9 +16,14 @@
 //! style the sheet's `table:style-name` names rather than on the table itself,
 //! so the automatic styles are read beside the sheets.
 //!
-//! Not read yet: the pictures and charts a sheet draws, notes and annotations,
-//! comments and tracked changes, and the formula itself — only the value it
-//! displays is read.
+//! The pictures and charts a sheet draws are read too. A cell's `draw:frame`
+//! names either a `Pictures/` media part or an embedded `draw:object` chart;
+//! its box is the anchoring cell on the same 64 × 20 pixel grid the XLSX reader
+//! uses. A picture keeps its media type and bytes; a chart is read from its
+//! object's `content.xml` as the same data table a worksheet's chart is.
+//!
+//! Not read yet: notes and annotations, comments and tracked changes, and the
+//! formula itself — only the value it displays is read.
 
 use anyhow::{Context, Result};
 use quick_xml::events::{BytesStart, Event};
@@ -26,11 +31,21 @@ use quick_xml::Reader;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Cursor, Read};
 
-use pdfextractor_xlsx_parser::{Sheet, SheetCell, SheetTable};
+use pdfextractor_picture_formats::{format_for_mime, mime_for_extension};
+use pdfextractor_xlsx_parser::{Sheet, SheetCell, SheetPicture, SheetTable};
+
+mod chart;
 
 /// A `table:number-*-repeated` larger than this is filler rather than content:
 /// Calc writes the rest of a sheet as one repeated empty cell or row.
 const MAX_REPEAT: usize = 1024;
+
+/// A picture or chart frame is placed in cells: one cell is Calc's default
+/// 64-pixel column by 20-pixel row, the same grid the XLSX reader places a
+/// drawing on. A frame states its size and offset in inches.
+const PIXELS_PER_INCH: f64 = 96.0;
+const COLUMN_PIXELS: f64 = 64.0;
+const ROW_PIXELS: f64 = 20.0;
 
 /// One OpenDocument spreadsheet.
 #[derive(Debug, Clone)]
@@ -49,12 +64,14 @@ impl OdsDocument {
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
+        let media = read_parts(&mut archive, "Pictures/");
+        let objects = read_chart_objects(&mut archive);
 
         // A hidden sheet is named by its style, and the style is stated in the
         // same part: read the whole part before any sheet is.
         let hidden = hidden_sheet_styles(&content)?;
         Ok(Self {
-            sheets: read_sheets(&content, &hidden)?,
+            sheets: read_sheets(&content, &hidden, &media, &objects)?,
         })
     }
 }
@@ -64,6 +81,50 @@ fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).ok()?;
     Some(buffer)
+}
+
+fn read_parts(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    prefix: &str,
+) -> HashMap<String, Vec<u8>> {
+    let mut parts = HashMap::new();
+    for index in 0..archive.len() {
+        let Ok(mut file) = archive.by_index(index) else {
+            continue;
+        };
+        let name = file.name().to_string();
+        if file.is_dir() || !name.starts_with(prefix) {
+            continue;
+        }
+        let mut buffer = Vec::new();
+        if file.read_to_end(&mut buffer).is_ok() {
+            parts.insert(name, buffer);
+        }
+    }
+    parts
+}
+
+/// The embedded chart objects a package holds, keyed by the directory a
+/// `draw:object` names (`Object 1`). Each is the chart's `content.xml`.
+fn read_chart_objects(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, Vec<u8>> {
+    let mut objects = HashMap::new();
+    for index in 0..archive.len() {
+        let Ok(mut file) = archive.by_index(index) else {
+            continue;
+        };
+        let name = file.name().to_string();
+        let Some(object) = name.strip_suffix("/content.xml") else {
+            continue;
+        };
+        if !object.starts_with("Object ") {
+            continue;
+        }
+        let mut buffer = Vec::new();
+        if file.read_to_end(&mut buffer).is_ok() {
+            objects.insert(object.to_string(), buffer);
+        }
+    }
+    objects
 }
 
 /// The table styles that state `table:display="false"`: a sheet is hidden by
@@ -99,18 +160,36 @@ fn hidden_sheet_styles(xml: &[u8]) -> Result<HashSet<String>> {
 }
 
 /// Every worksheet, in the workbook's order.
-fn read_sheets(xml: &[u8], hidden_styles: &HashSet<String>) -> Result<Vec<Sheet>> {
+fn read_sheets(
+    xml: &[u8],
+    hidden_styles: &HashSet<String>,
+    media: &HashMap<String, Vec<u8>>,
+    objects: &HashMap<String, Vec<u8>>,
+) -> Result<Vec<Sheet>> {
     let mut pull = Pull::new(xml);
     let mut sheets = Vec::new();
+    let mut frames = Vec::new();
     loop {
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table" => {
                 let index = sheets.len() + 1;
-                sheets.push(read_sheet(&mut pull, &attrs, index, hidden_styles)?);
+                let (sheet, sheet_frames) = read_sheet(&mut pull, &attrs, index, hidden_styles)?;
+                sheets.push(sheet);
+                frames.push(sheet_frames);
             }
             Tok::Eof => break,
             _ => {}
         }
+    }
+
+    let resolved: Vec<(Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>)> = sheets
+        .iter()
+        .zip(&frames)
+        .map(|(sheet, frames)| drawings(&sheets, &sheet.name, frames, media, objects))
+        .collect();
+    for (sheet, (pictures, charts)) in sheets.iter_mut().zip(resolved) {
+        sheet.pictures = pictures;
+        sheet.charts = charts;
     }
     Ok(sheets)
 }
@@ -122,7 +201,7 @@ fn read_sheet(
     attrs: &[(String, String)],
     index: usize,
     hidden_styles: &HashSet<String>,
-) -> Result<Sheet> {
+) -> Result<(Sheet, Vec<Frame>)> {
     let name = field(attrs, "name")
         .filter(|name| !name.is_empty())
         .map(str::to_string)
@@ -135,15 +214,22 @@ fn read_sheet(
     // in the grid so the region is connected and the slot is not written twice.
     let mut covered: HashSet<(usize, usize)> = HashSet::new();
     let mut row = 0usize;
+    let mut frames = Vec::new();
 
     loop {
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table-row" => {
                 let repeat = count(&attrs, "number-rows-repeated").min(MAX_REPEAT);
-                let cells = read_row(pull)?;
+                let mut row_frames = Vec::new();
+                let cells = read_row(pull, row, &mut row_frames)?;
                 for copy in 0..repeat {
                     for cell in &cells {
                         place(&mut grid, &mut covered, row + copy, cell);
+                    }
+                    for frame in &row_frames {
+                        let mut frame = frame.clone();
+                        frame.row += copy;
+                        frames.push(frame);
                     }
                 }
                 row = row.saturating_add(repeat);
@@ -154,14 +240,16 @@ fn read_sheet(
         }
     }
 
-    Ok(Sheet {
-        name,
-        hidden,
-        tables: tables(&grid, &covered),
-        // A sheet's pictures and charts are not read yet.
-        pictures: Vec::new(),
-        charts: Vec::new(),
-    })
+    Ok((
+        Sheet {
+            name,
+            hidden,
+            tables: tables(&grid, &covered),
+            pictures: Vec::new(),
+            charts: Vec::new(),
+        },
+        frames,
+    ))
 }
 
 /// One cell a row holds, at the column it starts at.
@@ -170,6 +258,37 @@ struct RowCell {
     text: String,
     row_span: usize,
     col_span: usize,
+}
+
+/// A `draw:frame` found in a sheet cell: its anchor and the media or chart it
+/// holds. The frame's own position is relative to the cell that contains it.
+#[derive(Debug, Clone)]
+struct Frame {
+    row: usize,
+    col: usize,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    image: Option<String>,
+    image_mime: Option<String>,
+    object: Option<String>,
+}
+
+impl Frame {
+    /// The picture's box in cells, on the same 64 × 20 pixel grid the XLSX
+    /// reader places a drawing on. A frame's own `svg:x`/`svg:y` is its offset
+    /// inside the anchoring cell.
+    fn bbox(&self) -> [f64; 4] {
+        let left = self.col as f64 + self.x * PIXELS_PER_INCH / COLUMN_PIXELS;
+        let top = self.row as f64 + self.y * PIXELS_PER_INCH / ROW_PIXELS;
+        [
+            left,
+            top,
+            left + self.width * PIXELS_PER_INCH / COLUMN_PIXELS,
+            top + self.height * PIXELS_PER_INCH / ROW_PIXELS,
+        ]
+    }
 }
 
 /// One cell of the grid a sheet is read onto.
@@ -214,7 +333,7 @@ fn place(
 /// the column without becoming a cell of its own. An empty repeated cell is the
 /// filler a producer writes for the rest of the sheet: it moves the column on
 /// without costing a cell.
-fn read_row(pull: &mut Pull<'_>) -> Result<Vec<RowCell>> {
+fn read_row(pull: &mut Pull<'_>, row: usize, frames: &mut Vec<Frame>) -> Result<Vec<RowCell>> {
     let mut cells = Vec::new();
     let mut col = 0usize;
     loop {
@@ -224,18 +343,31 @@ fn read_row(pull: &mut Pull<'_>) -> Result<Vec<RowCell>> {
                     let row_span = count(&attrs, "number-rows-spanned");
                     let col_span = count(&attrs, "number-columns-spanned");
                     let repeat = count(&attrs, "number-columns-repeated");
-                    let text = read_cell(pull, &attrs)?;
+                    let mut cell_frames = Vec::new();
+                    let text = read_cell(pull, &attrs, row, col, &mut cell_frames)?;
                     if text.trim().is_empty() && row_span == 1 && col_span == 1 {
+                        for copy in 0..repeat.min(MAX_REPEAT) {
+                            for frame in &cell_frames {
+                                let mut frame = frame.clone();
+                                frame.col = frame.col.saturating_add(copy * col_span);
+                                frames.push(frame);
+                            }
+                        }
                         col = col.saturating_add(repeat);
                         continue;
                     }
-                    for _ in 0..repeat.min(MAX_REPEAT) {
+                    for copy in 0..repeat.min(MAX_REPEAT) {
                         cells.push(RowCell {
                             col,
                             text: text.clone(),
                             row_span,
                             col_span,
                         });
+                        for frame in &cell_frames {
+                            let mut frame = frame.clone();
+                            frame.col = frame.col.saturating_add(copy * col_span);
+                            frames.push(frame);
+                        }
                         col = col.saturating_add(col_span);
                     }
                 }
@@ -287,10 +419,18 @@ fn read_row(pull: &mut Pull<'_>) -> Result<Vec<RowCell>> {
 ///
 /// The displayed text is what the document says the cell says — a formula's
 /// cached result, a number as its format prints it, a date as its format writes
-/// it — so it is preferred. A typed value fills the cells a producer leaves
-/// without paragraphs: a boolean is `TRUE`/`FALSE` as a spreadsheet shows it,
-/// and a date, a time, a string or a number is the value the element states.
-fn read_cell(pull: &mut Pull<'_>, attrs: &[(String, String)]) -> Result<String> {
+/// it — so it is preferred, except for a boolean: that is `True`/`False` as
+/// Docling writes it and the XLSX reader spells it, whatever words a producer
+/// displays for it. A typed value fills the cells a producer leaves without
+/// paragraphs, and a date, a time, a string or a number is the value the element
+/// states.
+fn read_cell(
+    pull: &mut Pull<'_>,
+    attrs: &[(String, String)],
+    row: usize,
+    col: usize,
+    frames: &mut Vec<Frame>,
+) -> Result<String> {
     let mut paragraphs: Vec<String> = Vec::new();
     let mut loose = String::new();
     loop {
@@ -304,9 +444,10 @@ fn read_cell(pull: &mut Pull<'_>, attrs: &[(String, String)]) -> Result<String> 
                 "s" => loose.push_str(&" ".repeat(count(&attrs, "c"))),
                 "tab" => loose.push('\t'),
                 "line-break" => loose.push('\n'),
-                // A comment is not the cell's text, and a frame's words are the
-                // frame's; both are left out rather than read as the value.
-                "annotation" | "note" | "frame" | "object" => skip_element(pull)?,
+                // A comment is not the cell's text; a frame's words are the
+                // frame's, and the frame itself is a picture or a chart.
+                "annotation" | "note" | "object" => skip_element(pull)?,
+                "frame" => read_frame(pull, &attrs, row, col, frames)?,
                 _ => {}
             },
             Tok::Empty { name, attrs } => match name.as_str() {
@@ -329,11 +470,154 @@ fn read_cell(pull: &mut Pull<'_>, attrs: &[(String, String)]) -> Result<String> 
         .filter(|paragraph| !paragraph.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // A boolean is the value it states rather than the words it displays: Calc
+    // writes `TRUE`, and the document Docling reads states `True`. The XLSX
+    // reader gives a workbook's boolean the same spelling.
+    if field(attrs, "value-type") == Some("boolean") {
+        return Ok(typed_value(attrs));
+    }
     if text.is_empty() {
         Ok(typed_value(attrs))
     } else {
         Ok(text)
     }
+}
+
+/// Read one `draw:frame` up to its closing tag and keep the media or chart it
+/// holds. A chart frame also carries a preview `draw:image`; the object is the
+/// chart, so the preview is not reported as a picture of it.
+fn read_frame(
+    pull: &mut Pull<'_>,
+    attrs: &[(String, String)],
+    row: usize,
+    col: usize,
+    frames: &mut Vec<Frame>,
+) -> Result<()> {
+    let mut frame = Frame {
+        row,
+        col,
+        x: field(attrs, "x").and_then(length_in_inches).unwrap_or(0.0),
+        y: field(attrs, "y").and_then(length_in_inches).unwrap_or(0.0),
+        width: field(attrs, "width")
+            .and_then(length_in_inches)
+            .unwrap_or(0.0),
+        height: field(attrs, "height")
+            .and_then(length_in_inches)
+            .unwrap_or(0.0),
+        image: None,
+        image_mime: None,
+        object: None,
+    };
+    loop {
+        match pull.next()? {
+            Tok::Start { name, attrs } if name == "image" => {
+                capture_image(&mut frame, &attrs);
+                skip_element(pull)?;
+            }
+            Tok::Empty { name, attrs } if name == "image" => {
+                capture_image(&mut frame, &attrs);
+            }
+            Tok::Start { name, attrs } if name == "object" => {
+                if let Some(href) = field(&attrs, "href") {
+                    frame.object = Some(href.to_string());
+                }
+                skip_element(pull)?;
+            }
+            Tok::Empty { name, attrs } if name == "object" => {
+                if let Some(href) = field(&attrs, "href") {
+                    frame.object = Some(href.to_string());
+                }
+            }
+            Tok::End { name } if name == "frame" => break,
+            Tok::Start { .. } => skip_element(pull)?,
+            Tok::Eof => break,
+            _ => {}
+        }
+    }
+    if frame.image.is_some() || frame.object.is_some() {
+        frames.push(frame);
+    }
+    Ok(())
+}
+
+fn capture_image(frame: &mut Frame, attrs: &[(String, String)]) {
+    if let Some(href) = field(attrs, "href") {
+        frame.image = Some(href.to_string());
+    }
+    if let Some(mime) = field(attrs, "mime-type") {
+        frame.image_mime = Some(mime.to_string());
+    }
+}
+
+fn length_in_inches(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let split = value
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split);
+    let number: f64 = number.trim().parse().ok()?;
+    Some(match unit.trim().to_ascii_lowercase().as_str() {
+        "in" => number,
+        "cm" => number / 2.54,
+        "mm" => number / 25.4,
+        "pt" => number / 72.0,
+        "pc" => number / 6.0,
+        "px" => number / PIXELS_PER_INCH,
+        "" => number,
+        _ => return None,
+    })
+}
+
+/// Resolve the frames a sheet anchored into the pictures and charts the shared
+/// workbook model holds.
+fn drawings(
+    sheets: &[Sheet],
+    sheet_name: &str,
+    frames: &[Frame],
+    media: &HashMap<String, Vec<u8>>,
+    objects: &HashMap<String, Vec<u8>>,
+) -> (Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>) {
+    let mut pictures = Vec::new();
+    let mut charts = Vec::new();
+    for frame in frames {
+        if let Some(object) = &frame.object {
+            let object = object.trim_start_matches("./");
+            if let Some(bytes) = objects.get(object) {
+                if let Some(mut chart) = chart::read_chart(bytes, sheet_name, sheets) {
+                    chart.bbox = frame.bbox();
+                    charts.push(chart);
+                }
+            }
+            // A chart frame's `draw:image` is its replacement preview, not a
+            // second picture of the chart.
+            continue;
+        }
+        let Some(href) = &frame.image else {
+            continue;
+        };
+        let href = href.trim_start_matches("./");
+        let Some(data) = media.get(href) else {
+            continue;
+        };
+        let mime = frame
+            .image_mime
+            .as_deref()
+            .map(|mime| mime.split(';').next().unwrap_or(mime).trim())
+            .and_then(format_for_mime)
+            .map(|format| format.mime)
+            .or_else(|| {
+                href.rsplit_once('.')
+                    .and_then(|(_, extension)| mime_for_extension(extension))
+            });
+        if let Some(mime) = mime {
+            pictures.push(SheetPicture {
+                data: data.clone(),
+                mime,
+                bbox: frame.bbox(),
+            });
+        }
+    }
+    (pictures, charts)
 }
 
 /// The value a cell states when it displays no text.
@@ -343,8 +627,8 @@ fn typed_value(attrs: &[(String, String)]) -> String {
         Some("date") => field(attrs, "date-value").unwrap_or_default().to_string(),
         Some("time") => field(attrs, "time-value").unwrap_or_default().to_string(),
         Some("boolean") => match field(attrs, "boolean-value") {
-            Some("true") => "TRUE".to_string(),
-            Some("false") => "FALSE".to_string(),
+            Some("true") => "True".to_string(),
+            Some("false") => "False".to_string(),
             other => other.unwrap_or_default().to_string(),
         },
         Some(_) => field(attrs, "value").unwrap_or_default().to_string(),
@@ -464,7 +748,17 @@ fn table_of(
 ) -> SheetTable {
     let mut cells = Vec::new();
     for row in min_row..=max_row {
-        for col in min_col..=max_col {
+        // A row ends at its last cell: the empty slots after it are the grid's
+        // padding, which Docling does not report as cells. An empty slot with a
+        // cell after it stays, because the sheet drew a gap there, and a slot a
+        // merge covers is part of its spanning cell, so it reaches the row too.
+        let last = (min_col..=max_col)
+            .rev()
+            .find(|col| covered.contains(&(row, *col)) || grid.contains_key(&(row, *col)));
+        let Some(last) = last else {
+            continue;
+        };
+        for col in min_col..=last {
             if covered.contains(&(row, col)) {
                 continue;
             }
@@ -719,13 +1013,51 @@ mod tests {
                 <table:table-cell office:value-type="boolean" office:boolean-value="true"/>
                 <table:table-cell office:value-type="date" office:date-value="2024-03-05"/>
                 <table:table-cell office:value-type="float" office:value="15" table:formula="of:=SUM([.B2:.B3])"><text:p>15</text:p></table:table-cell>
+                <table:table-cell office:value-type="boolean" office:boolean-value="false"><text:p>FALSE</text:p></table:table-cell>
               </table:table-row>
             </table:table>"#;
         let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
         assert_eq!(
             texts(&document.sheets[0]),
-            ["Widget", "1.5", "TRUE", "2024-03-05", "15"],
-            "a formula reads the value it displays, not its markup"
+            ["Widget", "1.5", "True", "2024-03-05", "15", "False"],
+            "a formula reads the value it displays, not its markup, and a boolean \
+             reads its value rather than the words a producer shows"
+        );
+    }
+
+    #[test]
+    fn a_row_ends_at_its_last_cell() {
+        let body = r#"
+            <table:table table:name="Region">
+              <table:table-row>
+                <table:table-cell/>
+                <table:table-cell table:number-columns-spanned="2"><text:p>Shipping included</text:p></table:table-cell>
+                <table:covered-table-cell/>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell><text:p>Total</text:p></table:table-cell>
+                <table:table-cell><text:p>15</text:p></table:table-cell>
+                <table:table-cell/>
+              </table:table-row>
+            </table:table>"#;
+        let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
+        let table = &document.sheets[0].tables[0];
+        // The merge still gives the table its width, and the empty slot before
+        // it stays: the sheet drew a gap with a cell after it.
+        assert_eq!((table.num_rows, table.num_cols), (2, 3));
+        assert_eq!(
+            table
+                .cells
+                .iter()
+                .map(|cell| (cell.row, cell.col, cell.text.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (0, 0, ""),
+                (0, 1, "Shipping included"),
+                (1, 0, "Total"),
+                (1, 1, "15"),
+            ],
+            "the empty slot after the row's last cell is padding, not a cell"
         );
     }
 

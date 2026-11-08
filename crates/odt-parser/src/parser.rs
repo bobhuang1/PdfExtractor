@@ -1019,7 +1019,18 @@ impl Walker<'_> {
                         }
                         cell.pictures.extend(inline.pictures);
                     }
-                    "table" => cell.tables.push(self.table()?),
+                    "table" => {
+                        let table = self.table()?;
+                        // A cell holding a table shows that table's words: Docling
+                        // flattens them into the cell's text, and a reading that
+                        // left the cell empty would leave them only in the table
+                        // beside it.
+                        let flattened = flatten_table(&table);
+                        if !flattened.is_empty() {
+                            paragraphs.push(flattened);
+                        }
+                        cell.tables.push(table);
+                    }
                     "frame" => {
                         let mut inline = Inline::default();
                         self.frame_into(&attrs, &mut inline)?;
@@ -1047,7 +1058,13 @@ impl Walker<'_> {
                                     width_pt,
                                     height_pt,
                                 }),
-                                OdtItem::Table(table) => cell.tables.push(table),
+                                OdtItem::Table(table) => {
+                                    let flattened = flatten_table(&table);
+                                    if !flattened.is_empty() {
+                                        paragraphs.push(flattened);
+                                    }
+                                    cell.tables.push(table);
+                                }
                             }
                         }
                     }
@@ -1103,6 +1120,19 @@ impl Walker<'_> {
             }
         }
     }
+}
+
+/// The words a nested table shows, flattened the way Docling reports a cell
+/// that holds one: each cell's text on its own line, rows and cells in order.
+fn flatten_table(table: &OdtTable) -> String {
+    table
+        .rows
+        .iter()
+        .flatten()
+        .map(|cell| cell.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn cell_is_empty(cell: &OdtCell) -> bool {
@@ -1287,6 +1317,44 @@ mod tests {
             "the unmarked first row is the header"
         );
         assert_eq!(table.rows[2][1].text, "18");
+    }
+
+    /// A table inside a cell is read as a table of its own *and* its words are
+    /// the cell's: a reader that saw only the nested table would say the cell
+    /// was empty, which is not what Docling reports nor what a reader sees.
+    #[test]
+    fn a_nested_table_is_its_own_table_and_its_cells_words() {
+        let body = r#"
+            <table:table table:name="Outer">
+              <table:table-column table:number-columns-repeated="2"/>
+              <table:table-row>
+                <table:table-cell><text:p>Outer left</text:p></table:table-cell>
+                <table:table-cell>
+                  <table:table table:name="Inner">
+                    <table:table-column table:number-columns-repeated="2"/>
+                    <table:table-row>
+                      <table:table-cell><text:p>Inner A1</text:p></table:table-cell>
+                      <table:table-cell><text:p>Inner B1</text:p></table:table-cell>
+                    </table:table-row>
+                    <table:table-row>
+                      <table:table-cell><text:p>Inner A2</text:p></table:table-cell>
+                      <table:table-cell><text:p>Inner B2</text:p></table:table-cell>
+                    </table:table-row>
+                  </table:table>
+                </table:table-cell>
+              </table:table-row>
+            </table:table>"#;
+        let doc = OdtDocument::parse_bytes(&package(&content(body), STYLES, &[])).unwrap();
+        let outer = match &doc.items[0] {
+            OdtItem::Table(table) => table,
+            other => panic!("expected a table, got {other:?}"),
+        };
+        let holder = &outer.rows[0][1];
+        assert_eq!(holder.text, "Inner A1\nInner B1\nInner A2\nInner B2");
+        assert_eq!(holder.tables.len(), 1);
+        let inner = &holder.tables[0];
+        assert_eq!(inner.rows.len(), 2);
+        assert_eq!(inner.rows[1][1].text, "Inner B2");
     }
 
     #[test]

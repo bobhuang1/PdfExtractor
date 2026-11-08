@@ -32,6 +32,9 @@ tauri = { version = "2", features = [], optional = true }
 serde = { workspace = true }
 # The CLI's `--progress` records are JSON lines.
 serde_json = { workspace = true }
+# A page range is parsed by the same code the CLI's `--page-range` uses, so a typo
+# is refused in the window with the message a run would have shown.
+pdfextractor-core = { path = "../core" }
 # Native file/folder chooser, served by a command so the frontend needs no
 # JavaScript package manager.
 rfd = { version = "0.17", default-features = false, features = ["gtk3"], optional = true }

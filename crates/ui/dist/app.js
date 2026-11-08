@@ -46,6 +46,9 @@ function readSettings() {
     parallel: Number(el("parallel").value) || 1,
     recursive: el("recursive").checked,
     pageRange: el("page-range").value.trim(),
+    textDehyphenate: el("text-dehyphenate").checked,
+    includeNotes: el("include-notes").checked,
+    imageExportMode: el("image-export-mode").value,
     ocr: el("ocr").value,
     // The CLI's own default is "eng"; an emptied box means that default rather
     // than a language named by no one.
@@ -53,7 +56,14 @@ function readSettings() {
     psm: el("psm").value === "" ? null : Number(el("psm").value),
     // The extra readings written beside the JSON, in the order the boxes stand.
     to: [...document.querySelectorAll("#to input:checked")].map((box) => box.value),
+    chunksType: el("chunks-type").value,
+    chunksTokenizer: el("chunks-tokenizer").value.trim(),
+    // A number box left empty is the CLI's default; the budget and the overlap
+    // only reach the command line when the hybrid chunker will use them.
+    chunksMaxTokens: whole(el("chunks-max-tokens").value, 512),
+    chunksOverlapTokens: whole(el("chunks-overlap-tokens").value, 0),
     preview: el("preview").checked,
+    previewDpi: whole(el("preview-dpi").value, 110),
     // The mode switch decides whether a path is sent at all: an input left in
     // the box while Compare is off is not a request to compare.
     reference: el("compare").checked ? el("reference").value.trim() : "",
@@ -70,7 +80,22 @@ function describe(settings) {
   if (settings.ocrLang !== "eng") bits.push(`langs ${settings.ocrLang}`);
   if (settings.psm !== null) bits.push(`PSM ${settings.psm}`);
   if (settings.to.length) bits.push(`also ${settings.to.join("+")}`);
-  if (settings.preview) bits.push("preview");
+  if (settings.includeNotes) bits.push("notes");
+  if (!settings.textDehyphenate) bits.push("hyphen breaks kept");
+  if (settings.imageExportMode !== "referenced") {
+    bits.push(`images ${settings.imageExportMode}`);
+  }
+  if (settings.to.includes("chunks")) {
+    bits.push(`chunks ${settings.chunksType}`);
+    if (settings.chunksType === "hybrid") {
+      bits.push(`${settings.chunksMaxTokens} tokens`);
+      if (settings.chunksOverlapTokens) bits.push(`overlap ${settings.chunksOverlapTokens}`);
+    }
+    if (settings.chunksTokenizer) bits.push(`tokenizer ${baseName(settings.chunksTokenizer)}`);
+  }
+  if (settings.preview) {
+    bits.push(settings.previewDpi === 110 ? "preview" : `preview ${settings.previewDpi} dpi`);
+  }
   if (settings.reference) bits.push(`compare: ${baseName(settings.reference)}`);
   return bits.join(" · ");
 }
@@ -79,6 +104,13 @@ function refreshSummary() {
   if (display && !display.finished) return;
   const settings = readSettings();
   el("summary").textContent = settings.input ? describe(settings) : "";
+}
+
+// A number box left empty means its default; a typed value is sent as it is.
+function whole(value, fallback) {
+  const raw = String(value).trim();
+  const n = Math.trunc(Number(raw));
+  return raw === "" || !Number.isFinite(n) ? fallback : Math.max(0, n);
 }
 
 function baseName(path) {
@@ -651,6 +683,11 @@ function handleFinished(finished) {
   el("command").hidden = false;
   el("verdict").textContent = verdictFor(finished);
 
+  // Where the run put its files, with the action that opens it. A run that has
+  // no folder to open (one whose output could not be created) shows neither.
+  el("open-output").classList.toggle("hidden", !display.folder);
+  el("output-folder").textContent = display.folder || "";
+
   display.outcome = finished;
   el("convert").disabled = false;
   el("stop").classList.add("hidden");
@@ -671,6 +708,9 @@ function beginRun(started) {
   display = {
     id: started.run,
     command: started.command,
+    // The folder the run writes into, as the Rust side resolved it when the run
+    // started: an edited form after the click cannot move the action.
+    folder: started.folder || "",
     total: 0,
     done: 0,
     converted: 0,
@@ -691,6 +731,8 @@ function beginRun(started) {
   // run is rather than the one a re-ask would find now.
   showCliProgram(started.program);
   el("summary").textContent = "Running…";
+  el("open-output").classList.add("hidden");
+  el("output-folder").textContent = "";
 }
 
 /// What the self-test asks the page to hand back: the state as *rendered*, not
@@ -709,6 +751,9 @@ function renderedSummary() {
     `cancelled=${display.outcome ? display.outcome.cancelled : "?"}`,
     `verdict="${el("verdict").textContent}"`,
     `command="${el("run-command").textContent}"`,
+    `folder="${el("output-folder").textContent}"`,
+    `folder-action=${el("open-output").classList.contains("hidden") ? 0 : 1}`,
+    `chunk-controls=${el("chunk-options").classList.contains("hidden") ? "hidden" : "shown"}`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
     // as rendered: the ask round-tripped and the page used its families.
@@ -925,6 +970,31 @@ async function pick(kind, target) {
   return path;
 }
 
+// The chunking controls belong to the Retrieval chunks box, so with the box clear
+// they are not shown at all — a type and a budget shape a file that is not being
+// written. The tokenizer, budget and overlap are the hybrid chunker's, so they
+// stay off even with the box ticked until hybrid is the chosen reading.
+function syncChunkOptions() {
+  const chunks = [...document.querySelectorAll("#to input")].some(
+    (box) => box.checked && box.value === "chunks"
+  );
+  for (const id of ["chunk-options", "chunk-hint"]) {
+    el(id).classList.toggle("hidden", !chunks);
+  }
+  el("chunks-type").disabled = !chunks;
+  const hybrid = chunks && el("chunks-type").value === "hybrid";
+  for (const id of ["chunks-tokenizer", "chunks-max-tokens", "chunks-overlap-tokens"]) {
+    el(id).disabled = !hybrid;
+  }
+  el("pick-chunks-tokenizer").disabled = !hybrid;
+}
+
+// The resolution belongs to the overlay: with no preview there is nothing for a
+// DPI to resolve.
+function syncPreviewOptions() {
+  el("preview-dpi").disabled = !el("preview").checked;
+}
+
 // ---- boot ----------------------------------------------------------------
 
 function wire() {
@@ -948,22 +1018,66 @@ function wire() {
   el("pick-reference-file").addEventListener("click", () => pick("file", "reference"));
   el("pick-reference-folder").addEventListener("click", () => pick("folder", "reference"));
   el("reference").addEventListener("input", refreshSummary);
+  el("open-output").addEventListener("click", async () => {
+    const folder = display && display.folder;
+    if (!folder) return;
+    try {
+      await invoke("open_folder", { path: folder });
+      appendLog(`opened ${folder}`);
+    } catch (error) {
+      appendLog(`could not open ${folder}: ${error}`);
+    }
+  });
+  el("pick-chunks-tokenizer").addEventListener("click", async () => {
+    await pick("file", "chunks-tokenizer");
+    refreshSummary();
+  });
 
   el("parallel").addEventListener("input", () => {
     el("parallel-value").textContent = el("parallel").value;
     refreshSummary();
   });
 
-  for (const id of ["input", "output", "page-range", "ocr-lang"]) {
+  for (const id of [
+    "input",
+    "output",
+    "page-range",
+    "ocr-lang",
+    "chunks-tokenizer",
+    "chunks-max-tokens",
+    "chunks-overlap-tokens",
+    "preview-dpi",
+    "image-export-mode",
+  ]) {
     el(id).addEventListener("input", refreshSummary);
   }
-  for (const id of ["recursive", "preview", "ocr", "psm"]) {
+  for (const id of [
+    "recursive",
+    "preview",
+    "ocr",
+    "psm",
+    "include-notes",
+    "text-dehyphenate",
+    "image-export-mode",
+  ]) {
     el(id).addEventListener("change", refreshSummary);
   }
+  el("preview").addEventListener("change", syncPreviewOptions);
+  el("chunks-type").addEventListener("change", () => {
+    syncChunkOptions();
+    refreshSummary();
+  });
   for (const box of document.querySelectorAll("#to input")) {
-    box.addEventListener("change", refreshSummary);
+    box.addEventListener("change", () => {
+      // Ticking Retrieval chunks is what puts the chunking row on the page, so
+      // the drawing follows the box rather than the last run's settings.
+      syncChunkOptions();
+      refreshSummary();
+    });
   }
 
+  syncChunkOptions();
+  syncPreviewOptions();
   el("convert").addEventListener("click", start);
   el("stop").addEventListener("click", stop);
   el("reask-formats").addEventListener("click", reaskFormats);

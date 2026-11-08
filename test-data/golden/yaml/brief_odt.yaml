@@ -1,0 +1,221 @@
+body:
+  children:
+  - $ref: '#/texts/0'
+  - $ref: '#/texts/1'
+  - $ref: '#/texts/2'
+  - $ref: '#/texts/3'
+  - $ref: '#/texts/4'
+  - $ref: '#/texts/5'
+  - $ref: '#/texts/6'
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/7'
+  - $ref: '#/texts/8'
+  - $ref: '#/pictures/0'
+  - $ref: '#/texts/9'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups: []
+key_value_items: []
+name: brief_odt.odt
+origin:
+  binary_hash: 9212293224725127502
+  filename: brief_odt.odt
+  mimetype: application/vnd.oasis.opendocument.text
+pages: {}
+pictures:
+- children: []
+  content_layer: body
+  image:
+    dpi: 310
+    mimetype: image/jpeg
+    size:
+      height: 350.0
+      width: 620.0
+    uri: brief_odt_images/pg1_1.jpg
+  label: picture
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/pictures/0'
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 3
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Region
+    - col_span: 2
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Revenue
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: true
+      row_section: false
+      row_span: 2
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: |-
+        North
+        South
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '42'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: '7'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '18'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 2
+      text: '3'
+  label: table
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/tables/0'
+texts:
+- children: []
+  content_layer: body
+  label: title
+  orig: Quarterly Brief
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/0'
+  text: Quarterly Brief
+- children: []
+  content_layer: body
+  label: section_header
+  level: 1
+  orig: Summary
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/1'
+  text: Summary
+- children: []
+  content_layer: body
+  hyperlink: https://example.com/filing
+  label: text
+  orig: The quarter closed ahead of plan. The filing explains why.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/2'
+  text: The quarter closed ahead of plan. The filing explains why.
+- children: []
+  content_layer: body
+  label: list_item
+  orig: First bullet
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/3'
+  text: First bullet
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Second bullet
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/4'
+  text: Second bullet
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Numbered one
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/5'
+  text: Numbered one
+- children: []
+  content_layer: body
+  label: list_item
+  orig: Numbered two
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/6'
+  text: Numbered two
+- children: []
+  content_layer: body
+  label: section_header
+  level: 2
+  orig: Picture
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/7'
+  text: Picture
+- children: []
+  content_layer: body
+  label: text
+  orig: The chart below is the whole story.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/8'
+  text: The chart below is the whole story.
+- children: []
+  content_layer: body
+  label: text
+  orig: Supply is tight.
+  parent:
+    $ref: '#/body'
+  prov: []
+  self_ref: '#/texts/9'
+  text: Supply is tight.
+version: 1.10.0

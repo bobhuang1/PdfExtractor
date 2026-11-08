@@ -13,6 +13,11 @@ anyhow.workspace = true
 # through one path and a sheet group, a page range and a cell rectangle must
 # mean the same thing for either.
 pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
+# A picture's frame names its media type, and the shared list is the same one
+# the XLSX reader and the command line use.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# A chart is the shared ChartShape the XLSX and PPTX readers place.
+pdfextractor-chart = { path = "../chart" }
 zip.workspace = true
 quick-xml.workspace = true
 

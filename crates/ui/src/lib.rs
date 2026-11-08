@@ -23,6 +23,7 @@
 pub mod diff;
 pub mod gate;
 
+use pdfextractor_core::page_range::PageRange;
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
 use std::path::PathBuf;
@@ -86,6 +87,46 @@ impl OutputFormat {
     }
 }
 
+/// How `--to chunks` splits a document, mirroring the CLI's `--chunks-type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChunkType {
+    Hierarchical,
+    Hybrid,
+}
+
+impl ChunkType {
+    /// The value the CLI expects.
+    pub fn value(self) -> &'static str {
+        match self {
+            ChunkType::Hierarchical => "hierarchical",
+            ChunkType::Hybrid => "hybrid",
+        }
+    }
+}
+
+/// How the Markdown and HTML outputs refer to pictures, mirroring the CLI's
+/// `--image-export-mode`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageExportMode {
+    #[default]
+    Referenced,
+    Embedded,
+    Placeholder,
+}
+
+impl ImageExportMode {
+    /// The value the CLI expects.
+    pub fn value(self) -> &'static str {
+        match self {
+            ImageExportMode::Referenced => "referenced",
+            ImageExportMode::Embedded => "embedded",
+            ImageExportMode::Placeholder => "placeholder",
+        }
+    }
+}
+
 /// The whole form: one input, one output, one settings panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,7 +149,37 @@ pub struct Settings {
     pub psm: Option<u8>,
     /// Extra outputs written beside the JSON (`--to`); empty means JSON alone.
     pub to: Vec<OutputFormat>,
+    /// `--text-dehyphenate false`: keep `exam- ple` line breaks in `--to text`
+    /// as they are instead of joining the word they split.
+    #[serde(default = "default_text_dehyphenate")]
+    pub text_dehyphenate: bool,
+    /// `--include-notes`: include a deck's speaker notes and comments in the
+    /// Markdown, HTML and text outputs. JSON and YAML carry them regardless.
+    #[serde(default)]
+    pub include_notes: bool,
+    /// `--image-export-mode`: how Markdown and HTML refer to pictures.
+    #[serde(default)]
+    pub image_export_mode: ImageExportMode,
+    /// `--chunks-type`: how `--to chunks` splits a document. The CLI's default
+    /// is hierarchical, so the window does not change what a checked chunks box
+    /// means until the mode is chosen.
+    pub chunks_type: ChunkType,
+    /// `--chunks-tokenizer`: a Hugging Face `tokenizer.json`, SentencePiece
+    /// `.model`, or tiktoken `.tiktoken` file whose tokens count a hybrid chunk
+    /// budget. Empty means the CLI's reproducible approximation.
+    pub chunks_tokenizer: String,
+    /// `--chunks-max-tokens`: the token budget a hybrid chunk packs sentences
+    /// into. The CLI's own default when the field is left alone.
+    #[serde(default = "default_chunks_max_tokens")]
+    pub chunks_max_tokens: u32,
+    /// `--chunks-overlap-tokens`: tokens of the previous hybrid chunk repeated
+    /// at the start of the next, so a passage across a boundary is in both.
+    #[serde(default)]
+    pub chunks_overlap_tokens: u32,
     pub preview: bool,
+    /// `--preview-dpi`: the resolution of the preview's page backdrop.
+    #[serde(default = "default_preview_dpi")]
+    pub preview_dpi: u32,
     /// The Compare mode's reference: a Docling document, or a folder of them
     /// named after the documents they belong to. Empty means "do not compare".
     pub reference: String,
@@ -126,10 +197,34 @@ impl Default for Settings {
             ocr_lang: "eng".to_string(),
             psm: None,
             to: Vec::new(),
+            text_dehyphenate: default_text_dehyphenate(),
+            include_notes: false,
+            image_export_mode: ImageExportMode::Referenced,
+            chunks_type: ChunkType::Hierarchical,
+            chunks_tokenizer: String::new(),
+            chunks_max_tokens: default_chunks_max_tokens(),
+            chunks_overlap_tokens: 0,
             preview: false,
+            preview_dpi: default_preview_dpi(),
             reference: String::new(),
         }
     }
+}
+
+/// A form untouched by the window reads `--to text` the way the CLI does: the
+/// words a line break split are joined, and the flag is only passed to say no.
+fn default_text_dehyphenate() -> bool {
+    true
+}
+
+/// The CLI's own budget for a hybrid chunk.
+fn default_chunks_max_tokens() -> u32 {
+    512
+}
+
+/// The CLI's own resolution for the preview's page backdrop.
+fn default_preview_dpi() -> u32 {
+    110
 }
 
 impl Settings {
@@ -210,6 +305,7 @@ impl Settings {
                 written.push(*format);
             }
         }
+        let writes_chunks = written.contains(&OutputFormat::Chunks);
         if !written.is_empty() {
             args.push("--to".to_string());
             args.push("json".to_string());
@@ -219,8 +315,48 @@ impl Settings {
             }
         }
 
+        // A reading knob left at the CLI's own meaning is not a flag: the
+        // command line says what the window changed, not what it agrees with.
+        if !self.text_dehyphenate {
+            args.push("--text-dehyphenate".to_string());
+            args.push("false".to_string());
+        }
+        if self.include_notes {
+            args.push("--include-notes".to_string());
+        }
+        if self.image_export_mode != ImageExportMode::Referenced {
+            args.push("--image-export-mode".to_string());
+            args.push(self.image_export_mode.value().to_string());
+        }
+
+        // Chunk settings are only meaningful when a chunk file is written, and
+        // the tokenizer only when the hybrid chunker will use it.
+        if writes_chunks {
+            args.push("--chunks-type".to_string());
+            args.push(self.chunks_type.value().to_string());
+            if self.chunks_type == ChunkType::Hybrid {
+                if self.chunks_max_tokens != default_chunks_max_tokens() {
+                    args.push("--chunks-max-tokens".to_string());
+                    args.push(self.chunks_max_tokens.to_string());
+                }
+                if self.chunks_overlap_tokens != 0 {
+                    args.push("--chunks-overlap-tokens".to_string());
+                    args.push(self.chunks_overlap_tokens.to_string());
+                }
+                let tokenizer = self.chunks_tokenizer.trim();
+                if !tokenizer.is_empty() {
+                    args.push("--chunks-tokenizer".to_string());
+                    args.push(tokenizer.to_string());
+                }
+            }
+        }
+
         if self.preview {
             args.push("--preview".to_string());
+            if self.preview_dpi != default_preview_dpi() {
+                args.push("--preview-dpi".to_string());
+                args.push(self.preview_dpi.to_string());
+            }
         }
 
         args.push("--progress".to_string());
@@ -244,6 +380,17 @@ impl Settings {
                 Self::MAX_PARALLEL
             ));
         }
+        // The range is parsed by the CLI's own parser before a process exists:
+        // a typo costs the window nothing and says which entry it could not
+        // read, rather than starting a run that fails on its first argument.
+        let page_range = self.page_range.trim();
+        if !page_range.is_empty() {
+            if let Err(error) = PageRange::parse(page_range) {
+                // The parser names the flag; the window names the box.
+                let message = error.strip_prefix("--page-range ").unwrap_or(&error);
+                return Some(format!("Page range {message}"));
+            }
+        }
         if self.psm.is_some_and(|mode| mode > 13) {
             return Some("Page segmentation mode must be between 0 and 13.".to_string());
         }
@@ -251,7 +398,40 @@ impl Settings {
         if !reference.is_empty() && !PathBuf::from(reference).exists() {
             return Some(format!("Reference does not exist: {reference}"));
         }
+        if self.to.contains(&OutputFormat::Chunks) && self.chunks_type == ChunkType::Hybrid {
+            if self.chunks_max_tokens == 0 {
+                return Some("The chunk token budget must be at least 1.".to_string());
+            }
+            if self.chunks_overlap_tokens >= self.chunks_max_tokens {
+                return Some("The chunk overlap must be smaller than the token budget.".to_string());
+            }
+            let tokenizer = self.chunks_tokenizer.trim();
+            if !tokenizer.is_empty() && !PathBuf::from(tokenizer).exists() {
+                return Some(format!("Tokenizer file does not exist: {tokenizer}"));
+            }
+        }
         None
+    }
+
+    /// The folder a run writes into: what the result pane opens.
+    ///
+    /// The CLI takes `--output` as the file itself for a file input and as a
+    /// directory for a folder input; without it, output is written beside each
+    /// input. So the folder is the output path when that is a directory, the
+    /// parent of a file output, and the input itself when the input is a folder.
+    pub fn output_folder(&self) -> PathBuf {
+        let chosen = match self.output.trim() {
+            "" => PathBuf::from(self.input.trim()),
+            output => PathBuf::from(output),
+        };
+        if chosen.is_dir() {
+            return chosen;
+        }
+        chosen
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 
     /// The language list the CLI is given: a form left empty means the CLI's own
@@ -587,6 +767,13 @@ pub fn outcome(cancelled: bool, status: Option<ExitStatus>) -> Outcome {
 #[serde(rename_all = "camelCase")]
 pub struct Started {
     pub run: u64,
+    /// The folder this run writes into, for the result pane's open action.
+    ///
+    /// Resolved from the form the run was given, before the CLI starts, so a
+    /// later edit to the form cannot move the action. Whether it is there yet is
+    /// the opener's question: a run that wrote nothing has nothing to open apart
+    /// from the folder it was pointed at.
+    pub folder: String,
     /// The binary this run started: the path resolved when the run began.
     ///
     /// The line beside the formats names the binary a run would use now, and
@@ -1373,6 +1560,8 @@ mod tests {
         s.ocr_lang = " eng,deu ".to_string();
         s.psm = Some(6);
         s.to = vec![OutputFormat::Md, OutputFormat::Chunks, OutputFormat::Md];
+        s.chunks_type = ChunkType::Hybrid;
+        s.chunks_tokenizer = "test-data/tokenizer-mini.json".to_string();
 
         let args = s.to_args();
         let joined = args.join(" ");
@@ -1384,6 +1573,11 @@ mod tests {
             "the JSON is not written first, or a repeat was passed twice: {joined}"
         );
         assert_eq!(args.iter().filter(|arg| *arg == "--to").count(), 3);
+        assert!(joined.contains("--chunks-type hybrid"), "{joined}");
+        assert!(
+            joined.contains("--chunks-tokenizer test-data/tokenizer-mini.json"),
+            "{joined}"
+        );
     }
 
     /// An empty range and an unset mode are not arguments at all; an empty
@@ -1398,6 +1592,11 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--page-range"), "{args:?}");
         assert!(!args.iter().any(|arg| arg == "--psm"), "{args:?}");
         assert!(!args.iter().any(|arg| arg == "--to"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "--chunks-type"), "{args:?}");
+        assert!(
+            !args.iter().any(|arg| arg == "--chunks-tokenizer"),
+            "{args:?}"
+        );
         assert!(
             args.windows(2)
                 .any(|pair| pair[0] == "--ocr-lang" && pair[1] == "eng"),
@@ -1420,6 +1619,8 @@ mod tests {
             "ocrLang": "eng,deu",
             "psm": 6,
             "to": ["md", "chunks"],
+            "chunksType": "hybrid",
+            "chunksTokenizer": "test-data/tokenizer-mini.json",
             "preview": false,
             "reference": ""
         });
@@ -1429,11 +1630,18 @@ mod tests {
         assert_eq!(settings.ocr_lang, "eng,deu");
         assert_eq!(settings.psm, Some(6));
         assert_eq!(settings.to, vec![OutputFormat::Md, OutputFormat::Chunks]);
+        assert_eq!(settings.chunks_type, ChunkType::Hybrid);
+        assert_eq!(settings.chunks_tokenizer, "test-data/tokenizer-mini.json");
         let args = settings.to_args().join(" ");
         assert!(args.contains("--page-range 2-3"), "{args}");
         assert!(args.contains("--ocr-lang eng,deu"), "{args}");
         assert!(args.contains("--psm 6"), "{args}");
         assert!(args.contains("--to json --to md --to chunks"), "{args}");
+        assert!(args.contains("--chunks-type hybrid"), "{args}");
+        assert!(
+            args.contains("--chunks-tokenizer test-data/tokenizer-mini.json"),
+            "{args}"
+        );
 
         // An untouched mode box is null: the CLI's default, not mode 0.
         let mut payload = serde_json::json!({
@@ -1446,6 +1654,8 @@ mod tests {
             "ocrLang": "eng",
             "psm": null,
             "to": [],
+            "chunksType": "hierarchical",
+            "chunksTokenizer": "",
             "preview": false,
             "reference": ""
         });
@@ -1460,12 +1670,145 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_tokenizer_is_refused_before_a_hybrid_chunk_run() {
+        let mut s = settings();
+        s.to = vec![OutputFormat::Chunks];
+        s.chunks_type = ChunkType::Hybrid;
+        s.chunks_tokenizer = "/definitely/not/a/tokenizer.json".to_string();
+        assert!(s
+            .problem()
+            .unwrap()
+            .contains("Tokenizer file does not exist"));
+
+        // A tokenizer left in the box does not matter when the chunker that
+        // would use it is not selected — and it is not put on the command line.
+        s.chunks_type = ChunkType::Hierarchical;
+        assert_eq!(s.problem(), None);
+        let args = s.to_args();
+        assert!(
+            !args.iter().any(|arg| arg == "--chunks-tokenizer"),
+            "{args:?}"
+        );
+        s.to.clear();
+        s.chunks_type = ChunkType::Hybrid;
+        assert_eq!(s.problem(), None);
+    }
+
+    /// A range the CLI could not read is refused here, with the CLI's own parser
+    /// and wording, so a typo never becomes a process.
+    /// The result pane opens where the run put its files: the output folder when
+    /// one was chosen, the input's own folder otherwise.
+    #[test]
+    fn the_result_pane_opens_the_folder_the_run_wrote_into() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut s = settings();
+
+        // A file converted beside itself lands in its own folder.
+        s.input = root.join("dist/index.html").display().to_string();
+        assert_eq!(s.output_folder(), root.join("dist"));
+
+        // An output file lands beside itself; an output folder is the folder.
+        s.output = root.join("dist/app.js").display().to_string();
+        assert_eq!(s.output_folder(), root.join("dist"));
+        s.output = root.join("dist").display().to_string();
+        assert_eq!(s.output_folder(), root.join("dist"));
+
+        // A folder converted in place reports that folder, not its parent.
+        s.input = root.display().to_string();
+        s.output.clear();
+        assert_eq!(s.output_folder(), root);
+
+        // A bare file name with no folder of its own is the working directory.
+        s.input = "brief.docx".to_string();
+        assert_eq!(s.output_folder(), PathBuf::from("."));
+    }
+
+    #[test]
+    fn a_page_range_that_cannot_be_read_is_refused_before_a_run() {
+        let mut s = settings();
+        s.page_range = "2-3x".to_string();
+        let problem = s.problem().expect("a typo must be refused");
+        assert!(problem.starts_with("Page range "), "{problem}");
+        assert!(problem.contains("not a page number"), "{problem}");
+
+        s.page_range = "3-1".to_string();
+        assert!(s.problem().unwrap().contains("runs backwards"));
+
+        s.page_range = "0".to_string();
+        assert!(s.problem().unwrap().contains("numbered from 1"));
+
+        // The grammar the CLI accepts is the one the window accepts, spaces and
+        // an open end included.
+        s.page_range = " 1 - 3 , 5 , 9- ".to_string();
+        assert_eq!(s.problem(), None);
+    }
+
+    #[test]
     fn a_page_segmentation_mode_outside_the_engines_modes_is_refused() {
         let mut s = settings();
         s.psm = Some(14);
         assert!(s.problem().unwrap().contains("between 0 and 13"));
 
         s.psm = Some(13);
+        assert_eq!(s.problem(), None);
+    }
+
+    /// The reading and chunk knobs the window offers are the CLI's own flags;
+    /// one left at the CLI's meaning is not passed at all.
+    #[test]
+    fn the_reading_and_chunk_knobs_are_forwarded() {
+        let mut s = settings();
+        s.include_notes = true;
+        s.text_dehyphenate = false;
+        s.image_export_mode = ImageExportMode::Embedded;
+        s.to = vec![OutputFormat::Md, OutputFormat::Chunks];
+        s.chunks_type = ChunkType::Hybrid;
+        s.chunks_max_tokens = 256;
+        s.chunks_overlap_tokens = 32;
+        s.preview = true;
+        s.preview_dpi = 150;
+
+        let joined = s.to_args().join(" ");
+        for wanted in [
+            "--include-notes",
+            "--text-dehyphenate false",
+            "--image-export-mode embedded",
+            "--chunks-max-tokens 256",
+            "--chunks-overlap-tokens 32",
+            "--preview --preview-dpi 150",
+        ] {
+            assert!(joined.contains(wanted), "{wanted} missing from {joined}");
+        }
+
+        let plain = settings().to_args().join(" ");
+        for flag in [
+            "--include-notes",
+            "--text-dehyphenate",
+            "--image-export-mode",
+            "--chunks-max-tokens",
+            "--chunks-overlap-tokens",
+            "--preview-dpi",
+        ] {
+            assert!(!plain.contains(flag), "{flag} on a form at its defaults: {plain}");
+        }
+    }
+
+    #[test]
+    fn a_chunk_budget_and_its_overlap_are_checked() {
+        let mut s = settings();
+        s.to = vec![OutputFormat::Chunks];
+        s.chunks_type = ChunkType::Hybrid;
+        s.chunks_max_tokens = 0;
+        assert!(s.problem().unwrap().contains("at least 1"));
+
+        s.chunks_max_tokens = 128;
+        s.chunks_overlap_tokens = 128;
+        assert!(s
+            .problem()
+            .unwrap()
+            .contains("smaller than the token budget"));
+
+        s.chunks_overlap_tokens = 16;
         assert_eq!(s.problem(), None);
     }
 
@@ -1734,10 +2077,14 @@ mod tests {
 
         let started = Started {
             run: 1,
+            folder: "test-data/golden/docling".to_string(),
             program: "pdfextractor-cli".to_string(),
             command: "pdfextractor-cli --input a".to_string(),
         };
-        assert_eq!(keys(&json(&started)), vec!["command", "program", "run"]);
+        assert_eq!(
+            keys(&json(&started)),
+            vec!["command", "folder", "program", "run"]
+        );
 
         let plan = PlanLine {
             run: 1,

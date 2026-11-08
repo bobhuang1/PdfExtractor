@@ -142,6 +142,10 @@ select {
   flex: none;
 }
 
+.stacked.tokenizer-field input[type="text"] {
+  width: 22em;
+}
+
 .stacked select {
   max-width: 17em;
 }

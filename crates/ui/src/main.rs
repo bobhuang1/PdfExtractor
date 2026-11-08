@@ -156,6 +156,32 @@ async fn ask(
         .map_err(|error| format!("could not ask the CLI which formats it reads: {error}"))?
 }
 
+/// Open a folder with the desktop's own file manager.
+///
+/// The platform's opener is run rather than linked to (`xdg-open`, `open`,
+/// `explorer`), so one action costs no plugin, no capability and no dependency.
+/// The page asks only for the folder a run reported, and a path that is not a
+/// folder is refused rather than handed to an opener.
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let folder = PathBuf::from(&path);
+    if !folder.is_dir() {
+        return Err(format!("There is no folder at {path}."));
+    }
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(&folder)
+        .spawn()
+        .map_err(|error| format!("Could not open {}: {error}", folder.display()))?;
+    Ok(())
+}
+
 /// Validate the form and start the CLI in the background.
 ///
 /// Returns as soon as the process is running; everything after that arrives as
@@ -193,8 +219,13 @@ fn start_conversion(
 
     let run = state.next.fetch_add(1, Ordering::SeqCst) + 1;
     let command = format!("{program} {}", args.join(" "));
+    // The result pane opens the folder this run writes into. It is resolved now,
+    // from the form this run was given, so a later edit cannot move the action;
+    // a folder that does not exist yet is created by the run itself.
+    let folder = settings.output_folder().display().to_string();
     let started = Started {
         run,
+        folder,
         program,
         command,
     };
@@ -477,6 +508,7 @@ fn main() {
             cli_program,
             refresh_input_formats,
             start_conversion,
+            open_folder,
             cancel_conversion,
             frontend_ready,
             selftest_rendered

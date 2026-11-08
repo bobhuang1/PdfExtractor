@@ -1,0 +1,265 @@
+//! End-to-end tests of the OpenDocument presentation reader.
+//!
+//! `q3_review_impress.odp` is LibreOffice Impress' conversion of
+//! `q3_review.pptx`, so the fixture is what a real producer writes: three
+//! slides, a title and bulleted body, a table, a picture, and speaker notes.
+//! Its stem is the conversion's own, so it cannot be taken for the deck whose
+//! Docling reference is keyed by `q3_review`.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/q3_review_impress.odp")
+}
+
+struct Workspace {
+    path: PathBuf,
+}
+
+impl Workspace {
+    fn new(tag: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("pdfe-odp-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create scratch dir");
+        Self { path }
+    }
+
+    fn join(&self, relative: &str) -> PathBuf {
+        self.path.join(relative)
+    }
+
+    fn write(&self, name: &str, data: &[u8]) -> PathBuf {
+        let path = self.join(name);
+        std::fs::write(&path, data).expect("write fixture");
+        path
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+        .args(args)
+        .env("RUST_LOG", "info")
+        .output()
+        .expect("spawn the CLI binary")
+}
+
+fn run_ok(args: &[&str]) -> Output {
+    let out = run(args);
+    assert!(
+        out.status.success(),
+        "CLI failed: args={args:?}\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out
+}
+
+fn json_of(path: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("missing output {}: {error}", path.display()));
+    serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("{} is not JSON: {error}", path.display()))
+}
+
+fn page_numbers(doc: &serde_json::Value) -> Vec<i64> {
+    let mut pages: Vec<i64> = doc["pages"]
+        .as_object()
+        .expect("a pages map")
+        .values()
+        .map(|page| page["page_no"].as_i64().expect("a page number"))
+        .collect();
+    pages.sort_unstable();
+    pages
+}
+
+#[test]
+fn an_odp_reads_as_slides() {
+    let ws = Workspace::new("deck");
+    let output = ws.join("q3_review_impress.json");
+    run_ok(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+    ]);
+    let doc = json_of(&output);
+
+    assert_eq!(doc["name"], "q3_review_impress");
+    assert_eq!(
+        doc["origin"]["mimetype"],
+        "application/vnd.oasis.opendocument.presentation"
+    );
+    assert_eq!(page_numbers(&doc), [1, 2, 3]);
+    assert_eq!(doc["pages"]["1"]["size"]["width"], 9_144_000.0);
+    assert_eq!(doc["pages"]["1"]["size"]["height"], 6_858_000.0);
+
+    let groups = doc["groups"].as_array().expect("groups");
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "chapter")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["slide-0", "slide-1", "slide-2"]
+    );
+
+    let texts = doc["texts"].as_array().expect("texts");
+    let find = |text: &str| {
+        texts
+            .iter()
+            .find(|item| item["text"] == text)
+            .unwrap_or_else(|| panic!("no text item {text:?} in {texts:#?}"))
+    };
+    assert_eq!(find("Q3 Review")["label"], "title");
+    assert_eq!(
+        find("Revenue grew across every region.")["label"],
+        "list_item"
+    );
+    assert_eq!(
+        find("Revenue grew across every region.")["prov"][0]["page_no"],
+        1
+    );
+    assert_eq!(find("Regional performance")["label"], "title");
+    assert_eq!(find("Where the growth came from")["prov"][0]["page_no"], 3);
+
+    let tables = doc["tables"].as_array().expect("tables");
+    assert_eq!(tables.len(), 1);
+    let data = &tables[0]["data"];
+    assert_eq!(data["num_rows"], 4);
+    assert_eq!(data["num_cols"], 3);
+    let cells = data["table_cells"].as_array().expect("cells");
+    let cell = |text: &str| {
+        cells
+            .iter()
+            .find(|cell| cell["text"] == text)
+            .unwrap_or_else(|| panic!("no cell {text:?} in {cells:#?}"))
+    };
+    assert_eq!(cell("Region")["column_header"], true);
+    assert_eq!(cell("Q3")["start_col_offset_idx"], 2);
+    assert_eq!(cell("145")["start_row_offset_idx"], 1);
+
+    let pictures = doc["pictures"].as_array().expect("pictures");
+    assert_eq!(pictures.len(), 1);
+    let image = &pictures[0]["image"];
+    assert_eq!(image["mimetype"], "image/png");
+    let uri = image["uri"].as_str().expect("a picture uri");
+    assert!(
+        ws.join(uri).is_file(),
+        "the picture {uri} was not written beside the output"
+    );
+
+    let notes: Vec<&serde_json::Value> = texts
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .collect();
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().any(|note| note["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("Open with the revenue line"))));
+    assert!(notes.iter().any(|note| note["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("Say the picture is the growth by quarter"))));
+}
+
+#[test]
+fn a_page_range_selects_slides() {
+    let ws = Workspace::new("range");
+    let output = ws.join("range.json");
+    run_ok(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--page-range",
+        "2",
+    ]);
+    let doc = json_of(&output);
+
+    assert_eq!(page_numbers(&doc), [2]);
+    let texts = doc["texts"].as_array().expect("texts");
+    assert!(texts
+        .iter()
+        .any(|item| item["text"] == "Regional performance"));
+    assert!(!texts.iter().any(|item| item["text"] == "Q3 Review"));
+
+    let past = ws.join("past.json");
+    let out = run(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        past.to_str().expect("a UTF-8 path"),
+        "--page-range",
+        "9",
+    ]);
+    assert!(!out.status.success(), "a range past the deck was accepted");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("names no slide") && stderr.contains("(the deck has 3 slide(s); 1-3)"),
+        "the refusal does not name the slides there are: {stderr}"
+    );
+    assert!(
+        !past.exists(),
+        "a refused range still wrote {}",
+        past.display()
+    );
+}
+
+#[test]
+fn odp_is_offered_under_its_own_family() {
+    let out = run_ok(&["--list-input-formats"]);
+    let value: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("--list-input-formats is JSON");
+    assert!(
+        value["input_formats"]
+            .as_array()
+            .expect("a format list")
+            .iter()
+            .any(|name| name == ".odp"),
+        "the accepted formats do not name .odp: {value}"
+    );
+    let family = value["families"]
+        .as_array()
+        .expect("families")
+        .iter()
+        .find(|family| family["name"] == "OpenDocument")
+        .expect("an OpenDocument family");
+    assert!(
+        family["input_formats"]
+            .as_array()
+            .expect("the family's formats")
+            .iter()
+            .any(|name| name == ".odp"),
+        "the OpenDocument family does not hold odp: {family}"
+    );
+}
+
+#[test]
+fn a_file_that_is_not_a_package_is_refused_as_such() {
+    let ws = Workspace::new("broken");
+    let broken = ws.write("broken.odp", b"this is not a package at all");
+    let output = ws.join("broken.json");
+    let out = run(&[
+        "-i",
+        broken.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+    ]);
+    assert!(!out.status.success(), "a non-package was converted");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not an OpenDocument (ZIP) package"),
+        "the refusal does not name the package: {stderr}"
+    );
+    assert!(
+        !output.exists(),
+        "a refused file still wrote {}",
+        output.display()
+    );
+}

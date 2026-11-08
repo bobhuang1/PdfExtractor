@@ -5,11 +5,18 @@
 //! writes: three sheets (one hidden), a merge, an empty row that splits a sheet
 //! into two data regions, numbers, a boolean, a date and a cached formula.
 
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+fn test_data(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-data")
+        .join(name)
+}
+
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/inventory_calc.ods")
+    test_data("inventory_calc.ods")
 }
 
 /// A scratch directory removed when the test ends.
@@ -147,7 +154,31 @@ fn an_ods_reads_as_sheets_of_tables() {
     assert_eq!(shipping["start_row_offset_idx"], 0);
     assert_eq!(shipping["start_col_offset_idx"], 1);
     assert_eq!(cell(&doc, "15")["text"], "15", "a formula's cached result");
-    assert_eq!(cell(&doc, "TRUE")["text"], "TRUE");
+    assert_eq!(
+        cell(&doc, "True")["text"],
+        "True",
+        "a boolean reads its value, which Docling spells `True`"
+    );
+    // The row ends at its last cell: the empty slot after `15` is padding rather
+    // than a cell, exactly as Docling's own reading of this workbook has it.
+    let shipping = doc["tables"]
+        .as_array()
+        .expect("tables")
+        .iter()
+        .find(|table| {
+            table["data"]["table_cells"]
+                .as_array()
+                .is_some_and(|cells| cells.iter().any(|cell| cell["text"] == "Shipping included"))
+        })
+        .expect("the table holding the merged header");
+    assert_eq!(
+        shipping["data"]["table_cells"]
+            .as_array()
+            .expect("the table's cells")
+            .len(),
+        4,
+        "the empty slot at the end of the `Total` row is not a cell"
+    );
     assert_eq!(
         cell(&doc, "2024-03-05")["text"],
         "2024-03-05",
@@ -180,7 +211,7 @@ fn ods_is_offered_under_its_own_family() {
         .iter()
         .filter_map(|name| name.as_str())
         .collect();
-    assert_eq!(names, [".odt", ".ods"]);
+    assert_eq!(names, [".odt", ".ods", ".odp"]);
 }
 
 #[test]
@@ -217,9 +248,171 @@ fn a_page_range_selects_a_sheet() {
     ]);
     assert!(!out.status.success(), "a range past the last sheet passed");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("names no sheet"), "{stderr}");
-    assert!(stderr.contains("sheet(s)"), "{stderr}");
+    assert!(
+        stderr.contains("names no sheet")
+            && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
+        "the refusal does not name the sheets there are: {stderr}"
+    );
     assert!(!ws.join("none.json").exists(), "a refused run wrote a file");
+}
+
+fn assert_bbox(picture: &Value, want: [f64; 4]) {
+    let bbox = &picture["prov"][0]["bbox"];
+    let got = [
+        bbox["l"].as_f64().expect("a left edge"),
+        bbox["t"].as_f64().expect("a top edge"),
+        bbox["r"].as_f64().expect("a right edge"),
+        bbox["b"].as_f64().expect("a bottom edge"),
+    ];
+    for (got, want) in got.iter().zip(want) {
+        assert!((got - want).abs() < 1e-9, "{got} is not {want}: {got:?}");
+    }
+}
+
+#[test]
+fn an_ods_sheet_reads_the_pictures_it_draws() {
+    let ws = Workspace::new("pictures");
+    let path = test_data("worksheet_pictures_calc.ods");
+    let output = ws.join("worksheet_pictures_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+    ]);
+
+    let doc = json_of(&output);
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(
+        pictures.len(),
+        5,
+        "the four raster pictures on Pictures and the BMP on Summary: {pictures:#?}"
+    );
+
+    // The BMP's frame sits in A9 and its 60 × 36 picture is handed on as a PNG.
+    assert_eq!(pictures[0]["prov"][0]["page_no"].as_i64(), Some(1));
+    assert_bbox(&pictures[0], [0.0, 8.0, 0.9372, 9.79904]);
+    assert_eq!(pictures[0]["image"]["mimetype"], "image/png");
+    let uri = pictures[0]["image"]["uri"]
+        .as_str()
+        .expect("a written picture");
+    let drawn = image::load_from_memory(&std::fs::read(ws.join(uri)).expect("the written PNG"))
+        .expect("the written PNG decodes")
+        .to_rgb8();
+    let expected = image::load_from_memory(&std::fs::read(test_data("images/chart.bmp")).unwrap())
+        .expect("the fixture BMP decodes")
+        .to_rgb8();
+    assert_eq!(drawn.dimensions(), expected.dimensions());
+    assert_eq!(drawn.as_raw(), expected.as_raw());
+
+    // The JPEG is carried through as a JPEG, and the Summary sheet's picture
+    // stays on its own page rather than moving with the first sheet's.
+    assert_eq!(pictures[3]["image"]["mimetype"], "image/jpeg");
+    assert!(pictures[3]["image"]["uri"]
+        .as_str()
+        .is_some_and(|uri| uri.ends_with(".jpg")));
+    assert_eq!(pictures[4]["prov"][0]["page_no"].as_i64(), Some(2));
+    assert_bbox(&pictures[4], [0.0, 2.0, 0.9372, 3.79904]);
+}
+
+#[test]
+fn an_ods_sheet_chart_is_its_data_rather_than_a_picture() {
+    let ws = Workspace::new("charts");
+    let path = test_data("chart_sheet_calc.ods");
+    let output = ws.join("chart_sheet_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--to",
+        "html",
+    ]);
+
+    let doc = json_of(&output);
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 2, "both sheets' charts: {pictures:#?}");
+
+    let bar = &pictures[0];
+    assert_eq!(
+        bar["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+    assert!(bar["image"].is_null(), "a chart was written as an image");
+    assert_eq!(bar["prov"][0]["page_no"].as_i64(), Some(1));
+    assert_eq!(bar["prov"][0]["bbox"]["l"].as_f64(), Some(4.0));
+    assert_eq!(bar["prov"][0]["bbox"]["t"].as_f64(), Some(1.0));
+
+    let data = &bar["meta"]["tabular_chart"]["chart_data"];
+    assert_eq!(data["num_rows"].as_u64(), Some(4), "{data:#?}");
+    assert_eq!(data["num_cols"].as_u64(), Some(3), "{data:#?}");
+    let cells: Vec<(u64, u64, &str)> = data["table_cells"]
+        .as_array()
+        .expect("the chart's cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["start_row_offset_idx"].as_u64().unwrap(),
+                cell["start_col_offset_idx"].as_u64().unwrap(),
+                cell["text"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for cell in [
+        (0, 0, ""),
+        (0, 1, "Q1"),
+        (0, 2, "Q2"),
+        (1, 0, "North"),
+        (1, 1, "120"),
+        (1, 2, "140"),
+        (2, 0, "South"),
+        (2, 1, "90"),
+        (2, 2, "95"),
+        (3, 0, "West"),
+        (3, 1, "60"),
+        (3, 2, "80"),
+    ] {
+        assert!(cells.contains(&cell), "{cell:?} is missing: {cells:?}");
+    }
+
+    let caption = bar["captions"][0]["$ref"].as_str().expect("a caption ref");
+    let caption_item = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .find(|item| item["self_ref"] == caption)
+        .expect("the caption item");
+    assert_eq!(caption_item["text"], "Revenue by region");
+    assert_eq!(caption_item["label"], "caption");
+
+    let line = &pictures[1];
+    assert_eq!(
+        line["meta"]["classification"]["predictions"][0]["class_name"],
+        "line_chart"
+    );
+    assert_eq!(
+        line["meta"]["tabular_chart"]["chart_data"]["num_cols"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(line["prov"][0]["page_no"].as_i64(), Some(2));
+    assert!(line["captions"]
+        .as_array()
+        .is_none_or(|list| list.is_empty()));
+    assert!(line["image"].is_null());
+
+    let markdown = std::fs::read_to_string(ws.join("chart_sheet_calc.md")).expect("the Markdown");
+    assert!(markdown.contains("Revenue by region"), "{markdown}");
+    assert!(
+        !markdown.contains("!["),
+        "a chart became an image: {markdown}"
+    );
+    let html = std::fs::read_to_string(ws.join("chart_sheet_calc.html")).expect("the HTML");
+    assert!(!html.contains("<img"), "a chart became an image: {html}");
+    assert!(!ws.join("chart_sheet_calc_images").exists());
 }
 
 #[test]
