@@ -13,6 +13,11 @@
 //! are checked as well, because a test moving from one target to another can
 //! leave the workspace total unchanged while making the plan wrong.
 //!
+//! The golden reference and baseline counts are held the same way: the number
+//! of `docling/*.json` references the plan, README and golden README state must
+//! equal the files on disk, and README's remembered baseline must equal the
+//! entries in `compare-baseline.json`.
+//!
 //! The workspace total is the Unix suite, because `crates/ui/tests/job_test.rs`
 //! is Unix-only. On another platform only that total is skipped; the target
 //! counts below are the same everywhere.
@@ -110,27 +115,37 @@ fn word_value(word: &str) -> Option<usize> {
     })
 }
 
-/// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
-fn count_after(plan: &str, prefix: &str) -> usize {
-    let start = plan
+/// The count after `prefix` in `text`, naming the file when it cannot be read.
+fn count_after_in(text: &str, prefix: &str, source: &str) -> usize {
+    let start = text
         .find(prefix)
-        .unwrap_or_else(|| panic!("plan.md no longer contains {prefix:?}"));
-    let token = plan[start + prefix.len()..]
+        .unwrap_or_else(|| panic!("{source} no longer contains {prefix:?}"));
+    let token = text[start + prefix.len()..]
         .split_whitespace()
         .next()
         .unwrap_or_default();
     count_from(token)
-        .unwrap_or_else(|| panic!("plan.md: {token:?} after {prefix:?} is not a count"))
+        .unwrap_or_else(|| panic!("{source}: {token:?} after {prefix:?} is not a count"))
+}
+
+/// The count before `marker` in `text`, naming the file when it cannot be read.
+fn count_before_in(text: &str, marker: &str, source: &str) -> usize {
+    let end = text
+        .find(marker)
+        .unwrap_or_else(|| panic!("{source} no longer contains {marker:?}"));
+    let token = text[..end].split_whitespace().last().unwrap_or_default();
+    count_from(token)
+        .unwrap_or_else(|| panic!("{source}: {token:?} before {marker:?} is not a count"))
+}
+
+/// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
+fn count_after(plan: &str, prefix: &str) -> usize {
+    count_after_in(plan, prefix, "plan.md")
 }
 
 /// The count before `marker` in the plan, e.g. `128 end-to-end tests`.
 fn count_before(plan: &str, marker: &str) -> usize {
-    let end = plan
-        .find(marker)
-        .unwrap_or_else(|| panic!("plan.md no longer contains {marker:?}"));
-    let token = plan[..end].split_whitespace().last().unwrap_or_default();
-    count_from(token)
-        .unwrap_or_else(|| panic!("plan.md: {token:?} before {marker:?} is not a count"))
+    count_before_in(plan, marker, "plan.md")
 }
 
 fn assert_count(what: &str, documented: usize, listed: usize) {
@@ -141,12 +156,62 @@ fn assert_count(what: &str, documented: usize, listed: usize) {
     );
 }
 
+/// The number of committed Docling references (`test-data/golden/docling/*.json`).
+fn reference_count(root: &Path) -> usize {
+    std::fs::read_dir(root.join("test-data/golden/docling"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("json")
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// The number of documents the ratchet baseline remembers.
+fn baseline_document_count(root: &Path) -> usize {
+    let path = root.join("test-data/golden/compare-baseline.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", path.display()));
+    let baseline: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("could not parse {}: {error}", path.display()));
+    baseline
+        .get("documents")
+        .and_then(serde_json::Value::as_object)
+        .map(|documents| documents.len())
+        .unwrap_or(0)
+}
+
+/// Hold a documented reference or baseline count to the repository's own.
+fn assert_repository_count(what: &str, source: &str, documented: usize, actual: usize) {
+    assert_eq!(
+        documented, actual,
+        "{source} says {what} is {documented}, but the repository has {actual}.\n\
+         Update the documented count in the same change as the references or the baseline."
+    );
+}
+
 #[test]
 fn documented_test_counts_match_the_test_list() {
     let root = repository_root();
     let plan_path = root.join("plan.md");
     let plan = std::fs::read_to_string(&plan_path)
         .unwrap_or_else(|error| panic!("could not read {}: {error}", plan_path.display()));
+    let readme_path = root.join("README.md");
+    let readme = std::fs::read_to_string(&readme_path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", readme_path.display()));
+    let golden_readme_path = root.join("test-data/golden/README.md");
+    let golden_readme = std::fs::read_to_string(&golden_readme_path)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", golden_readme_path.display()));
+    let references = reference_count(&root);
+    let baseline_documents = baseline_document_count(&root);
+    assert!(
+        references > 0 && baseline_documents > 0,
+        "a reference or baseline count came back empty, so this check would pass without \
+         checking anything"
+    );
 
     let workspace = listed_tests(&root, &["test", "--workspace"]);
     let cli = listed_tests(
@@ -231,5 +296,30 @@ fn documented_test_counts_match_the_test_list() {
         "the golden acceptance tests",
         count_before(&plan, " acceptance tests"),
         acceptance_tests,
+    );
+
+    assert_repository_count(
+        "the committed Docling references",
+        "plan.md",
+        count_before(&plan, " real Docling conversions"),
+        references,
+    );
+    assert_repository_count(
+        "the committed Docling references",
+        "README.md",
+        count_before_in(&readme, " comparable references", "README.md"),
+        references,
+    );
+    assert_repository_count(
+        "the committed Docling references",
+        "test-data/golden/README.md",
+        count_after_in(&golden_readme, ") — **", "test-data/golden/README.md"),
+        references,
+    );
+    assert_repository_count(
+        "the baseline documents",
+        "README.md",
+        count_after_in(&readme, "docling · memory: ", "README.md"),
+        baseline_documents,
     );
 }
