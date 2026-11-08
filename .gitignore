@@ -25,6 +25,8 @@ __pycache__/
 # conversion's own output is ignored.
 /test-data/*.json
 /test-data/real/*.json
+# A tokenizer fixture is source, not conversion litter.
+!test-data/tokenizer-mini.json
 *_images/
 !test-data/golden/**/*_images/
 # What `tauri-build` writes out of the window's capabilities: schema and ACL

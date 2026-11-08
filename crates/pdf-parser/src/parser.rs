@@ -60,6 +60,9 @@ pub struct ExtractedPage {
 #[derive(Debug)]
 pub struct PdfDocument {
     pub version: String,
+    /// Whether the trailer names `/Encrypt`: every string and stream in the file
+    /// is ciphered, and nothing here has been decrypted.
+    pub encrypted: bool,
     pub objects: HashMap<ObjId, PdfValue>,
     /// Where each stream's payload begins in the file. Recorded so that
     /// `/Length` can be honoured after the fact: the lexer decides a payload's
@@ -83,11 +86,25 @@ impl PdfDocument {
 
         let mut objects: HashMap<ObjId, PdfValue> = HashMap::new();
         let mut stream_offsets: HashMap<ObjId, usize> = HashMap::new();
+        let mut encrypted = false;
         let mut i = 0usize;
         while i + 2 < tokens.len() {
             let (num, gen) = match (&tokens[i].token, &tokens[i + 1].token, &tokens[i + 2].token) {
                 (Token::Integer(n), Token::Integer(g), Token::Obj) => (*n as usize, *g as i32),
                 _ => {
+                    // A trailer is a dictionary rather than an indirect object,
+                    // so it never reaches `objects`; it is read where it stands.
+                    // `/Encrypt` in it is how a file says that every string and
+                    // stream it holds is ciphered — the one thing that has to be
+                    // known before any of them is believed.
+                    if matches!(tokens[i].token, Token::Trailer) {
+                        let mut j = i + 1;
+                        if let Some(trailer) = Self::parse_value(&tokens, &mut j, data) {
+                            if trailer.get("Encrypt").is_some() {
+                                encrypted = true;
+                            }
+                        }
+                    }
                     i += 1;
                     continue;
                 }
@@ -153,11 +170,28 @@ impl PdfDocument {
 
         let mut doc = Self {
             version,
+            encrypted,
             objects,
             stream_offsets,
         };
         doc.honour_stream_lengths(data);
         doc.expand_object_streams();
+
+        // A PDF 1.5 file states its encryption in the cross-reference stream's
+        // own dictionary, which is an object and has no classic trailer to say
+        // it in.
+        if !doc.encrypted {
+            let in_xref = doc.objects.values().any(|value| {
+                value.as_dict().is_some_and(|dict| {
+                    dict.get("Type")
+                        .and_then(|t| doc.resolve(t))
+                        .and_then(|t| t.as_name())
+                        == Some("XRef")
+                        && dict.get("Encrypt").is_some()
+                })
+            });
+            doc.encrypted |= in_xref;
+        }
         Ok(doc)
     }
 
@@ -1509,6 +1543,7 @@ mod tests {
     fn document() -> PdfDocument {
         PdfDocument {
             version: "1.4".to_string(),
+            encrypted: false,
             objects: HashMap::new(),
             stream_offsets: HashMap::new(),
         }

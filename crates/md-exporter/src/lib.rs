@@ -102,6 +102,10 @@ pub mod text;
 /// The whole document model, reading order first, as YAML.
 pub mod yaml;
 
+/// Retrieval chunks: JSON Lines records shaped like Docling's `DocChunk`, one
+/// per body item or packed to a token budget.
+pub mod chunks;
+
 pub use walk::{walk_body, walk_body_with, Order, Visitor};
 
 /// How a rendered document refers to its pictures.

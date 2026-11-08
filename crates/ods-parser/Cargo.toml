@@ -1,0 +1,22 @@
+[package]
+name = "pdfextractor-ods-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# A sheet is a sheet whichever package wrote it: the workbook model a sheet is
+# read into is the XLSX reader's, because the command line reads both packages
+# through one path and a sheet group, a page range and a cell rectangle must
+# mean the same thing for either.
+pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
+zip.workspace = true
+quick-xml.workspace = true
+
+[dev-dependencies]
+# The tests build a package in memory so a sheet, a merge, a value and a
+# region split can each be read without a fixture file.
+zip.workspace = true

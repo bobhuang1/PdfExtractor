@@ -4,6 +4,8 @@ members = [
   "crates/core",
   "crates/pdf-parser",
   "crates/docx-parser",
+  "crates/odt-parser",
+  "crates/ods-parser",
   "crates/doc-parser",
   "crates/xlsx-parser",
   "crates/pptx-parser",

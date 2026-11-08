@@ -61,6 +61,31 @@ impl OcrMode {
     }
 }
 
+/// An extra reading written beside the JSON, mirroring the CLI's `--to` values
+/// the window offers. The JSON itself is always written: it is what the result
+/// pane and the Compare mode read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    Md,
+    Html,
+    Text,
+    Yaml,
+    Chunks,
+}
+
+impl OutputFormat {
+    pub fn value(self) -> &'static str {
+        match self {
+            OutputFormat::Md => "md",
+            OutputFormat::Html => "html",
+            OutputFormat::Text => "text",
+            OutputFormat::Yaml => "yaml",
+            OutputFormat::Chunks => "chunks",
+        }
+    }
+}
+
 /// The whole form: one input, one output, one settings panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,7 +99,15 @@ pub struct Settings {
     pub output: String,
     pub parallel: u32,
     pub recursive: bool,
+    /// `--page-range`: which pages to read. Empty means every page.
+    pub page_range: String,
     pub ocr: OcrMode,
+    /// `--ocr-lang`: comma-separated Tesseract codes; empty means `eng`.
+    pub ocr_lang: String,
+    /// `--psm`: Tesseract page segmentation mode 0–13; `None` is its default.
+    pub psm: Option<u8>,
+    /// Extra outputs written beside the JSON (`--to`); empty means JSON alone.
+    pub to: Vec<OutputFormat>,
     pub preview: bool,
     /// The Compare mode's reference: a Docling document, or a folder of them
     /// named after the documents they belong to. Empty means "do not compare".
@@ -88,7 +121,11 @@ impl Default for Settings {
             output: String::new(),
             parallel: 4,
             recursive: true,
+            page_range: String::new(),
             ocr: OcrMode::Auto,
+            ocr_lang: "eng".to_string(),
+            psm: None,
+            to: Vec::new(),
             preview: false,
             reference: String::new(),
         }
@@ -148,8 +185,39 @@ impl Settings {
         args.push("--recursive".to_string());
         args.push(self.recursive.to_string());
 
+        let page_range = self.page_range.trim();
+        if !page_range.is_empty() {
+            args.push("--page-range".to_string());
+            args.push(page_range.to_string());
+        }
+
         args.push("--ocr".to_string());
         args.push(self.ocr.value().to_string());
+
+        args.push("--ocr-lang".to_string());
+        args.push(self.ocr_lang_value().to_string());
+
+        if let Some(psm) = self.psm {
+            args.push("--psm".to_string());
+            args.push(psm.to_string());
+        }
+
+        // `--to` is repeatable, and the JSON is the extraction the window reads:
+        // an extra format is written beside it, never instead of it.
+        let mut written = Vec::new();
+        for format in &self.to {
+            if !written.contains(format) {
+                written.push(*format);
+            }
+        }
+        if !written.is_empty() {
+            args.push("--to".to_string());
+            args.push("json".to_string());
+            for format in written {
+                args.push("--to".to_string());
+                args.push(format.value().to_string());
+            }
+        }
 
         if self.preview {
             args.push("--preview".to_string());
@@ -176,11 +244,25 @@ impl Settings {
                 Self::MAX_PARALLEL
             ));
         }
+        if self.psm.is_some_and(|mode| mode > 13) {
+            return Some("Page segmentation mode must be between 0 and 13.".to_string());
+        }
         let reference = self.reference.trim();
         if !reference.is_empty() && !PathBuf::from(reference).exists() {
             return Some(format!("Reference does not exist: {reference}"));
         }
         None
+    }
+
+    /// The language list the CLI is given: a form left empty means the CLI's own
+    /// default rather than a language named by no one.
+    fn ocr_lang_value(&self) -> &str {
+        let lang = self.ocr_lang.trim();
+        if lang.is_empty() {
+            "eng"
+        } else {
+            lang
+        }
     }
 }
 
@@ -913,6 +995,8 @@ mod tests {
                 "true",
                 "--ocr",
                 "auto",
+                "--ocr-lang",
+                "eng",
                 "--progress",
             ]
         );
@@ -1274,9 +1358,115 @@ mod tests {
                 .any(|arg| *arg == s.reference || arg.contains("reference")),
             "the reference reached the command line: {args:?}"
         );
-        // Nine arguments: the input, the parallelism, recursion, OCR and
-        // `--progress`, with a value for each flag that takes one.
-        assert_eq!(args.len(), 9, "{args:?}");
+        // Eleven arguments: the input, the parallelism, recursion, OCR and its
+        // language, and `--progress`, with a value for each flag that takes one.
+        assert_eq!(args.len(), 11, "{args:?}");
+    }
+
+    /// A page range, OCR languages, a page segmentation mode and extra outputs
+    /// are the CLI's own flags: the window passes each through, and JSON is
+    /// named first whenever an extra reading is asked for.
+    #[test]
+    fn page_range_languages_psm_and_extra_outputs_are_forwarded() {
+        let mut s = settings();
+        s.page_range = " 2-3,9 ".to_string();
+        s.ocr_lang = " eng,deu ".to_string();
+        s.psm = Some(6);
+        s.to = vec![OutputFormat::Md, OutputFormat::Chunks, OutputFormat::Md];
+
+        let args = s.to_args();
+        let joined = args.join(" ");
+        assert!(joined.contains("--page-range 2-3,9"), "{joined}");
+        assert!(joined.contains("--ocr-lang eng,deu"), "{joined}");
+        assert!(joined.contains("--psm 6"), "{joined}");
+        assert!(
+            joined.contains("--to json --to md --to chunks"),
+            "the JSON is not written first, or a repeat was passed twice: {joined}"
+        );
+        assert_eq!(args.iter().filter(|arg| *arg == "--to").count(), 3);
+    }
+
+    /// An empty range and an unset mode are not arguments at all; an empty
+    /// language list is the CLI's default rather than a flag with no value.
+    #[test]
+    fn empty_settings_are_left_off_the_command_line() {
+        let mut s = settings();
+        s.page_range = "   ".to_string();
+        s.ocr_lang.clear();
+
+        let args = s.to_args();
+        assert!(!args.iter().any(|arg| arg == "--page-range"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "--psm"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "--to"), "{args:?}");
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--ocr-lang" && pair[1] == "eng"),
+            "{args:?}"
+        );
+    }
+
+    /// The payload the page sends is the form as JSON: the camelCase names are
+    /// the fields, `null` is the engine's default mode, and the extra readings
+    /// arrive as the names the checkboxes carry.
+    #[test]
+    fn the_pages_payload_is_the_settings_the_cli_is_given() {
+        let payload = serde_json::json!({
+            "input": env!("CARGO_MANIFEST_DIR"),
+            "output": "",
+            "parallel": 4,
+            "recursive": true,
+            "pageRange": "2-3",
+            "ocr": "never",
+            "ocrLang": "eng,deu",
+            "psm": 6,
+            "to": ["md", "chunks"],
+            "preview": false,
+            "reference": ""
+        });
+        let settings: Settings = serde_json::from_value(payload).expect("the page's payload");
+        assert_eq!(settings.page_range, "2-3");
+        assert_eq!(settings.ocr, OcrMode::Never);
+        assert_eq!(settings.ocr_lang, "eng,deu");
+        assert_eq!(settings.psm, Some(6));
+        assert_eq!(settings.to, vec![OutputFormat::Md, OutputFormat::Chunks]);
+        let args = settings.to_args().join(" ");
+        assert!(args.contains("--page-range 2-3"), "{args}");
+        assert!(args.contains("--ocr-lang eng,deu"), "{args}");
+        assert!(args.contains("--psm 6"), "{args}");
+        assert!(args.contains("--to json --to md --to chunks"), "{args}");
+
+        // An untouched mode box is null: the CLI's default, not mode 0.
+        let mut payload = serde_json::json!({
+            "input": env!("CARGO_MANIFEST_DIR"),
+            "output": "",
+            "parallel": 4,
+            "recursive": true,
+            "pageRange": "",
+            "ocr": "auto",
+            "ocrLang": "eng",
+            "psm": null,
+            "to": [],
+            "preview": false,
+            "reference": ""
+        });
+        let settings: Settings =
+            serde_json::from_value(payload.clone()).expect("the page's payload");
+        assert_eq!(settings.psm, None);
+        assert!(!settings.to_args().contains(&"--psm".to_string()));
+
+        payload["psm"] = serde_json::json!(0);
+        let settings: Settings = serde_json::from_value(payload).expect("mode zero");
+        assert_eq!(settings.psm, Some(0));
+    }
+
+    #[test]
+    fn a_page_segmentation_mode_outside_the_engines_modes_is_refused() {
+        let mut s = settings();
+        s.psm = Some(14);
+        assert!(s.problem().unwrap().contains("between 0 and 13"));
+
+        s.psm = Some(13);
+        assert_eq!(s.problem(), None);
     }
 
     #[test]

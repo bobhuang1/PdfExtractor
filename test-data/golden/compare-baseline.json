@@ -112,6 +112,21 @@
       "joined": 1,
       "agreement": 1.0
     },
+    "brief_odt": {
+      "rows": 12,
+      "same": 9,
+      "notation": 0,
+      "differs": 1,
+      "contained": 2,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
     "calibre_demo": {
       "rows": 122,
       "same": 79,
@@ -231,6 +246,21 @@
       "placedPagePictures": 0,
       "joined": 0,
       "agreement": 1.0
+    },
+    "inventory_calc": {
+      "rows": 4,
+      "same": 2,
+      "notation": 0,
+      "differs": 2,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 0.9339622641509434
     },
     "irs_f1040": {
       "rows": 143,

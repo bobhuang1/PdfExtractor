@@ -45,7 +45,14 @@ function readSettings() {
     output: el("output").value.trim(),
     parallel: Number(el("parallel").value) || 1,
     recursive: el("recursive").checked,
+    pageRange: el("page-range").value.trim(),
     ocr: el("ocr").value,
+    // The CLI's own default is "eng"; an emptied box means that default rather
+    // than a language named by no one.
+    ocrLang: el("ocr-lang").value.trim() || "eng",
+    psm: el("psm").value === "" ? null : Number(el("psm").value),
+    // The extra readings written beside the JSON, in the order the boxes stand.
+    to: [...document.querySelectorAll("#to input:checked")].map((box) => box.value),
     preview: el("preview").checked,
     // The mode switch decides whether a path is sent at all: an input left in
     // the box while Compare is off is not a request to compare.
@@ -59,6 +66,10 @@ function describe(settings) {
     settings.recursive ? "recursive" : "top level only",
     `OCR ${settings.ocr}`,
   ];
+  if (settings.pageRange) bits.push(`pages ${settings.pageRange}`);
+  if (settings.ocrLang !== "eng") bits.push(`langs ${settings.ocrLang}`);
+  if (settings.psm !== null) bits.push(`PSM ${settings.psm}`);
+  if (settings.to.length) bits.push(`also ${settings.to.join("+")}`);
   if (settings.preview) bits.push("preview");
   if (settings.reference) bits.push(`compare: ${baseName(settings.reference)}`);
   return bits.join(" · ");
@@ -943,11 +954,14 @@ function wire() {
     refreshSummary();
   });
 
-  for (const id of ["input", "output"]) {
+  for (const id of ["input", "output", "page-range", "ocr-lang"]) {
     el(id).addEventListener("input", refreshSummary);
   }
-  for (const id of ["recursive", "preview", "ocr"]) {
+  for (const id of ["recursive", "preview", "ocr", "psm"]) {
     el(id).addEventListener("change", refreshSummary);
+  }
+  for (const box of document.querySelectorAll("#to input")) {
+    box.addEventListener("change", refreshSummary);
   }
 
   el("convert").addEventListener("click", start);

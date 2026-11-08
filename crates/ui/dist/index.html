@@ -127,6 +127,70 @@
             </select>
           </label>
         </div>
+
+        <div class="row wrap stacked-row">
+          <label class="stacked">
+            Page range
+            <input
+              id="page-range"
+              type="text"
+              placeholder="every page — e.g. 1-4,9"
+            />
+          </label>
+          <label class="stacked">
+            OCR languages
+            <input id="ocr-lang" type="text" value="eng" placeholder="eng,deu" />
+          </label>
+          <label class="stacked">
+            Page segmentation
+            <select id="psm">
+              <option value="" selected>Engine default</option>
+              <option value="0">0 — orientation only</option>
+              <option value="1">1 — auto with OSD</option>
+              <option value="2">2 — auto, no OSD</option>
+              <option value="3">3 — fully automatic</option>
+              <option value="4">4 — single column</option>
+              <option value="5">5 — vertical block</option>
+              <option value="6">6 — one block</option>
+              <option value="7">7 — one line</option>
+              <option value="8">8 — one word</option>
+              <option value="9">9 — one word in a circle</option>
+              <option value="10">10 — single character</option>
+              <option value="11">11 — sparse text</option>
+              <option value="12">12 — sparse text with OSD</option>
+              <option value="13">13 — raw line</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          A page is a PDF's page, a workbook's sheet, or an image's frame. OCR
+          languages are Tesseract codes; the language's data must be installed.
+        </p>
+
+        <div class="row wrap" id="to">
+          <span class="group-label">Also write</span>
+          <label class="check">
+            <input type="checkbox" value="md" />
+            Markdown
+          </label>
+          <label class="check">
+            <input type="checkbox" value="html" />
+            HTML
+          </label>
+          <label class="check">
+            <input type="checkbox" value="text" />
+            Text
+          </label>
+          <label class="check">
+            <input type="checkbox" value="yaml" />
+            YAML
+          </label>
+          <label class="check">
+            <input type="checkbox" value="chunks" />
+            Retrieval chunks
+          </label>
+          <span class="hint">JSON is always written beside them.</span>
+        </div>
       </section>
 
       <section class="actions">

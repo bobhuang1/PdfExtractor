@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": false,
+    "byte_fallback": false,
+    "vocab": {
+      "[UNK]": 0,
+      "a": 1,
+      "b": 2,
+      "c": 3,
+      "d": 4,
+      "e": 5,
+      "f": 6,
+      "g": 7,
+      "h": 8,
+      "ab": 9
+    },
+    "merges": [
+      ["a", "b"]
+    ]
+  }
+}

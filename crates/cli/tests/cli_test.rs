@@ -1645,6 +1645,7 @@ fn the_accepted_formats_are_grouped_by_the_family_the_help_names_them_under() {
             "Word",
             "Excel",
             "PowerPoint",
+            "OpenDocument",
             "Works/WordPerfect",
             "Text and markup",
             "Pictures",

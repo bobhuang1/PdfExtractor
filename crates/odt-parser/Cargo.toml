@@ -1,0 +1,23 @@
+[package]
+name = "pdfextractor-odt-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# A picture's media type is named by the shared picture-format table, the same
+# list the CLI writes a picture under.
+pdfextractor-picture-formats = { path = "../picture-formats" }
+# A picture part with no `draw:mime-type` is named by its own bytes, which is
+# what the image reader already answers.
+pdfextractor-image-parser = { path = "../image-parser" }
+zip.workspace = true
+quick-xml.workspace = true
+
+[dev-dependencies]
+# The tests build a package in memory so a paragraph, a list, a table and a
+# picture can each be read without a fixture file.
+zip.workspace = true

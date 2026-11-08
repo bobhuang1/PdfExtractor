@@ -12,6 +12,8 @@ anyhow.workspace = true
 # being referenced beside it (`--image-export-mode embedded`).
 base64.workspace = true
 pdfextractor-core = { path = "../core" }
+# A chunk is a serialisable record in Docling's shape (`--to chunks`).
+serde.workspace = true
 # The HTML writer typesets an equation as MathML, keeping its LaTeX in an
 # `<annotation>` so the page reads back as the equation it was.
 pulldown-latex.workspace = true
@@ -19,3 +21,6 @@ pulldown-latex.workspace = true
 # order `--to json` writes them (serde_json's map is sorted).
 serde_json.workspace = true
 serde_yaml.workspace = true
+# `--chunks-tokenizer` counts hybrid budgets in a real Hugging Face
+# `tokenizer.json`; no training, progress bar or Oniguruma regex is needed.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }

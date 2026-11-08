@@ -1,4 +1,5 @@
 mod compare;
+mod page_range;
 mod preview;
 
 // `relabel` reads the original file back to hash it, and says which file it
@@ -22,7 +23,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing_subscriber::EnvFilter;
 
 /// When to run OCR.
@@ -80,6 +81,27 @@ enum OutputFormat {
     Text,
     /// The whole document model as YAML, reading order first.
     Yaml,
+    /// Retrieval chunks as JSON Lines, in Docling's `DocChunk` shape.
+    Chunks,
+}
+
+/// How `--to chunks` splits a document.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum ChunkType {
+    /// One chunk per body item, with consecutive list items together and the
+    /// heading path carried on each chunk.
+    Hierarchical,
+    /// Sentences packed to `--chunks-max-tokens`, with overlap.
+    Hybrid,
+}
+
+impl ChunkType {
+    fn kind(self) -> pdfextractor_md_exporter::chunks::ChunkKind {
+        match self {
+            ChunkType::Hierarchical => pdfextractor_md_exporter::chunks::ChunkKind::Hierarchical,
+            ChunkType::Hybrid => pdfextractor_md_exporter::chunks::ChunkKind::Hybrid,
+        }
+    }
 }
 
 /// How a Markdown or HTML reading refers to its pictures.
@@ -115,6 +137,7 @@ impl OutputFormat {
             OutputFormat::Html => "html",
             OutputFormat::Text => "txt",
             OutputFormat::Yaml => "yaml",
+            OutputFormat::Chunks => "jsonl",
         }
     }
 }
@@ -144,7 +167,7 @@ struct Args {
     output: Option<PathBuf>,
 
     /// Output format, repeatable (`--to json --to md --to html --to text
-    /// --to yaml`); absent means `json`,
+    /// --to yaml --to chunks`); absent means `json`,
     /// which is what the compare mode and the window read. Each format is
     /// written beside the same stem, so `--to json --to md` writes siblings
     #[arg(long, value_enum)]
@@ -175,6 +198,29 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ImageExportMode::Referenced)]
     image_export_mode: ImageExportMode,
 
+    /// How `--to chunks` splits a document: `hierarchical` makes one chunk per
+    /// body item (a run of list items is one) carrying the heading path,
+    /// `hybrid` packs sentences up to `--chunks-max-tokens`, carrying the tail
+    /// of one chunk into the next
+    #[arg(long, value_enum, default_value_t = ChunkType::Hierarchical)]
+    chunks_type: ChunkType,
+
+    /// The most tokens a `--to chunks --chunks-type hybrid` chunk may hold
+    #[arg(long, default_value_t = 512, value_name = "N")]
+    chunks_max_tokens: usize,
+
+    /// Tokens of the previous hybrid chunk repeated at the start of the next,
+    /// so a passage across a boundary is in both
+    #[arg(long, default_value_t = 0, value_name = "N")]
+    chunks_overlap_tokens: usize,
+
+    /// Count hybrid chunk budgets with a real Hugging Face `tokenizer.json`
+    /// file instead of the built-in approximation. The file is read and
+    /// validated before conversion; it is not a model name fetched over the
+    /// network
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+    chunks_tokenizer: Option<PathBuf>,
+
     /// Number of parallel conversions (1-1000)
     #[arg(short, long, default_value = "1")]
     parallel: usize,
@@ -189,6 +235,15 @@ struct Args {
         action = clap::ArgAction::Set
     )]
     recursive: bool,
+
+    /// Read only these pages: `1-4,9`, and `7-` for page 7 to the end (1-based,
+    /// inclusive). A page is a PDF's page, a workbook's sheet (XLSX or ODS), or an
+    /// image's frame (a GIF's or an animated WebP's frame, a TIFF's directory).
+    /// Applied before layout analysis, so the furniture and footnotes are found
+    /// among the pages kept, and each page keeps the number it has in the file. A
+    /// format with no pages is read whole, and the log says so
+    #[arg(long, value_name = "RANGE", value_parser = page_range::PageRange::parse)]
+    page_range: Option<page_range::PageRange>,
 
     /// When to run OCR on page images
     #[arg(long, value_enum, default_value_t = OcrMode::Auto)]
@@ -279,6 +334,9 @@ fn main() -> anyhow::Result<()> {
     }
 
     let formats = output_formats(&args.to);
+    // A chunk budget that cannot be met is a broken configuration, refused
+    // before a document is converted rather than half a run later.
+    let chunks = chunk_options(&args)?;
 
     // `-o -` is stdout. The stream is the document, so nothing else may be
     // printed to it, and the compare mode needs files on disk to hold the run
@@ -343,6 +401,12 @@ fn main() -> anyhow::Result<()> {
             ),
             OutputFormat::Yaml => {
                 print!("{}", pdfextractor_md_exporter::yaml::render(&doc)?)
+            }
+            OutputFormat::Chunks => {
+                print!(
+                    "{}",
+                    pdfextractor_md_exporter::chunks::to_jsonl(&doc, &chunks)?
+                )
             }
         }
         return Ok(());
@@ -421,7 +485,7 @@ fn main() -> anyhow::Result<()> {
             .par_iter()
             .zip(outputs.par_iter())
             .map(|(path, output)| {
-                let result = convert_one(path, output, &args, &formats);
+                let result = convert_one(path, output, &args, &formats, &chunks);
                 // Each document is reported the moment it finishes rather than
                 // being collected and printed at the end: that is what makes the
                 // progress stream live.
@@ -636,8 +700,8 @@ fn walk_dir(dir: &Path, depth_left: Option<usize>, found: &mut Found) -> anyhow:
 /// picture table, so a format it carries as a readable page is one the CLI
 /// accepts without another edit.
 const DOCUMENT_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "xlsx", "pptx", "ppt", "doc", "wps", "wp", "wks", "wdb", "wpd", "xls", "rtf",
-    "html", "htm", "txt", "md", "markdown", "csv", "tsv",
+    "pdf", "docx", "odt", "ods", "xlsx", "pptx", "ppt", "doc", "wps", "wp", "wks", "wdb", "wpd",
+    "xls", "rtf", "html", "htm", "txt", "md", "markdown", "csv", "tsv",
 ];
 
 /// The picture extensions an input can be read under: every format the shared
@@ -725,6 +789,7 @@ const DOCUMENT_FAMILIES: &[(&str, &[&str])] = &[
     ("Word", &["docx", "doc"]),
     ("Excel", &["xlsx", "xls"]),
     ("PowerPoint", &["pptx", "ppt"]),
+    ("OpenDocument", &["odt", "ods"]),
     ("Works/WordPerfect", &["wps", "wp", "wks", "wdb", "wpd"]),
     (
         "Text and markup",
@@ -895,6 +960,14 @@ fn bytes_say_what_it_is(path: &Path, ext: &str) -> Option<String> {
             "a Word document (DOCX)",
             Some("rename the file to .docx".to_string()),
         ),
+        Format::Odt => (
+            "an OpenDocument text document (ODT)",
+            Some("rename the file to .odt".to_string()),
+        ),
+        Format::Ods => (
+            "an OpenDocument spreadsheet (ODS)",
+            Some("rename the file to .ods".to_string()),
+        ),
         Format::Xlsx => (
             "an Excel workbook (XLSX)",
             Some("rename the file to .xlsx".to_string()),
@@ -976,6 +1049,7 @@ fn convert_one(
     base: &Path,
     args: &Args,
     formats: &[OutputFormat],
+    chunks: &pdfextractor_md_exporter::chunks::ChunkOptions,
 ) -> anyhow::Result<PathBuf> {
     // Every format is written beside the same stem: `-o out.json --to md`
     // writes `out.json` and `out.md`, and the first format asked for is the
@@ -1006,6 +1080,9 @@ fn convert_one(
                 args.include_notes,
             )?,
             OutputFormat::Yaml => pdfextractor_md_exporter::yaml::export_to_file(&doc, &target)?,
+            OutputFormat::Chunks => {
+                pdfextractor_md_exporter::chunks::export_to_file(&doc, &target, chunks)?
+            }
         }
     }
     Ok(primary)
@@ -1049,14 +1126,38 @@ fn build_document(
         }
     }
 
-    let doc = match detect(path)? {
+    let detected = detect(path)?;
+    // The range selects pages, and only a paginated reading has them: a PDF's
+    // pages, a workbook's sheets, an image's frames. A flow format is read whole,
+    // and says so rather than silently ignoring the flag.
+    let paginated = matches!(
+        &detected,
+        Format::Pdf | Format::Ods | Format::Xlsx | Format::Image { .. }
+    ) || matches!(
+        &detected,
+        Format::Bridge {
+            target: BridgeTarget::Xlsx,
+            ..
+        }
+    );
+    if args.page_range.is_some() && !paginated {
+        tracing::info!(
+            "{}: --page-range applies to pages — a PDF's, a workbook's sheets, an image's \
+             frames; this format is read whole",
+            path.display()
+        );
+    }
+    let doc = match detected {
         Format::Pdf => {
             let langs = tesseract_langs(&args.ocr_lang)?;
             convert_pdf(
                 path,
-                args.ocr,
-                &langs,
-                args.psm,
+                &PdfReading {
+                    ocr: args.ocr,
+                    ocr_lang: &langs,
+                    psm: args.psm,
+                    range: args.page_range.as_ref(),
+                },
                 output_path,
                 args.preview,
                 args.preview_dpi,
@@ -1066,6 +1167,19 @@ fn build_document(
             note_flow_format(args.preview, path);
             convert_docx(path, output_path)?
         }
+        Format::Odt => {
+            note_flow_format(args.preview, path);
+            convert_odt(path, output_path)?
+        }
+        Format::Ods => {
+            if args.preview {
+                tracing::info!(
+                    "{}: the preview draws page images; a workbook has none, skipping",
+                    path.display()
+                );
+            }
+            convert_ods(path, output_path, args.page_range.as_ref())?
+        }
         Format::Xlsx => {
             if args.preview {
                 tracing::info!(
@@ -1073,7 +1187,7 @@ fn build_document(
                     path.display()
                 );
             }
-            convert_xlsx(path, output_path)?
+            convert_xlsx(path, output_path, args.page_range.as_ref())?
         }
         Format::Pptx => {
             if args.preview {
@@ -1162,7 +1276,9 @@ fn build_document(
             );
             let doc = match target {
                 BridgeTarget::Docx => convert_docx(bridged.path(), output_path)?,
-                BridgeTarget::Xlsx => convert_xlsx(bridged.path(), output_path)?,
+                BridgeTarget::Xlsx => {
+                    convert_xlsx(bridged.path(), output_path, args.page_range.as_ref())?
+                }
                 BridgeTarget::Csv => convert_text("csv", bridged.path(), output_path)?,
                 BridgeTarget::Pptx => convert_pptx(bridged.path(), output_path)?,
             };
@@ -1198,6 +1314,38 @@ fn relabel(
         uri: None,
     });
     Ok(doc)
+}
+
+/// The reader's chunking choices, checked.
+///
+/// A budget of zero would make every hybrid chunk empty, and an overlap that is
+/// the whole budget would repeat a chunk forever, so both are refused up front
+/// with the numbers named rather than producing a file nobody can use.
+fn chunk_options(args: &Args) -> anyhow::Result<pdfextractor_md_exporter::chunks::ChunkOptions> {
+    if args.chunks_max_tokens == 0 {
+        anyhow::bail!("--chunks-max-tokens must be at least 1");
+    }
+    if args.chunks_overlap_tokens >= args.chunks_max_tokens {
+        anyhow::bail!(
+            "--chunks-overlap-tokens ({}) must be smaller than --chunks-max-tokens ({})",
+            args.chunks_overlap_tokens,
+            args.chunks_max_tokens
+        );
+    }
+    let tokenizer = match args.chunks_tokenizer.as_deref() {
+        Some(path) => Some(Arc::new(
+            pdfextractor_md_exporter::chunks::Tokenizer::from_file(path)
+                .with_context(|| format!("--chunks-tokenizer {}", path.display()))?,
+        )),
+        None => None,
+    };
+    Ok(pdfextractor_md_exporter::chunks::ChunkOptions {
+        kind: args.chunks_type.kind(),
+        max_tokens: args.chunks_max_tokens,
+        overlap_tokens: args.chunks_overlap_tokens,
+        tokenizer,
+        include_notes: args.include_notes,
+    })
 }
 
 /// The formats a run writes: what was asked for, in the order asked, with a
@@ -1347,18 +1495,60 @@ fn start_ocr_engine(
 }
 
 /// Build a `DoclingDocument` from a PDF file path.
+/// The reader's choices for one PDF, gathered so the conversion takes the
+/// document and the choices rather than a row of loose flags.
+struct PdfReading<'a> {
+    ocr: OcrMode,
+    ocr_lang: &'a str,
+    psm: Option<u8>,
+    /// The pages to read, when the reader asked for fewer than all of them.
+    range: Option<&'a page_range::PageRange>,
+}
+
 fn convert_pdf(
     path: &Path,
-    ocr: OcrMode,
-    ocr_lang: &str,
-    psm: Option<u8>,
+    reading: &PdfReading<'_>,
     output_path: &Path,
     want_preview: bool,
     preview_dpi: u32,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = std::fs::read(path)?;
     let parsed = PdfDocument::parse(&data)?;
-    let pages = parsed.extract();
+    // A ciphered file is refused here, by name, rather than read as though its
+    // streams were plain: every string and stream in it is encrypted under a key
+    // derived from the password, so what came out unread would be noise in a
+    // document that looks successful. Decrypting is a separate piece of work;
+    // what a user needs to hear now is why the page came back empty.
+    if parsed.encrypted {
+        anyhow::bail!(
+            "{}: this PDF is encrypted (its trailer names /Encrypt); this build cannot \
+             decrypt it yet — re-save it without a password, for example \
+             `qpdf --decrypt in.pdf out.pdf`, and read that file",
+            path.display()
+        );
+    }
+    // The reader's page range is applied to the pages the file has, before any of
+    // them is analysed: the furniture pass must see exactly the pages that were
+    // kept, or a running head on the only page left would be judged against
+    // neighbours that are not in the document any more.
+    let mut pages = parsed.extract();
+    if let Some(range) = reading.range {
+        let total = pages.len();
+        pages.retain(|page| range.contains(page.page_no));
+        if pages.is_empty() {
+            anyhow::bail!(
+                "--page-range {range} names no page of {} ({} page(s): 1-{total})",
+                path.display(),
+                total
+            );
+        }
+        tracing::info!(
+            "{}: reading {} of {} page(s) ({range})",
+            path.display(),
+            pages.len(),
+            total
+        );
+    }
 
     let name = path
         .file_name()
@@ -1375,7 +1565,7 @@ fn convert_pdf(
     });
 
     // One engine per document: `LepTess` is not `Sync` and construction is costly.
-    let mut engine = start_ocr_engine(ocr, ocr_lang, psm);
+    let mut engine = start_ocr_engine(reading.ocr, reading.ocr_lang, reading.psm);
 
     // Raster images are written next to the JSON; create the directory lazily
     // so documents without pictures leave no empty folder behind.
@@ -1437,7 +1627,7 @@ fn convert_pdf(
         // A page with no text layer is almost always a scan: fall back to OCR.
         // When OCR runs, it is the only source of text for the document, so a
         // forced re-OCR replaces the text layer instead of duplicating it.
-        let needs_ocr = page.spans.is_empty() || ocr == OcrMode::Always;
+        let needs_ocr = page.spans.is_empty() || reading.ocr == OcrMode::Always;
         let mut spans: Vec<LayoutSpan> = Vec::new();
         if !needs_ocr {
             spans.extend(page.spans.iter().map(|span| LayoutSpan {
@@ -1940,19 +2130,226 @@ fn convert_docx(
     Ok(builder.build())
 }
 
-/// Build a `DoclingDocument` from an XLSX workbook.
+/// Build a `DoclingDocument` from an OpenDocument text document.
 ///
-/// Each worksheet is a page whose units are cells rather than points — the
-/// shape Docling's own XLSX backend produces: a `sheet` group per worksheet
-/// with the worksheet's tables beneath it, and a provenance box in cell
-/// indices (0-based, top-left origin). A hidden worksheet stays in the
-/// document as the `invisible` layer rather than being dropped.
-fn convert_xlsx(
+/// ODF is flow-based like DOCX: a page style states a rectangle, but no block
+/// sits on a page a reader could point at, so the document publishes none.
+fn convert_odt(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = std::fs::read(path)?;
+    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes(&data)?;
+
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document");
+
+    let mut builder = DocumentBuilder::new(name);
+    builder.set_origin(Origin {
+        mimetype: Some("application/vnd.oasis.opendocument.text".to_string()),
+        // Docling requires a non-negative integer, so the hash stays unsigned.
+        binary_hash: Some(fnv1a(&data)),
+        filename: Some(name.to_string()),
+        uri: None,
+    });
+
+    let mut image_dir: Option<PathBuf> = None;
+    let mut image_seq = 0usize;
+    for item in &parsed.items {
+        emit_odt_item(
+            &mut builder,
+            item,
+            output_path,
+            &mut image_dir,
+            &mut image_seq,
+        );
+    }
+
+    Ok(builder.build())
+}
+
+/// Emit one ODT block into the document body.
+fn emit_odt_item(
+    builder: &mut DocumentBuilder,
+    item: &pdfextractor_odt_parser::OdtItem,
+    output_path: &Path,
+    image_dir: &mut Option<PathBuf>,
+    image_seq: &mut usize,
+) {
+    use pdfextractor_odt_parser::OdtItem;
+    match item {
+        OdtItem::Text {
+            text,
+            label,
+            marker,
+            level,
+            hyperlink,
+        } => {
+            builder.add_labeled_item_with_link(
+                text,
+                label,
+                *level,
+                marker.clone(),
+                enumerated(marker),
+                hyperlink.clone(),
+            );
+        }
+        OdtItem::Table(table) => {
+            let grid = odt_grid(table, output_path, image_dir, image_seq);
+            builder.add_table_grid(&grid);
+        }
+        OdtItem::Picture {
+            mime,
+            data,
+            width_pt,
+            height_pt,
+        } => {
+            *image_seq += 1;
+            let name = format!("pg1_{}", image_seq);
+            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
+            let image = write_image(image_dir, output_path, &name, mime, &data)
+                .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
+            builder.add_picture_plain("picture", image);
+        }
+    }
+}
+
+/// An ODT table as the builder's grid: every cell a merge did not cover,
+/// placed at its row and column with the spans the document declares.
+fn odt_grid(
+    table: &pdfextractor_odt_parser::OdtTable,
+    output_path: &Path,
+    image_dir: &mut Option<PathBuf>,
+    image_seq: &mut usize,
+) -> GridTable {
+    let mut cells = Vec::new();
+    for (r, row) in table.rows.iter().enumerate() {
+        for cell in row {
+            if cell.covered {
+                continue;
+            }
+            let pictures = cell
+                .pictures
+                .iter()
+                .filter_map(|picture| {
+                    *image_seq += 1;
+                    let name = format!("pg1_{}", image_seq);
+                    let (mime, data) = office_media(
+                        picture.mime,
+                        picture.data.clone(),
+                        picture.width_pt,
+                        picture.height_pt,
+                    );
+                    write_image(image_dir, output_path, &name, mime, &data).map(|uri| {
+                        describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
+                    })
+                })
+                .collect();
+            let tables = cell
+                .tables
+                .iter()
+                .map(|nested| odt_grid(nested, output_path, image_dir, image_seq))
+                .collect();
+            cells.push(GridCell {
+                text: cell.text.clone(),
+                start_row: r,
+                start_col: cell.start_col,
+                row_span: cell.row_span.max(1),
+                col_span: cell.col_span.max(1),
+                column_header: cell.header,
+                row_header: !cell.header && cell.start_col == 0 && r > 0,
+                pictures,
+                tables,
+            });
+        }
+    }
+    GridTable {
+        num_rows: table.rows.len(),
+        num_cols: table.num_cols,
+        cells,
+    }
+}
+
+/// Build a `DoclingDocument` from an XLSX workbook.
+fn convert_xlsx(
+    path: &Path,
+    output_path: &Path,
+    range: Option<&page_range::PageRange>,
+) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    let data = std::fs::read(path)?;
     let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
+    convert_workbook(
+        &parsed.sheets,
+        &data,
+        path,
+        output_path,
+        range,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+}
+
+/// Build a `DoclingDocument` from an OpenDocument spreadsheet.
+///
+/// An ODS workbook is read into the same sheets the XLSX reader produces, so
+/// the two packages take one path: a sheet is a page, a hidden sheet stays on
+/// the `invisible` layer, and `--page-range` names sheets the same way.
+fn convert_ods(
+    path: &Path,
+    output_path: &Path,
+    range: Option<&page_range::PageRange>,
+) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    let data = std::fs::read(path)?;
+    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes(&data)?;
+    convert_workbook(
+        &parsed.sheets,
+        &data,
+        path,
+        output_path,
+        range,
+        "application/vnd.oasis.opendocument.spreadsheet",
+    )
+}
+
+/// Build a `DoclingDocument` from a workbook's sheets.
+///
+/// Each worksheet is a page whose units are cells rather than points — the
+/// shape Docling's own sheet backend produces: a `sheet` group per worksheet
+/// with the worksheet's tables beneath it, and a provenance box in cell
+/// indices (0-based, top-left origin). A hidden worksheet stays in the
+/// document as the `invisible` layer rather than being dropped.
+fn convert_workbook(
+    workbook: &[pdfextractor_xlsx_parser::Sheet],
+    data: &[u8],
+    path: &Path,
+    output_path: &Path,
+    range: Option<&page_range::PageRange>,
+    mimetype: &str,
+) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    // A sheet is a page, so the range is applied before the first one is read: a
+    // workbook read as one sheet costs one sheet rather than all of them.
+    let total = workbook.len();
+    let sheets: Vec<(usize, &pdfextractor_xlsx_parser::Sheet)> = workbook
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| range.is_none_or(|range| range.contains((index + 1) as i32)))
+        .collect();
+    if let Some(range) = range {
+        if sheets.is_empty() {
+            anyhow::bail!(
+                "--page-range {range} names no sheet of {} (the workbook has {total} sheet(s); \
+                 1-{total})",
+                path.display()
+            );
+        }
+        tracing::info!(
+            "{}: reading {} of {} sheet(s) ({range})",
+            path.display(),
+            sheets.len(),
+            total
+        );
+    }
 
     let name = path
         .file_name()
@@ -1967,11 +2364,9 @@ fn convert_xlsx(
 
     let mut builder = DocumentBuilder::new(stem);
     builder.set_origin(Origin {
-        mimetype: Some(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
-        ),
+        mimetype: Some(mimetype.to_string()),
         // Docling requires a non-negative integer, so the hash stays unsigned.
-        binary_hash: Some(fnv1a(&data)),
+        binary_hash: Some(fnv1a(data)),
         filename: Some(name.to_string()),
         uri: None,
     });
@@ -1981,7 +2376,7 @@ fn convert_xlsx(
     let mut image_dir: Option<PathBuf> = None;
     let mut image_seq = 0usize;
 
-    for (index, sheet) in parsed.sheets.iter().enumerate() {
+    for (index, sheet) in sheets {
         let page_no = (index + 1) as i32;
         let layer = if sheet.hidden { "invisible" } else { "body" };
         let group = builder.add_group("sheet", &sheet.name, layer);
@@ -2612,24 +3007,10 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     };
 
     let langs = tesseract_langs(&args.ocr_lang)?;
-    let Some(mut engine) = start_ocr_engine(args.ocr, &langs, args.psm) else {
-        // Without recognition the pages are still the file's: one per frame or
-        // directory, each at its own size.
-        builder.add_page(1, image.width_pt(), image.height_pt());
-        for (index, page) in later.iter().enumerate() {
-            // A TIFF sheet comes back already turned by its own tag; a GIF's
-            // or a WebP's animation frames share the screen, and the file
-            // states no tag for them.
-            let swaps = if tiff_stack {
-                false
-            } else {
-                image.orientation.swaps_axes()
-            };
-            let (width, height) = page_size(&image, (page.width, page.height), swaps);
-            builder.add_page((index + 2) as i32, width, height);
-        }
-        return Ok(builder.build());
-    };
+    // The engine is wanted from here on — the page's turns are read through it —
+    // but a run without recognition still has pages to write, so it stays an
+    // option until the pages have been built.
+    let mut engine = start_ocr_engine(args.ocr, &langs, args.psm);
 
     // A JPEG 2000 or a GIF is decoded here rather than by Tesseract's loader.
     // The pixels are the reader's own decode — the one a picture in either
@@ -2662,15 +3043,18 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // own reading of the page's turns decides which one it is written in.
     let declared = image.orientation;
     let detected = if declared == pdfextractor_image_parser::Orientation::Normal {
-        match engine.detect_upright(source) {
-            Ok(turn) => turn,
-            Err(err) => {
+        match engine.as_mut().map(|engine| engine.detect_upright(source)) {
+            Some(Ok(turn)) => turn,
+            Some(Err(err)) => {
                 tracing::debug!(
                     "could not find the orientation of {}: {err}",
                     path.display()
                 );
                 QuarterTurn::AsStored
             }
+            // Nothing will be recognised, so which way up the page is does not
+            // matter; it keeps the pixels it stores.
+            None => QuarterTurn::AsStored,
         }
     } else {
         QuarterTurn::AsStored
@@ -2732,15 +3116,17 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     } else {
         image.upright_size()
     };
-    let mut page_pixels: Vec<(Vec<u8>, u32, u32, f64, f64)> = Vec::with_capacity(later.len() + 1);
+    let mut page_pixels: Vec<(i32, Vec<u8>, u32, u32, f64, f64)> =
+        Vec::with_capacity(later.len() + 1);
     page_pixels.push((
+        1,
         upright.as_deref().unwrap_or(source).to_vec(),
         first_grid.0,
         first_grid.1,
         width,
         height,
     ));
-    for frame in later {
+    for (index, frame) in later.iter().enumerate() {
         let (bytes, grid) = if tiff_stack {
             // Each directory's own tag was already applied to its pixels.
             (frame.data.clone(), (frame.width, frame.height))
@@ -2767,24 +3153,50 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
             }
         };
         let (width, height) = page_size(&image, grid, false);
-        page_pixels.push((bytes, grid.0, grid.1, width, height));
+        page_pixels.push(((index + 2) as i32, bytes, grid.0, grid.1, width, height));
     }
-    for (index, page) in page_pixels.iter().enumerate() {
-        builder.add_page((index + 1) as i32, page.3, page.4);
+
+    // The frames are the file's pages, so the range selects among them before
+    // one is recognised: page 2 of an animation is its second frame, and a
+    // TIFF's second directory its second sheet.
+    if let Some(range) = args.page_range.as_ref() {
+        let total = page_pixels.len();
+        page_pixels.retain(|page| range.contains(page.0));
+        if page_pixels.is_empty() {
+            anyhow::bail!(
+                "--page-range {range} names no page of {} (the file has {total} page(s); \
+                 1-{total})",
+                path.display()
+            );
+        }
+        tracing::info!(
+            "{}: reading {} of {} page(s) ({range})",
+            path.display(),
+            page_pixels.len(),
+            total
+        );
     }
+
+    for page in &page_pixels {
+        builder.add_page(page.0, page.4, page.5);
+    }
+
+    let Some(mut engine) = engine else {
+        // Without recognition the pages are still the file's: one per frame or
+        // directory, each at its own size — and only the ones asked for.
+        return Ok(builder.build());
+    };
 
     // The engine measures in pixels; the page is measured in points. A line's
     // box is scaled onto the page, and its height comes back as a font size —
     // the same estimate the PDF path uses for an OCR line. Each page is scaled
     // against its own grid: a GIF's frames share its logical screen, a TIFF's
     // sheets are each their own size.
-    for (index, (pixels, pixel_width, pixel_height, width, height)) in
-        page_pixels.iter().enumerate()
-    {
+    for (page_no, pixels, pixel_width, pixel_height, width, height) in &page_pixels {
+        let page = *page_no;
         let (pixel_width, pixel_height) = (*pixel_width, *pixel_height);
         let (width, height) = (*width, *height);
-        let page = (index + 1) as i32;
-        let result = match engine.recognize(pixels) {
+        let result = match engine.recognize(pixels.as_slice()) {
             Ok(result) => result,
             Err(err) => {
                 // A page that cannot be read is a page with no text, not a

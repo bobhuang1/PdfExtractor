@@ -676,6 +676,24 @@ fn a_workbook_conforms_to_the_docling_schema() {
     assert_fixture_conforms("inventory.xlsx", "inventory", "xlsx-schema");
 }
 
+/// The same workbook as an OpenDocument package: the ODS reader's fixture is
+/// held to the schema too, and its Docling reference is the one the corpus
+/// ratchet measures it against.
+#[test]
+fn an_ods_workbook_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("inventory_calc.ods", "inventory_calc", "ods-schema");
+}
+
+/// A Writer document is flow-based, so it adds the shapes the corpus's DOCX
+/// files already carry — title, headings, lists, a linked paragraph, a table
+/// with real spans and a picture — without a page: the page style's rectangle
+/// stays a parser fact. Its reference is the one the corpus ratchet measures it
+/// against, like the workbooks' references above.
+#[test]
+fn an_odt_document_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("brief_odt.odt", "brief_odt", "odt-schema");
+}
+
 /// A deck adds things no corpus document has: `chapter` groups that hold
 /// their slide's items, list items with a `marker` and `enumerated`, and a
 /// table whose cell spans two columns.
@@ -1764,6 +1782,8 @@ fn docling_core_accepts_our_documents() {
     std::fs::create_dir_all(&fixtures).expect("create the fixture output dir");
     for (file, stem) in [
         ("inventory.xlsx", "inventory"),
+        ("inventory_calc.ods", "inventory_calc"),
+        ("brief_odt.odt", "brief_odt"),
         ("q3_review.pptx", "q3_review"),
         ("invoice_scan.png", "invoice_scan"),
     ] {

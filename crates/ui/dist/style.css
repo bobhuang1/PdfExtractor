@@ -122,6 +122,40 @@ select {
   font: inherit;
 }
 
+/* A field whose name sits above its control, for the settings that need a value
+   rather than a tick: the range, the OCR languages and the segmentation mode. */
+.stacked-row {
+  margin-top: 12px;
+  align-items: flex-end;
+}
+
+.stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stacked input[type="text"] {
+  width: 13em;
+  flex: none;
+}
+
+.stacked select {
+  max-width: 17em;
+}
+
+.group-label {
+  font-weight: 600;
+}
+
+/* A note on a row of ticks belongs under it, not beside the last box. */
+.row > .hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .actions {
   display: flex;
   gap: 12px;

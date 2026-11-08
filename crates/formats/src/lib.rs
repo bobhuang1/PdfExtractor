@@ -70,6 +70,10 @@ pub enum Sniffed {
 pub enum Format {
     Pdf,
     Docx,
+    /// An OpenDocument text document, read by `odt-parser`.
+    Odt,
+    /// An OpenDocument spreadsheet, read by `ods-parser`.
+    Ods,
     Xlsx,
     /// PowerPoint's OPC package, read by `pptx-parser`.
     Pptx,
@@ -212,6 +216,8 @@ pub fn detect_bytes(path: &Path, data: &[u8]) -> Format {
             None => match ext.as_str() {
                 "pdf" => Format::Pdf,
                 "docx" => Format::Docx,
+                "odt" => Format::Odt,
+                "ods" => Format::Ods,
                 "xlsx" => Format::Xlsx,
                 "pptx" => Format::Pptx,
                 "doc" => Format::Doc,
@@ -255,8 +261,20 @@ fn zip_family(data: &[u8]) -> Format {
     if contains(data, b"META-INF/container.xml") {
         return Format::Unsupported("an EPUB book — not read yet");
     }
+    // ODF states its type in the stored `mimetype` part. The text and
+    // spreadsheet families have readers here; a presentation is named so a
+    // deck is not reported as a broken text document.
+    if contains(data, b"application/vnd.oasis.opendocument.text") {
+        return Format::Odt;
+    }
+    if contains(data, b"application/vnd.oasis.opendocument.spreadsheet") {
+        return Format::Ods;
+    }
+    if contains(data, b"application/vnd.oasis.opendocument.presentation") {
+        return Format::Unsupported("an OpenDocument presentation — not read yet");
+    }
     if contains(data, b"content.xml") {
-        return Format::Unsupported("an OpenDocument file — not read yet");
+        return Format::Unsupported("an OpenDocument file of a type this build cannot name");
     }
     Format::Unsupported("a ZIP package with no document part this reads")
 }
@@ -605,6 +623,14 @@ mod tests {
         assert_eq!(
             detect_bytes(&named("sheet.wps"), &package(&["xl/workbook.xml"])),
             Format::Xlsx
+        );
+        assert_eq!(
+            detect_bytes(
+                &named("ledger.wps"),
+                &package(&["application/vnd.oasis.opendocument.spreadsheet"])
+            ),
+            Format::Ods,
+            "an ODF spreadsheet is read whatever it is called"
         );
         assert_eq!(
             detect_bytes(&named("book.epub"), &package(&["META-INF/container.xml"])),
