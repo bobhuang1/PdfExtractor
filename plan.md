@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,080 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,103 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -109,7 +109,7 @@ pdf-extractor/
 ### Phase 2: Core Types & JSON Schema (3-5 days)
 - [x] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata) **Done**: `crates/core/src/types.rs` carries `DoclingDocument` and every node the schema names — `Page`/`Size`, `TextItem`, `TableItem`/`TableData`/`TableCell`, `PictureItem` with its `tabular_chart`, `Group`, `KeyValueItem`, the furniture layers, `Provenance` and `Ref` — and the conformance test walks each against the schema's required fields and enum values.
 - [x] Implement serialization (serde) to match exact JSON format **Done**: `crates/json-exporter` writes the model with `serde_json` at the schema's key order and shape, and every committed golden is that output byte for byte.
-- [x] Golden tests with known Docling outputs **Done**: 49 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
+- [x] Golden tests with known Docling outputs **Done**: 54 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
 
 ### Phase 3: DOCX Parser (1-2 weeks) — largely done
 - [x] Parse DOCX as OPC package (ZIP of XML), reusing the `zip` crate.
@@ -264,7 +264,7 @@ pdf-extractor/
 - [x] Exit codes, error messages
 - [x] Output written through a temporary sibling and renamed into place, so an
   interrupted run cannot leave a half-written `*.json`
-- [x] 128 end-to-end tests in `cli_test` that run the built binary as a child process
+- [x] 129 end-to-end tests in `cli_test` that run the built binary as a child process
 
 ### Phase 8: UI (Simple) (1 week)
 - [x] **Box overlay preview** (`--preview`) — an HTML page overlay of every extracted box,
@@ -365,7 +365,7 @@ pdf-extractor/
 - [ ] Feature flag/config to enable/disable
 
 ### Phase 10: Testing, Optimization, Docs (Ongoing)
-- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — thirty-five tests in the binary: the corpus-wide conformance check, eleven fixture checks, a version check, twenty comparison units and two acceptance tests.
+- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — forty tests in the binary: the corpus-wide conformance check, sixteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 - [ ] Performance tests with varied sizes
 - [ ] Cross-platform testing
 - [x] Error handling tests (malformed docs) **Done**: `cli_test` holds the inputs a run must refuse rather than crash on — `a_failed_document_appears_in_the_progress_stream` (a `.docx` that is not a package), `an_unsupported_file_errors`, `a_missing_input_errors`, `an_empty_directory_errors` and `a_refused_name_is_explained_by_the_files_bytes` — and each asserts the exit status and the reason, not merely that something failed.
@@ -753,10 +753,14 @@ PDFBox and PDF.js.
   else re-encoded as PNG) and places it among the sheet's tables in reading order.
   `worksheet_pictures.xlsx` (`test-data/make_pictures_xlsx.py`, written with
   `xlsxwriter`) carries a BMP, a GIF, a PNG and a JPEG across two sheets, and the CLI
-  test holds each written file to the pixels of the part it came from. Not read yet:
-  charts, cell comments, Docling's `treat_singleton_as_text` option, and its split of a
-  merged label row out of the table; the workbooks are fixtures beside the corpus rather
-  than in it.
+  test holds each written file to the pixels of the part it came from. Its **cell
+  comments** are read from each worksheet's comments relationship, with their author
+  and words, and placed on the notes layer as one `comment_section` group per cell;
+  `annotations.xlsx` (`test-data/make_annotations_xlsx.py`) holds a comment beside a
+  value and one on an empty cell, and a comment on a second sheet. Not read yet:
+  threaded cell comments, Docling's `treat_singleton_as_text` option, and its split of
+  a merged label row out of the table; the workbooks are fixtures beside the corpus
+  rather than in it.
 - [x] **Borrowed readers, and format detection that trusts the bytes**: the formats
   no specification describes — Microsoft Works (`.wps`, `.wp`, `.wks`, `.wdb`),
   WordPerfect (`.wpd`) and legacy Excel (`.xls`) — are read through **LibreOffice**
@@ -889,6 +893,12 @@ PDFBox and PDF.js.
   agreement 1.000 in six rows, and joins the same ratchet. The nested table is read
   as a table of its own and its cells' words are also the holding cell's text — the
   flattening Docling reports — so no word lives only on one side.
+  A third fixture, `header_footer_odt.odt` (`test-data/make_header_footer_odt.py`,
+  flat ODF re-saved by LibreOffice), puts a master page's running header and page
+  footer around three body items. Neither reading publishes either, so its reference
+  (`header_footer_odt.json`) is 0 pages and 3 text items — the heading and the two
+  paragraphs — with text agreement 1.000 in three rows; the fixture and the ratchet
+  record that a producer's header and footer stay out of the body on both sides.
 - [x] **ODF sheets** (`ods`): `content.xml`'s `office:spreadsheet` is walked sheet by
   sheet and each `table:table` becomes a page — a `sheet` group holding the tables its
   cells form, a connected block per table the way a worksheet is read, merges kept as
@@ -906,8 +916,17 @@ PDFBox and PDF.js.
   **Done**, and it carries a real Docling reference of its own
   (`test-data/golden/docling/inventory_calc.json`, read through Docling's
   OpenDocument backend): three pages and four tables, the same workbook Docling
-  reads from the XLSX fixture, so the schema layer and the corpus ratchet both
-  cover the ODS reading.
+  reads from the XLSX fixture,  so the schema layer and the corpus ratchet both
+  cover the ODS reading. A cell's `office:annotation` comment is read beside it as
+  the remark it is, with the author and time the file states, and placed on the
+  notes layer as one `comment_section` group per cell; `annotations_calc.ods`
+  (`test-data/make_annotations_ods.py`) holds a comment beside a value and one on
+  an empty cell, and its real Docling reference joins the same ratchet (Docling
+  reads the empty-cell comment as a one-cell table and drops the other; our notes
+  text still holds every character the reference has). `filler_rows_calc.ods`
+  (`test-data/make_filler_rows_ods.py`) adds an empty sheet and 1,000 repeated
+  filler rows between two blocks; both readings publish two pages and the same two
+  tables, so the empty sheet and the filler are covered by the same ratchet.
 - [x] **ODF slides** (`odp`): every `draw:page` is a slide and a page, in the deck's
   order — a `chapter` group holding its title and outline text (nested list items),
   other paragraphs, a table with real spans, its `Pictures/` picture and its speaker

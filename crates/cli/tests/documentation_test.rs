@@ -5,7 +5,10 @@
 //! numbers are useful only while they are true: a count copied by hand goes
 //! stale the moment a test is added. This test asks Cargo for the current list
 //! (`--list`, which does not run anything) and holds every documented count to
-//! it.
+//! it. A stale count does not stop the gate at the first mismatch: every count
+//! the documentation states is compared, and one failure lists all of them.
+//! Each report names the file, line and nearest heading, and quotes the line,
+//! so a stale count can be found without searching for its number.
 //!
 //! The check is itself one of the tests it counts. Adding it moved the
 //! workspace total, so the plan states the new total; a later test added
@@ -20,7 +23,9 @@
 //! two: a reference named after a document in `test-data/real` is a corpus
 //! document, one that is not is a fixture beside the corpus (`test-data/*`).
 //! Both counts, and the sum the reference count is made of, are read off the
-//! disk, so an added or renamed document cannot leave the prose behind.
+//! disk and held against every file that states them — plan.md's reference
+//! count, and README's and the golden README's reference, corpus and fixture
+//! counts — so an added or renamed document cannot leave the prose behind.
 //!
 //! The workspace total is the Unix suite, because `crates/ui/tests/job_test.rs`
 //! is Unix-only. On another platform only that total is skipped; the target
@@ -124,45 +129,153 @@ fn word_value(word: &str) -> Option<usize> {
     })
 }
 
-/// The count after `prefix` in `text`, naming the file when it cannot be read.
-fn count_after_in(text: &str, prefix: &str, source: &str) -> usize {
-    let start = text
-        .find(prefix)
-        .unwrap_or_else(|| panic!("{source} no longer contains {prefix:?}"));
-    let token = text[start + prefix.len()..]
-        .split_whitespace()
-        .next()
-        .unwrap_or_default();
-    count_from(token)
-        .unwrap_or_else(|| panic!("{source}: {token:?} after {prefix:?} is not a count"))
+/// A count read from documentation, with the place that states it.
+struct DocumentedCount {
+    value: usize,
+    source: String,
+    line: usize,
+    section: Option<String>,
+    excerpt: String,
 }
 
-/// The count before `marker` in `text`, naming the file when it cannot be read.
-fn count_before_in(text: &str, marker: &str, source: &str) -> usize {
+impl DocumentedCount {
+    /// The place to point at in a stale-count report.
+    fn place(&self) -> String {
+        let section = self
+            .section
+            .as_ref()
+            .map(|section| format!(" in section {section:?}"))
+            .unwrap_or_default();
+        format!(
+            "{}:{}{section}\n    {}",
+            self.source, self.line, self.excerpt
+        )
+    }
+}
+
+/// The count at `offset`, with its line number, nearest heading and line.
+fn documented_count(source: &str, text: &str, offset: usize, value: usize) -> DocumentedCount {
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |index| offset + index);
+    let line = &text[line_start..line_end];
+    let line_number = text[..line_start].matches('\n').count() + 1;
+
+    DocumentedCount {
+        value,
+        source: source.to_string(),
+        line: line_number,
+        section: section_at(text, offset),
+        excerpt: line_excerpt(line, offset - line_start),
+    }
+}
+
+/// The nearest Markdown heading above `offset`, without its `#` markers.
+fn section_at(text: &str, offset: usize) -> Option<String> {
+    text[..offset].lines().rev().find_map(|line| {
+        let heading = line
+            .trim()
+            .strip_prefix('#')?
+            .trim_start_matches('#')
+            .trim();
+        (!heading.is_empty()).then(|| heading.to_string())
+    })
+}
+
+/// The line holding the count, shortened around `column` when it is very long.
+fn line_excerpt(line: &str, column: usize) -> String {
+    const LIMIT: usize = 240;
+
+    let trimmed = line.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+
+    let leading = line.len() - line.trim_start().len();
+    let column = column.saturating_sub(leading);
+    let column = if column <= trimmed.len() && trimmed.is_char_boundary(column) {
+        column
+    } else {
+        trimmed.len()
+    };
+    let column = trimmed[..column].chars().count();
+    let characters: Vec<char> = trimmed.chars().collect();
+    let start = column.saturating_sub(LIMIT / 3);
+    let end = (start + LIMIT).min(characters.len());
+    let start = end.saturating_sub(LIMIT);
+
+    let mut excerpt = String::new();
+    if start > 0 {
+        excerpt.push('…');
+    }
+    excerpt.extend(&characters[start..end]);
+    if end < characters.len() {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+/// The count after `prefix` in `text`, or why its marker or count is missing.
+fn count_after_in(text: &str, prefix: &str, source: &str) -> Result<DocumentedCount, String> {
+    let start = text
+        .find(prefix)
+        .ok_or_else(|| format!("{source} no longer contains marker {prefix:?}"))?;
+    let after = &text[start + prefix.len()..];
+    let token = after.split_whitespace().next().unwrap_or_default();
+    let value = count_from(token)
+        .ok_or_else(|| format!("{source}: {token:?} after marker {prefix:?} is not a count"))?;
+    let token_start = start + prefix.len() + after.find(token).unwrap_or(0);
+    Ok(documented_count(source, text, token_start, value))
+}
+
+/// The count before `marker` in `text`, or why its marker or count is missing.
+fn count_before_in(text: &str, marker: &str, source: &str) -> Result<DocumentedCount, String> {
     let end = text
         .find(marker)
-        .unwrap_or_else(|| panic!("{source} no longer contains {marker:?}"));
-    let token = text[..end].split_whitespace().last().unwrap_or_default();
-    count_from(token)
-        .unwrap_or_else(|| panic!("{source}: {token:?} before {marker:?} is not a count"))
+        .ok_or_else(|| format!("{source} no longer contains marker {marker:?}"))?;
+    let before = &text[..end];
+    let token = before.split_whitespace().last().unwrap_or_default();
+    let value = count_from(token)
+        .ok_or_else(|| format!("{source}: {token:?} before marker {marker:?} is not a count"))?;
+    let token_start = before
+        .rfind(token)
+        .unwrap_or(end.saturating_sub(token.len()));
+    Ok(documented_count(source, text, token_start, value))
 }
 
 /// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
-fn count_after(plan: &str, prefix: &str) -> usize {
+fn count_after(plan: &str, prefix: &str) -> Result<DocumentedCount, String> {
     count_after_in(plan, prefix, "plan.md")
 }
 
 /// The count before `marker` in the plan, e.g. `128 end-to-end tests`.
-fn count_before(plan: &str, marker: &str) -> usize {
+fn count_before(plan: &str, marker: &str) -> Result<DocumentedCount, String> {
     count_before_in(plan, marker, "plan.md")
 }
 
-fn assert_count(what: &str, documented: usize, listed: usize) {
-    assert_eq!(
-        documented, listed,
-        "plan.md says {what} is {documented}, but `cargo test -- --list` lists {listed}.\n\
-         Update the documented count in the same change as the suite."
-    );
+/// Add a stale test count or a missing-marker problem, so the gate reports all.
+fn check_count(
+    stale: &mut Vec<String>,
+    what: &str,
+    documented: &Result<DocumentedCount, String>,
+    listed: usize,
+) {
+    let documented = match documented {
+        Ok(documented) => documented,
+        Err(problem) => {
+            stale.push(problem.clone());
+            return;
+        }
+    };
+    if documented.value != listed {
+        stale.push(format!(
+            "{} says {what} is {}, but `cargo test -- --list` lists {listed}.\n  stated at {}",
+            documented.source,
+            documented.value,
+            documented.place()
+        ));
+    }
 }
 
 /// The file stems directly inside `dir`, ignoring directories.
@@ -254,13 +367,28 @@ fn baseline_document_count(root: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Hold a documented reference or baseline count to the repository's own.
-fn assert_repository_count(what: &str, source: &str, documented: usize, actual: usize) {
-    assert_eq!(
-        documented, actual,
-        "{source} says {what} is {documented}, but the repository has {actual}.\n\
-         Update the documented count in the same change as the references or the baseline."
-    );
+/// Add a stale reference/baseline count or a missing-marker problem.
+fn check_repository_count(
+    stale: &mut Vec<String>,
+    what: &str,
+    documented: &Result<DocumentedCount, String>,
+    actual: usize,
+) {
+    let documented = match documented {
+        Ok(documented) => documented,
+        Err(problem) => {
+            stale.push(problem.clone());
+            return;
+        }
+    };
+    if documented.value != actual {
+        stale.push(format!(
+            "{} says {what} is {}, but the repository has {actual}.\n  stated at {}",
+            documented.source,
+            documented.value,
+            documented.place()
+        ));
+    }
 }
 
 #[test]
@@ -336,12 +464,14 @@ fn documented_test_counts_match_the_test_list() {
         })
         .count();
 
+    let mut stale = Vec::new();
     // `job_test.rs` is `#![cfg(unix)]`; the documented total is the Unix suite
     // the test gate runs, so another platform's smaller total is not drift.
     #[cfg(unix)]
-    assert_count(
+    check_count(
+        &mut stale,
         "the workspace suite",
-        count_after(&plan, "the suite holds "),
+        &count_after(&plan, "the suite holds "),
         workspace.len(),
     );
     #[cfg(not(unix))]
@@ -350,80 +480,139 @@ fn documented_test_counts_match_the_test_list() {
          documented total counts the Unix-only tests in `job_test`",
         workspace.len()
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the `cli_test` suite",
-        count_before(&plan, " end-to-end tests in `cli_test`"),
+        &count_before(&plan, " end-to-end tests in `cli_test`"),
         cli.len(),
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden binary",
-        count_before(&plan, " tests in the binary"),
+        &count_before(&plan, " tests in the binary"),
         golden.len(),
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden fixture checks",
-        count_before(&plan, " fixture checks"),
+        &count_before(&plan, " fixture checks"),
         fixture_checks,
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden comparison units",
-        count_before(&plan, " comparison units"),
+        &count_before(&plan, " comparison units"),
         comparison_units,
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden acceptance tests",
-        count_before(&plan, " acceptance tests"),
+        &count_before(&plan, " acceptance tests"),
         acceptance_tests,
     );
 
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "plan.md",
-        count_before(&plan, " real Docling conversions"),
+        &count_before(&plan, " real Docling conversions"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "README.md",
-        count_before_in(&readme, " comparable references", "README.md"),
+        &count_before_in(&readme, " comparable references", "README.md"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "test-data/golden/README.md",
-        count_after_in(&golden_readme, ") — **", "test-data/golden/README.md"),
+        &count_after_in(&golden_readme, ") — **", "test-data/golden/README.md"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the baseline documents",
-        "README.md",
-        count_after_in(&readme, "docling · memory: ", "README.md"),
+        &count_after_in(&readme, "docling · memory: ", "README.md"),
         baseline_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the corpus documents",
-        "README.md",
-        count_before_in(&readme, " corpus documents", "README.md"),
+        &count_before_in(&readme, " corpus documents", "README.md"),
         corpus_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
+        "the fixtures beside the corpus",
+        &count_before_in(&readme, " fixtures beside them", "README.md"),
+        fixtures,
+    );
+    check_repository_count(
+        &mut stale,
         "the corpus documents",
-        "test-data/golden/README.md",
-        count_after_in(
+        &count_after_in(
             &golden_readme,
             "every one of the ",
             "test-data/golden/README.md",
         ),
         corpus_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the fixtures beside the corpus",
-        "test-data/golden/README.md",
-        count_before_in(
+        &count_before_in(
             &golden_readme,
             "fixtures beside the corpus",
             "test-data/golden/README.md",
         ),
         fixtures,
     );
+
+    assert!(
+        stale.is_empty(),
+        "{} stale count(s) or missing marker(s) in the documentation:\n\n{}\n\n\
+         Update the documented counts and markers in the same change as the suite, references or baseline.",
+        stale.len(),
+        stale.join("\n\n")
+    );
+}
+
+#[test]
+fn every_stale_count_is_collected_before_the_gate_reports_it() {
+    let plan = "## Tests\n\nThe workspace holds 10 tests.\n";
+    let readme = "## Golden set\n\nThere are 41 comparable references.\n";
+    let workspace = count_after_in(plan, "holds ", "plan.md");
+    let references = count_before_in(readme, " comparable references", "README.md");
+    let missing = count_after_in("## Tests\n\nNo count here.\n", "holds ", "plan.md");
+    let missing_references = count_after_in(
+        "## Golden set\n\nNo references here.\n",
+        "comparable references",
+        "README.md",
+    );
+
+    let mut stale = Vec::new();
+    check_count(&mut stale, "the workspace suite", &workspace, 11);
+    check_count(&mut stale, "the `cli_test` suite", &workspace, 10);
+    check_count(&mut stale, "a test count", &missing, 1);
+    check_repository_count(
+        &mut stale,
+        "the committed Docling references",
+        &references,
+        42,
+    );
+    check_repository_count(&mut stale, "a reference count", &missing_references, 42);
+
+    assert_eq!(stale.len(), 4);
+    assert!(stale[0].contains("plan.md says the workspace suite is 10"));
+    assert!(stale[0].contains("lists 11"));
+    assert!(stale[0].contains("plan.md:3"));
+    assert!(stale[0].contains("section \"Tests\""));
+    assert!(stale[0].contains("The workspace holds 10 tests."));
+    assert!(stale[1].contains("plan.md no longer contains marker \"holds \""));
+    assert!(stale[2].contains("README.md says the committed Docling references is 41"));
+    assert!(stale[2].contains("has 42"));
+    assert!(stale[2].contains("README.md:3"));
+    assert!(stale[2].contains("section \"Golden set\""));
+    assert!(stale[2].contains("There are 41 comparable references."));
+    assert!(stale[3].contains("README.md no longer contains marker \"comparable references\""));
 }

@@ -3569,11 +3569,22 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
                 path.display()
             );
         }
+        // A GIF's or a WebP's pages are frames, and a TIFF's are the directories
+        // its reader counted; the log names the unit the file holds rather than
+        // calling every one of them a page.
+        let (unit, units) = if tiff_stack {
+            ("directory", "directories")
+        } else if animated {
+            ("frame", "frames")
+        } else {
+            ("page", "pages")
+        };
         tracing::info!(
-            "{}: reading {} of {} page(s) ({range})",
+            "{}: reading {} of {} {} ({range})",
             path.display(),
             page_pixels.len(),
-            total
+            total,
+            if total == 1 { unit } else { units }
         );
     }
 
