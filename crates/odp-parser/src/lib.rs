@@ -19,12 +19,19 @@
 //! A `draw:frame` can hold an embedded chart object rather than a picture. Its
 //! `draw:object` names an `Object N` directory whose `content.xml` is read as
 //! the chart's title, family, categories and series, using the chart's own
-//! `local-table` for the plotted cells; the frame supplies the box. Master-page
-//! background shapes and animation are not read yet.
+//! `local-table` for the plotted cells; the frame supplies the box.
+//!
+//! A slide also inherits its master page's regular background shapes — the
+//! frames and custom shapes `styles.xml` draws without a `presentation:class`,
+//! which is what separates them from the master's placeholders — unless the
+//! page states `presentation:background-objects-visible="false"`. A slide's
+//! animation effects are read from its `anim:` timing tree; each effect names
+//! the shape its `smil:targetElement` resolves to, the property it changes and
+//! its timing. Page transitions are not read.
 
 mod parser;
 
 pub use parser::{
-    Comment, OdpDocument, Paragraph, PictureShape, Shape, Slide, Table, TableCell, TableShape,
-    TextShape,
+    Animation, Comment, OdpDocument, Paragraph, PictureShape, Shape, Slide, Table, TableCell,
+    TableShape, TextShape,
 };

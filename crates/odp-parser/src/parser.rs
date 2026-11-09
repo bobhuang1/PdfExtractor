@@ -30,8 +30,9 @@ pub struct OdpDocument {
     pub slides: Vec<Slide>,
 }
 
-/// One slide: its page number, whether it is hidden, its shapes in document
-/// order, its speaker notes and its comments.
+/// One slide: its page number, whether it is hidden, the shapes it inherits
+/// from its master page, its own shapes in document order, its animations, its
+/// speaker notes and its comments.
 #[derive(Debug, Clone)]
 pub struct Slide {
     /// 1-based, the page number a reader gives the slide.
@@ -39,7 +40,13 @@ pub struct Slide {
     /// `draw:page/@show="false"` — Impress' hidden-slide flag. The slide is
     /// kept and handed to the `invisible` layer.
     pub hidden: bool,
+    /// The master page's regular (non-placeholder) shapes, inherited by this
+    /// slide in master-page order. Empty when the slide hides background
+    /// objects or its master page draws none.
+    pub background: Vec<Shape>,
     pub shapes: Vec<Shape>,
+    /// The slide's animation effects, in the timing tree's document order.
+    pub animations: Vec<Animation>,
     /// The text of the slide's `presentation:notes` frame, paragraphs joined by
     /// a newline and trimmed. `None` when the slide has no notes, or they are
     /// empty.
@@ -59,6 +66,39 @@ pub struct Comment {
     pub date: Option<String>,
     /// The comment's paragraphs, joined by a newline and trimmed.
     pub text: String,
+}
+
+/// One animation effect on a slide.
+///
+/// ODF states an effect as an `anim:` node — a `set`, `animate`,
+/// `transitionFilter`, `audio` and so on — whose `smil:targetElement` names the
+/// `draw:id` of the shape it changes. The shape's `draw:name` is resolved here,
+/// so a reader meets the name the producer gave the shape rather than the
+/// package's generated id.
+#[derive(Debug, Clone)]
+pub struct Animation {
+    /// The targeted shape's `draw:name`, or the raw target id when the shape
+    /// has no name.
+    pub target: Option<String>,
+    /// The effect node's ODF name: `set`, `animate`, `animateMotion`,
+    /// `animateColor`, `animateTransform`, `transitionFilter`, `audio` or
+    /// `command`.
+    pub effect: String,
+    /// `smil:attributeName`, the property the effect changes.
+    pub attribute: Option<String>,
+    /// `smil:from`, when stated.
+    pub from: Option<String>,
+    /// `smil:to`, when stated.
+    pub to: Option<String>,
+    /// `presentation:preset-class` (`entrance`, `emphasis`, `exit`, `path`).
+    pub preset_class: Option<String>,
+    /// `presentation:preset-id`, the effect template's name.
+    pub preset_id: Option<String>,
+    /// `smil:begin` of the effect's timing container (or of the effect
+    /// itself when it is later), the delay a reader meets.
+    pub begin: Option<String>,
+    /// `smil:dur`, when stated.
+    pub duration: Option<String>,
 }
 
 /// One shape of a slide.
@@ -143,11 +183,17 @@ impl OdpDocument {
             .unwrap_or_default();
         let media = read_parts(&mut archive, "Pictures/");
         let objects = read_object_parts(&mut archive);
+        let backgrounds = styles
+            .as_deref()
+            .map(|xml| parse_master_backgrounds(xml, &media, &objects))
+            .transpose()?
+            .unwrap_or_default();
 
         let root = Node::parse(&content).context("malformed content.xml")?;
         let presentation = root
             .find("presentation")
             .context("content.xml has no office:presentation")?;
+        let page_visibility = page_background_visibility(&root);
 
         let mut slides = Vec::new();
         let mut page_size = None;
@@ -174,10 +220,23 @@ impl OdpDocument {
                 }
             }
 
+            let background = if background_objects_visible(page, &page_visibility) {
+                page.attr("master-page-name")
+                    .and_then(|name| backgrounds.get(name))
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let names = shape_names(page);
+            let animations = read_animations(page, &names);
+
             slides.push(Slide {
                 number: (index + 1) as i32,
                 hidden: is_hidden(page),
+                background,
                 shapes,
+                animations,
                 notes: read_notes(page),
                 comments: read_comments(page),
             });
@@ -297,6 +356,87 @@ fn parse_page_layouts(xml: &[u8]) -> Result<HashMap<String, (f64, f64)>> {
         layouts.insert("__default__".to_string(), size);
     }
     Ok(layouts)
+}
+
+/// Read each `style:master-page`'s regular shapes from `styles.xml`.
+///
+/// A master page's background objects are frames on the `backgroundobjects`
+/// layer whose producer gave them no `presentation:class`: the classes name
+/// *placeholders* (`title`, `outline`, `date-time`, `footer`, `page-number`,
+/// `notes`), which are slots a slide fills rather than content of their own.
+/// Only shapes without a class are inherited, so a slide never repeats the
+/// master's "Click to edit Master title style" prompt.
+fn parse_master_backgrounds(
+    xml: &[u8],
+    media: &HashMap<String, Vec<u8>>,
+    objects: &HashMap<String, Vec<u8>>,
+) -> Result<HashMap<String, Vec<Shape>>> {
+    let root = Node::parse(xml).context("malformed styles.xml")?;
+    let mut backgrounds = HashMap::new();
+    for master in root.descendants_named("master-page") {
+        let Some(name) = master.attr("name") else {
+            continue;
+        };
+        let mut shapes = Vec::new();
+        for child in &master.children {
+            if matches!(
+                child.name.as_str(),
+                "frame" | "custom-shape" | "caption" | "g"
+            ) && child.attr("class").is_none()
+            {
+                collect_shape(child, media, objects, &mut shapes);
+            }
+        }
+        if !shapes.is_empty() {
+            backgrounds.insert(name.to_string(), shapes);
+        }
+    }
+    Ok(backgrounds)
+}
+
+/// The `presentation:background-objects-visible` each drawing-page style in
+/// `content.xml` states.
+///
+/// ODF allows the flag on the `draw:page` itself or on the drawing-page style
+/// its `draw:style-name` names; LibreOffice writes it on the style.
+fn page_background_visibility(root: &Node) -> HashMap<String, bool> {
+    let mut visibility = HashMap::new();
+    let Some(styles) = root.find("automatic-styles") else {
+        return visibility;
+    };
+    for style in styles.descendants_named("style") {
+        let (Some(name), Some(properties)) =
+            (style.attr("name"), style.child("drawing-page-properties"))
+        else {
+            continue;
+        };
+        if style.attr("family") != Some("drawing-page") {
+            continue;
+        }
+        if let Some(visible) = properties.attr("background-objects-visible") {
+            visibility.insert(
+                name.to_string(),
+                !(visible.eq_ignore_ascii_case("false") || visible == "0"),
+            );
+        }
+    }
+    visibility
+}
+
+/// Whether a page inherits its master page's background objects.
+///
+/// The page's own `presentation:background-objects-visible` wins; otherwise
+/// the drawing-page style it names states the flag; a page that states nothing
+/// inherits them.
+fn background_objects_visible(page: &Node, styles: &HashMap<String, bool>) -> bool {
+    let stated = |visible: &str| !(visible.eq_ignore_ascii_case("false") || visible == "0");
+    if let Some(visible) = page.attr("background-objects-visible") {
+        return stated(visible);
+    }
+    page.attr("style-name")
+        .and_then(|name| styles.get(name))
+        .copied()
+        .unwrap_or(true)
 }
 
 fn length_to_emu(value: &str) -> Option<f64> {
@@ -487,6 +627,90 @@ fn read_comments(page: &Node) -> Vec<Comment> {
 fn child_text(node: &Node, name: &str) -> Option<String> {
     let text = paragraph_text(node.child(name)?).trim().to_string();
     (!text.is_empty()).then_some(text)
+}
+
+/// The `draw:id` a shape is targeted by, mapped to the name a reader knows it
+/// by. Animations refer to the id; the name is the producer's own label.
+fn shape_names(page: &Node) -> HashMap<String, String> {
+    fn collect(node: &Node, names: &mut HashMap<String, String>) {
+        for child in &node.children {
+            if let (Some(id), Some(name)) = (child.attr("id"), child.attr("name")) {
+                names.insert(id.to_string(), name.to_string());
+            }
+            collect(child, names);
+        }
+    }
+    let mut names = HashMap::new();
+    collect(page, &mut names);
+    names
+}
+
+/// The effect nodes ODF defines. A timing container is walked through; an
+/// effect is the leaf a reader meets.
+const EFFECTS: [&str; 8] = [
+    "set",
+    "animate",
+    "animateMotion",
+    "animateColor",
+    "animateTransform",
+    "transitionFilter",
+    "audio",
+    "command",
+];
+
+fn is_animation_node(name: &str) -> bool {
+    EFFECTS.contains(&name) || matches!(name, "par" | "seq" | "excl" | "iter")
+}
+
+/// Read a page's animation effects in document order.
+fn read_animations(page: &Node, names: &HashMap<String, String>) -> Vec<Animation> {
+    let mut animations = Vec::new();
+    for child in &page.children {
+        if is_animation_node(&child.name) {
+            walk_animations(child, None, None, names, &mut animations);
+        }
+    }
+    animations
+}
+
+/// Walk a timing tree, carrying the timing a parent container gives its
+/// effects: an effect's own `smil:begin` is relative to its container, so a
+/// non-zero container begin is the delay a reader sees.
+fn walk_animations<'a>(
+    node: &'a Node,
+    begin: Option<&'a str>,
+    duration: Option<&'a str>,
+    names: &HashMap<String, String>,
+    out: &mut Vec<Animation>,
+) {
+    let own_begin = node.attr("begin").filter(|value| !is_zero_time(value));
+    let effective_begin = own_begin.or(begin).or_else(|| node.attr("begin"));
+    let effective_duration = node.attr("dur").or(duration);
+
+    if EFFECTS.contains(&node.name.as_str()) {
+        out.push(Animation {
+            target: node
+                .attr("targetElement")
+                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.to_string())),
+            effect: node.name.clone(),
+            attribute: node.attr("attributeName").map(str::to_string),
+            from: node.attr("from").map(str::to_string),
+            to: node.attr("to").map(str::to_string),
+            preset_class: node.attr("preset-class").map(str::to_string),
+            preset_id: node.attr("preset-id").map(str::to_string),
+            begin: effective_begin.map(str::to_string),
+            duration: effective_duration.map(str::to_string),
+        });
+        return;
+    }
+
+    for child in &node.children {
+        walk_animations(child, effective_begin, effective_duration, names, out);
+    }
+}
+
+fn is_zero_time(value: &str) -> bool {
+    matches!(value.trim(), "0" | "0s" | "0.0s" | "0ms")
 }
 
 fn read_notes(page: &Node) -> Option<String> {
@@ -946,6 +1170,109 @@ mod tests {
         assert_eq!(
             chart.bbox,
             [360_000.0, 2_520_000.0, 1_800_000.0, 3_240_000.0]
+        );
+    }
+
+    const MASTER_STYLES: &str = r#"<document-styles>
+        <automatic-styles><page-layout name="PL"><page-layout-properties page-width="20cm" page-height="10cm"/></page-layout></automatic-styles>
+        <master-styles><master-page name="Master" page-layout-name="PL">
+          <frame class="title" x="2cm" y="1cm" width="10cm" height="2cm">
+            <text-box><p>Click to edit Master title style</p></text-box>
+          </frame>
+          <frame name="Confidential" x="2cm" y="8cm" width="10cm" height="1cm">
+            <text-box><p>Confidential</p></text-box>
+          </frame>
+        </master-page></master-styles>
+      </document-styles>"#;
+
+    const MASTER_CONTENT: &str = r#"<document-content>
+        <automatic-styles><style name="hidden" family="drawing-page"><drawing-page-properties background-objects-visible="false"/></style></automatic-styles>
+        <body><presentation>
+        <page name="One" master-page-name="Master">
+          <frame name="Body" id="id1" x="2cm" y="3cm" width="8cm" height="2cm">
+            <text-box><p>Fade this in.</p></text-box>
+          </frame>
+          <anim:par presentation:node-type="timing-root"><anim:seq presentation:node-type="main-sequence">
+            <anim:par smil:begin="0s"><anim:set smil:begin="0s" smil:dur="0.5s" smil:targetElement="id1" smil:attributeName="visibility" smil:to="visible"/></anim:par>
+            <anim:par smil:begin="1s"><anim:animate smil:begin="0s" smil:dur="2s" smil:targetElement="missing" smil:attributeName="x" smil:from="0" smil:to="5" presentation:preset-class="emphasis" presentation:preset-id="ooo-emphasis-spin"/></anim:par>
+          </anim:seq></anim:par>
+        </page>
+        <page name="Two" master-page-name="Master" presentation:background-objects-visible="false">
+          <frame name="Own" x="2cm" y="3cm" width="8cm" height="2cm">
+            <text-box><p>Own words.</p></text-box>
+          </frame>
+        </page>
+        <page name="Three" style-name="hidden" master-page-name="Master">
+          <frame name="Styled" x="2cm" y="3cm" width="8cm" height="2cm">
+            <text-box><p>Styled page.</p></text-box>
+          </frame>
+        </page>
+      </presentation></body></document-content>"#;
+
+    #[test]
+    fn master_backgrounds_are_inherited_and_animations_name_their_shapes() {
+        let document = OdpDocument::parse_bytes(&package(&[
+            ("content.xml", MASTER_CONTENT.as_bytes()),
+            ("styles.xml", MASTER_STYLES.as_bytes()),
+        ]))
+        .expect("the master-page package parses");
+
+        let slide = &document.slides[0];
+        assert_eq!(
+            slide.background.len(),
+            1,
+            "only the master's regular shape is inherited"
+        );
+        match &slide.background[0] {
+            Shape::Text(text) => {
+                assert!(!text.title);
+                assert_eq!(text.paragraphs[0].text, "Confidential");
+                assert_eq!(
+                    text.bbox,
+                    [720_000.0, 2_880_000.0, 4_320_000.0, 3_240_000.0]
+                );
+            }
+            other => panic!("the master background is not text: {other:?}"),
+        }
+
+        assert_eq!(slide.animations.len(), 2);
+        let first = &slide.animations[0];
+        assert_eq!(first.target.as_deref(), Some("Body"));
+        assert_eq!(first.effect, "set");
+        assert_eq!(first.attribute.as_deref(), Some("visibility"));
+        assert_eq!(first.to.as_deref(), Some("visible"));
+        assert_eq!(first.begin.as_deref(), Some("0s"));
+        assert_eq!(first.duration.as_deref(), Some("0.5s"));
+
+        let second = &slide.animations[1];
+        assert_eq!(
+            second.target.as_deref(),
+            Some("missing"),
+            "an id naming no shape is kept as the target"
+        );
+        assert_eq!(second.effect, "animate");
+        assert_eq!(second.from.as_deref(), Some("0"));
+        assert_eq!(second.to.as_deref(), Some("5"));
+        assert_eq!(
+            second.begin.as_deref(),
+            Some("1s"),
+            "the effect's own begin is relative to its container"
+        );
+        assert_eq!(second.duration.as_deref(), Some("2s"));
+        assert_eq!(second.preset_class.as_deref(), Some("emphasis"));
+        assert_eq!(second.preset_id.as_deref(), Some("ooo-emphasis-spin"));
+
+        let page_two = &document.slides[1];
+        assert!(
+            page_two.background.is_empty(),
+            "a page that hides background objects inherited them anyway"
+        );
+        assert!(page_two.animations.is_empty());
+
+        let page_three = &document.slides[2];
+        assert!(
+            page_three.background.is_empty(),
+            "the drawing-page style's hidden background flag was not read"
         );
     }
 

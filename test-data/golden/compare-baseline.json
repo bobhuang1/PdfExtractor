@@ -711,6 +711,21 @@
       "placedPagePictures": 0,
       "joined": 0,
       "agreement": 1.0
+    },
+    "master_animations_impress": {
+      "rows": 7,
+      "same": 3,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 3,
+      "theirsOnly": 1,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 0.9733333333333334
     }
   }
 }

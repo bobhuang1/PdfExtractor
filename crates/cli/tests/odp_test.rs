@@ -13,6 +13,10 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/q3_review_impress.odp")
 }
 
+fn master_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/master_animations_impress.odp")
+}
+
 struct Workspace {
     path: PathBuf,
 }
@@ -224,6 +228,55 @@ fn an_odp_reads_as_slides() {
          Add the regional split to slide 2.",
     );
     comment("[author: Grace Hopper, time: 2026-10-18T16:05:00]: Ship this one.");
+}
+
+#[test]
+fn master_backgrounds_and_animations_are_represented() {
+    let ws = Workspace::new("master");
+    let output = ws.join("master.json");
+    run_ok(&[
+        "-i",
+        master_fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+    ]);
+    let doc = json_of(&output);
+
+    assert_eq!(page_numbers(&doc), [1, 2]);
+    let texts = doc["texts"].as_array().expect("texts");
+
+    // The master page's regular shape is inherited by the slide that shows
+    // background objects, and not by the slide that hides them.
+    let background: Vec<&serde_json::Value> = texts
+        .iter()
+        .filter(|item| item["text"] == "Confidential \u{2014} internal use only")
+        .collect();
+    assert_eq!(
+        background.len(),
+        1,
+        "the master background belongs to exactly one slide: {texts:#?}"
+    );
+    assert_eq!(background[0]["prov"][0]["page_no"], 1);
+    assert!(texts
+        .iter()
+        .any(|item| item["text"] == "Background objects are hidden on this slide."));
+
+    // Docling has no animation item, so each effect is one notes-layer item
+    // naming the target shape and its timing.
+    let notes: Vec<&serde_json::Value> = texts
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .collect();
+    assert_eq!(notes.len(), 2, "one notes item per animation effect");
+    assert_eq!(
+        notes[0]["text"],
+        "Animation: set visibility to visible on \"Body\" (begin 0s, duration 0.5s)"
+    );
+    assert_eq!(
+        notes[1]["text"],
+        "Animation: set visibility to visible on \"Title\" (begin 0.5s, duration 0.5s)"
+    );
+    assert!(notes.iter().all(|note| note["prov"][0]["page_no"] == 1));
 }
 
 #[test]

@@ -3003,9 +3003,12 @@ fn convert_pptx(
 /// A slide is a page, as it is for PPTX, and the page is the slide size in EMU.
 /// Each slide is a `chapter` group holding its text paragraphs, table and
 /// pictures; a slide's speaker notes are one item on the notes layer inside the
-/// same group. A hidden slide stays on the `invisible` layer rather than being
-/// dropped. `--page-range` selects slides before any item is emitted, so a
-/// deck's page number is still the slide's number in the document.
+/// same group. The regular shapes a slide inherits from its master page are
+/// emitted with the slide's own, in master-page order, and each animation
+/// effect is one notes-layer item naming its target shape, property and timing.
+/// A hidden slide stays on the `invisible` layer rather than being dropped.
+/// `--page-range` selects slides before any item is emitted, so a deck's page
+/// number is still the slide's number in the document.
 fn convert_odp(
     path: &Path,
     output_path: &Path,
@@ -3061,7 +3064,7 @@ fn convert_odp(
         let group = builder.add_group("chapter", &format!("slide-{}", page_no - 1), layer);
         builder.add_page(page_no, parsed.width, parsed.height);
 
-        for shape in &slide.shapes {
+        for shape in slide.background.iter().chain(slide.shapes.iter()) {
             match shape {
                 pdfextractor_odp_parser::Shape::Text(text) => {
                     for paragraph in &text.paragraphs {
@@ -3177,6 +3180,17 @@ fn convert_odp(
         if let Some(notes) = &slide.notes {
             builder.add_notes_item_in(notes, page_no, [0.0, 0.0, 0.0, 0.0], &group);
         }
+        // An animation has no Docling item of its own, so each effect is one
+        // notes-layer item: the slide's timing stays in the document without
+        // being mistaken for words the slide shows.
+        for animation in &slide.animations {
+            builder.add_notes_item_in(
+                &animation_text(animation),
+                page_no,
+                [0.0, 0.0, 0.0, 0.0],
+                &group,
+            );
+        }
         // Comments are the slide's own remarks, not places on it: each is one
         // item on the notes layer, in a `comment_section` group of its own.
         for comment in &slide.comments {
@@ -3195,6 +3209,43 @@ fn convert_odp(
     }
 
     Ok(builder.build())
+}
+
+/// One animation effect as the document records it: Docling has no animation
+/// item, so each effect is a notes-layer item naming the shape, the property
+/// and the timing.
+fn animation_text(animation: &pdfextractor_odp_parser::Animation) -> String {
+    let mut text = format!("Animation: {}", animation.effect);
+    if let Some(attribute) = &animation.attribute {
+        text.push(' ');
+        text.push_str(attribute);
+    }
+    if let Some(from) = &animation.from {
+        text.push_str(&format!(" from {from}"));
+    }
+    if let Some(to) = &animation.to {
+        text.push_str(&format!(" to {to}"));
+    }
+    if let Some(target) = &animation.target {
+        text.push_str(&format!(" on \"{target}\""));
+    }
+    match (&animation.preset_class, &animation.preset_id) {
+        (Some(class), Some(id)) => text.push_str(&format!(" [preset {class}:{id}]")),
+        (Some(class), None) => text.push_str(&format!(" [preset {class}]")),
+        (None, Some(id)) => text.push_str(&format!(" [preset {id}]")),
+        (None, None) => {}
+    }
+    let mut timing = Vec::new();
+    if let Some(begin) = &animation.begin {
+        timing.push(format!("begin {begin}"));
+    }
+    if let Some(duration) = &animation.duration {
+        timing.push(format!("duration {duration}"));
+    }
+    if !timing.is_empty() {
+        text.push_str(&format!(" ({})", timing.join(", ")));
+    }
+    text
 }
 
 /// A comment as the document records it: Docling's own reading of a PPTX

@@ -719,6 +719,18 @@ fn an_odp_presentation_conforms_to_the_docling_schema() {
     assert_fixture_conforms("q3_review_impress.odp", "q3_review_impress", "odp-schema");
 }
 
+/// The master/animation fixture adds a slide's inherited background shape and
+/// its `anim:` effects. Docling has no animation item, so each effect is
+/// notes-layer text; the schema still has to accept the document.
+#[test]
+fn an_odp_presentation_with_master_backgrounds_and_animations_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "master_animations_impress.odp",
+        "master_animations_impress",
+        "odp-master-schema",
+    );
+}
+
 /// A plain image is a page whose origin names the image's own media type —
 /// not `application/pdf`, which is what Docling writes for one.
 #[test]
@@ -1557,10 +1569,16 @@ const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
 /// no `pages` map, while our reader pages every slide. The content is still
 /// Docling's reading and is compared in full; the slide count is held by the ODP
 /// suite, which converts the same fixture and checks its three pages.
-const PAGE_COUNT_EXEMPT: [(&str, &str); 1] = [(
-    "q3_review_impress",
-    "Docling's ODP backend publishes no pages; the slides are pages in ours",
-)];
+const PAGE_COUNT_EXEMPT: [(&str, &str); 2] = [
+    (
+        "q3_review_impress",
+        "Docling's ODP backend publishes no pages; the slides are pages in ours",
+    ),
+    (
+        "master_animations_impress",
+        "Docling's ODP backend publishes no pages; the slides are pages in ours",
+    ),
+];
 
 /// How many of each document's footnotes must be *held* — labelled `footnote`
 /// or, failing that, still in the body — and how many must be **labelled**, by
@@ -1827,6 +1845,7 @@ fn docling_core_accepts_our_documents() {
         ("notes_odt.odt", "notes_odt"),
         ("q3_review.pptx", "q3_review"),
         ("q3_review_impress.odp", "q3_review_impress"),
+        ("master_animations_impress.odp", "master_animations_impress"),
         ("invoice_scan.png", "invoice_scan"),
     ] {
         let input = repository_root().join("test-data").join(file);
