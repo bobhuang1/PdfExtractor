@@ -146,6 +146,23 @@ select {
   width: 22em;
 }
 
+/* The detected format of the chosen tokenizer file, beside its path. It is
+   empty until a file is chosen, so no empty badge takes up room in the row. */
+.tokenizer-format {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tokenizer-format:empty {
+  display: none;
+}
+
+.tokenizer-format.bad {
+  color: var(--bad);
+}
+
 .stacked select {
   max-width: 17em;
 }

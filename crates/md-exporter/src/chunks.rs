@@ -216,10 +216,21 @@ pub fn count_tokens(text: &str) -> usize {
 
 /// The three tokenizer files the chunker accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TokenizerFormat {
+pub enum TokenizerFormat {
     HuggingFace,
     SentencePiece,
     Tiktoken,
+}
+
+impl TokenizerFormat {
+    /// The format's name, as a reader chooses between the three.
+    pub fn label(self) -> &'static str {
+        match self {
+            TokenizerFormat::HuggingFace => "Hugging Face",
+            TokenizerFormat::SentencePiece => "SentencePiece",
+            TokenizerFormat::Tiktoken => "tiktoken",
+        }
+    }
 }
 
 /// The cl100k_base split pattern, used by OpenAI's tiktoken vocabularies when
@@ -320,6 +331,9 @@ impl std::fmt::Display for TiktokenEncoding {
 /// overrides that choice; the default is cl100k_base.
 pub struct Tokenizer {
     inner: TokenizerKind,
+    /// What the window names beside the format: the vocabulary size, or the
+    /// tiktoken family a rank file belongs to.
+    description: String,
 }
 
 enum TokenizerKind {
@@ -359,13 +373,15 @@ impl Tokenizer {
         encoding: Option<TiktokenEncoding>,
     ) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let format = tokenizer_format(path)?;
+        let format = detect_tokenizer_format(path)?;
         if encoding.is_some() && format != TokenizerFormat::Tiktoken {
             anyhow::bail!(
                 "{}: an encoding family only applies to a .tiktoken vocabulary",
                 path.display()
             );
         }
+        let tiktoken_family =
+            (format == TokenizerFormat::Tiktoken).then(|| tiktoken_encoding(path, encoding));
         let inner = match format {
             TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(
                 tokenizers::Tokenizer::from_file(path)
@@ -382,10 +398,37 @@ impl Tokenizer {
             TokenizerFormat::Tiktoken => {
                 let bytes = std::fs::read(path)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes, encoding)?)
+                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes, tiktoken_family)?)
             }
         };
-        Ok(Self { inner })
+        let description = match &inner {
+            TokenizerKind::HuggingFace(tokenizer) => format!(
+                "{} · {} tokens",
+                format.label(),
+                tokenizer.get_vocab_size(true)
+            ),
+            TokenizerKind::SentencePiece(tokenizer) => {
+                format!(
+                    "{} · {} tokens",
+                    format.label(),
+                    tokenizer.model().vocab_size()
+                )
+            }
+            TokenizerKind::Tiktoken(_) => format!(
+                "{} · {}",
+                format.label(),
+                tiktoken_family
+                    .expect("a tiktoken format has an encoding family")
+                    .name()
+            ),
+        };
+        Ok(Self { inner, description })
+    }
+
+    /// What the badge beside the chosen file names: its vocabulary size, or
+    /// the tiktoken encoding family a rank file belongs to.
+    pub fn description(&self) -> &str {
+        &self.description
     }
 
     /// The model's own count for `text`, without special tokens — the count
@@ -410,7 +453,12 @@ impl Tokenizer {
 
 /// The format named by the extension, or by the bytes when the extension is
 /// unfamiliar.
-fn tokenizer_format(path: &Path) -> anyhow::Result<TokenizerFormat> {
+///
+/// This is the same question [`Tokenizer::from_file`] asks before it loads the
+/// file, exposed for a caller that only needs to name the format — the window
+/// shows it beside the chosen tokenizer file.
+pub fn detect_tokenizer_format(path: impl AsRef<Path>) -> anyhow::Result<TokenizerFormat> {
+    let path = path.as_ref();
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -529,21 +577,27 @@ fn load_tiktoken(
         .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
-fn tiktoken_pattern(path: &Path, encoding: Option<TiktokenEncoding>) -> &'static str {
+fn tiktoken_encoding(path: &Path, encoding: Option<TiktokenEncoding>) -> TiktokenEncoding {
     if let Some(encoding) = encoding {
-        return encoding.pattern();
+        return encoding;
     }
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     if name.contains("o200k") {
-        O200K_PATTERN
-    } else if name.contains("p50k") || name.contains("r50k") || name.contains("gpt2") {
-        P50K_PATTERN
+        TiktokenEncoding::O200k
+    } else if name.contains("p50k") {
+        TiktokenEncoding::P50k
+    } else if name.contains("r50k") || name.contains("gpt2") {
+        TiktokenEncoding::R50k
     } else {
-        CL100K_PATTERN
+        TiktokenEncoding::Cl100k
     }
+}
+
+fn tiktoken_pattern(path: &Path, encoding: Option<TiktokenEncoding>) -> &'static str {
+    tiktoken_encoding(path, encoding).pattern()
 }
 
 /// One body item, rendered as its chunk text and carrying what a chunk needs
@@ -1362,6 +1416,7 @@ mod tests {
     #[test]
     fn a_sentencepiece_model_counts_a_hybrid_budget() {
         let tokenizer = tokenizer_fixture("tokenizer-mini.model");
+        assert_eq!(tokenizer.description(), "SentencePiece · 13 tokens");
         assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
         assert!(
             tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
@@ -1372,11 +1427,59 @@ mod tests {
     #[test]
     fn a_tiktoken_vocabulary_counts_a_hybrid_budget() {
         let tokenizer = tokenizer_fixture("tokenizer-mini.tiktoken");
+        assert_eq!(tokenizer.description(), "tiktoken · cl100k_base");
         assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
         assert!(
             tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
             "the tiktoken vocabulary must count this word differently from the approximation"
         );
+    }
+
+    /// The extension cannot answer here: each fixture is copied to `.bin`, so
+    /// only the bytes can name the format. The renamed copy must also load and
+    /// count like the file it came from, not merely be classified correctly.
+    #[test]
+    fn a_tokenizer_with_an_unfamiliar_extension_loads_and_counts_from_its_bytes() {
+        let dir =
+            std::env::temp_dir().join(format!("pdfe-tokenizer-format-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+
+        for (fixture, expected) in [
+            ("tokenizer-mini.json", TokenizerFormat::HuggingFace),
+            ("tokenizer-mini.model", TokenizerFormat::SentencePiece),
+            ("tokenizer-mini.tiktoken", TokenizerFormat::Tiktoken),
+        ] {
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test-data")
+                .join(fixture);
+            let target = dir.join(format!("{fixture}.bin"));
+            std::fs::copy(&source, &target).unwrap_or_else(|error| {
+                panic!("copy {} to {}: {error}", source.display(), target.display())
+            });
+            assert_eq!(
+                detect_tokenizer_format(&target)
+                    .unwrap_or_else(|error| panic!("detect {}: {error}", target.display())),
+                expected,
+                "{fixture} was not detected from its bytes"
+            );
+
+            let original = tokenizer_fixture(fixture);
+            let renamed = Tokenizer::from_file(&target)
+                .unwrap_or_else(|error| panic!("load {}: {error}", target.display()));
+            assert_eq!(
+                renamed.description(),
+                original.description(),
+                "{fixture} described a different vocabulary when renamed"
+            );
+            assert_eq!(
+                renamed.count_tokens("abcdefgh"),
+                original.count_tokens("abcdefgh"),
+                "{fixture} counted a different number of tokens when renamed"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1427,6 +1530,7 @@ mod tests {
         ] {
             let tokenizer = Tokenizer::from_file_with_tiktoken_encoding(&path, Some(encoding))
                 .unwrap_or_else(|error| panic!("{encoding} loads: {error}"));
+            assert_eq!(tokenizer.description(), format!("tiktoken · {encoding}"));
             assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
         }
     }
@@ -1445,6 +1549,7 @@ mod tests {
     #[test]
     fn a_real_tokenizer_counts_a_hybrid_budget_in_its_own_tokens() {
         let tokenizer = Arc::new(mini_tokenizer());
+        assert_eq!(tokenizer.description(), "Hugging Face · 10 tokens");
         assert_eq!(count_tokens("abcdefgh"), 2);
         assert!(
             tokenizer.count_tokens("abcdefgh") > count_tokens("abcdefgh"),

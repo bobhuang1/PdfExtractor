@@ -412,11 +412,26 @@ impl Settings {
                 return Some("The chunk token budget must be at least 1.".to_string());
             }
             if self.chunks_overlap_tokens >= self.chunks_max_tokens {
-                return Some("The chunk overlap must be smaller than the token budget.".to_string());
+                return Some(
+                    "The chunk overlap must be smaller than the token budget.".to_string(),
+                );
             }
             let tokenizer = self.chunks_tokenizer.trim();
-            if !tokenizer.is_empty() && !PathBuf::from(tokenizer).exists() {
-                return Some(format!("Tokenizer file does not exist: {tokenizer}"));
+            if !tokenizer.is_empty() {
+                let path = PathBuf::from(tokenizer);
+                if !path.exists() {
+                    return Some(format!("Tokenizer file does not exist: {tokenizer}"));
+                }
+                // The CLI would fail on the first token it encoded; load the file
+                // here so the window can name what is wrong before starting a run.
+                #[cfg(feature = "desktop")]
+                {
+                    if let Err(error) =
+                        pdfextractor_md_exporter::chunks::Tokenizer::from_file(&path)
+                    {
+                        return Some(format!("Tokenizer file cannot be loaded: {error}"));
+                    }
+                }
             }
         }
         None
@@ -1681,15 +1696,42 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_tokenizer_is_refused_before_a_hybrid_chunk_run() {
+    fn a_tokenizer_is_checked_before_a_hybrid_chunk_run() {
         let mut s = settings();
         s.to = vec![OutputFormat::Chunks];
         s.chunks_type = ChunkType::Hybrid;
+
+        let valid =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/tokenizer-mini.json");
+        s.chunks_tokenizer = valid.display().to_string();
+        assert_eq!(s.problem(), None, "a real tokenizer must be accepted");
+
         s.chunks_tokenizer = "/definitely/not/a/tokenizer.json".to_string();
         assert!(s
             .problem()
             .unwrap()
             .contains("Tokenizer file does not exist"));
+
+        #[cfg(feature = "desktop")]
+        {
+            let dir =
+                std::env::temp_dir().join(format!("pdfe-ui-bad-tokenizer-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("scratch");
+            let bad = dir.join("not-a-tokenizer.json");
+            std::fs::write(&bad, "this is not JSON").expect("write the malformed tokenizer");
+            s.chunks_tokenizer = bad.display().to_string();
+            let problem = s.problem().expect("a malformed tokenizer must be refused");
+            assert!(
+                problem.contains("Tokenizer file cannot be loaded"),
+                "the refusal does not say it could not be loaded: {problem}"
+            );
+            assert!(
+                problem.contains("not-a-tokenizer.json"),
+                "the refusal does not name the file: {problem}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
 
         // A tokenizer left in the box does not matter when the chunker that
         // would use it is not selected — and it is not put on the command line.
@@ -1800,7 +1842,10 @@ mod tests {
             "--chunks-overlap-tokens",
             "--preview-dpi",
         ] {
-            assert!(!plain.contains(flag), "{flag} on a form at its defaults: {plain}");
+            assert!(
+                !plain.contains(flag),
+                "{flag} on a form at its defaults: {plain}"
+            );
         }
     }
 

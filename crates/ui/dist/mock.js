@@ -299,6 +299,12 @@
         if (command === "cli_program") {
           return program();
         }
+        if (command === "tokenizer_format") {
+          const name = String(args.path).toLowerCase();
+          if (name.endsWith(".model") || name.endsWith(".spm")) return "SentencePiece";
+          if (name.endsWith(".tiktoken")) return "tiktoken";
+          return "Hugging Face";
+        }
         if (command === "pick_path") {
           if (args.kind === "folder") return "/golden/docling";
           if (args.kind === "document") return "/docs/annual report.pdf";

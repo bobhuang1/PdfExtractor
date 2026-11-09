@@ -38,6 +38,10 @@ const EVENTS = [
 // started by the self-test is drawn exactly like one started here.
 let display = null;
 let selftest = false;
+let chunkControlsBefore = "?";
+// Bumped per tokenizer-format ask, so a slow answer for an earlier path cannot
+// overwrite the label for the path now in the box.
+let tokenizerFormatAsk = 0;
 
 function readSettings() {
   return {
@@ -701,13 +705,10 @@ function handleFinished(finished) {
   el("verdict").textContent = verdictFor(finished);
 
   // Where the run put its files, with the action that reaches them: a run that
-  // converted exactly one document names that file, so the action reaches the
-  // reading rather than only the folder it sits in. A run that wrote several,
-  // or none, keeps the folder. With neither there is nothing to show.
-  display.file =
-    finished.tally.converted === 1 && display.outputs.length === 1
-      ? display.outputs[0]
-      : "";
+  // wrote exactly one file names that file, so the action reaches the reading
+  // rather than only the folder it sits in. A run that wrote several, or none,
+  // keeps the folder. With neither there is nothing to show.
+  display.file = display.outputs.length === 1 ? display.outputs[0] : "";
   const target = display.file || display.folder || "";
   el("open-output").textContent = display.file
     ? "Show output file"
@@ -774,21 +775,27 @@ function renderedSummary() {
     return status ? status.textContent : "?";
   });
   return [
-    `run=${display.id}`,
+    `run=${display ? display.id : "none"}`,
     `state="${el("run-state").textContent}"`,
     `title="${el("result-title").textContent}"`,
     `bar="${el("bar-fill").style.width}"`,
-    `success=${display.outcome ? display.outcome.success : "?"}`,
-    `cancelled=${display.outcome ? display.outcome.cancelled : "?"}`,
+    `success=${display && display.outcome ? display.outcome.success : "?"}`,
+    `cancelled=${display && display.outcome ? display.outcome.cancelled : "?"}`,
     `verdict="${el("verdict").textContent}"`,
     `command="${el("run-command").textContent}"`,
     `folder="${el("output-folder").textContent}"`,
     `folder-action=${el("open-output").classList.contains("hidden") ? 0 : 1}`,
+    `run-visible=${el("run").classList.contains("hidden") ? "hidden" : "shown"}`,
+    `convert=${el("convert").disabled ? "disabled" : "enabled"}`,
+    `started=${display ? 1 : 0}`,
+    `chunk-controls-before=${chunkControlsBefore}`,
     `chunk-controls=${el("chunk-options").classList.contains("hidden") ? "hidden" : "shown"}`,
     `chunk-type=${el("chunks-type").value}`,
     `chunk-fields=${["chunks-tokenizer", "chunks-max-tokens", "chunks-overlap-tokens"]
       .map((id) => (el(id).disabled ? "off" : "on"))
       .join("|")}`,
+    `tokenizer="${el("chunks-tokenizer").value}"`,
+    `tokenizer-format="${el("chunks-tokenizer-format").textContent}"`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
     // as rendered: the ask round-tripped and the page used its families.
@@ -814,6 +821,26 @@ function handle(kind, payload) {
 function dispatch(kind, payload) {
   if (kind === "selftest-enabled") {
     selftest = true;
+    // What the row looked like before the self-test touches the form. The
+    // chunking report pairs this with the state after the tick, so the smoke
+    // test checks the transition rather than only its destination.
+    chunkControlsBefore = el("chunk-options").classList.contains("hidden")
+      ? "hidden"
+      : "shown";
+    // `--selftest-bad-range` drives the form the way a person does: it fills the
+    // input and the page-range box, then presses Convert. `start` catches the
+    // command's refusal, shows its message and leaves the button enabled; the
+    // report is taken after that catch, with no run on screen.
+    if (payload && payload.badRange) {
+      el("input").value = payload.input || "";
+      el("page-range").value = payload.badRange;
+      start().then(() => {
+        invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+          console.error(error)
+        );
+      });
+      return;
+    }
     // `--selftest-chunks` ticks the boxes a person would tick, so the row is
     // drawn by its own gating rather than assumed: the report then says what
     // the window shows, not what the run was told.
@@ -823,6 +850,17 @@ function dispatch(kind, payload) {
       box.dispatchEvent(new Event("change", { bubbles: true }));
       el("chunks-type").value = "hybrid";
       el("chunks-type").dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    // `--selftest-tokenizer` is a badge check, not a run: fill the field, let
+    // the page's own format ask paint the label, then report what it drew.
+    if (payload && payload.tokenizer) {
+      el("chunks-tokenizer").value = payload.tokenizer;
+      const report = () =>
+        invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+          console.error(error)
+        );
+      refreshTokenizerFormat().then(report, report);
+      return;
     }
     // The smoke test asks the CLI again on the path a person uses after replacing
     // the binary: `formats=` in its report is then the refresh's answer, so the
@@ -1027,6 +1065,34 @@ async function pick(kind, target) {
   return path;
 }
 
+// The tokenizer's format is detected by the same code the chunker loads it
+// with, so the label beside the chosen file names what a run will use. An empty
+// box has nothing to describe, and an unrecognized file says so rather than
+// leaving the reader to discover it when the run starts.
+async function refreshTokenizerFormat() {
+  const path = el("chunks-tokenizer").value.trim();
+  const label = el("chunks-tokenizer-format");
+  const ask = ++tokenizerFormatAsk;
+  if (!path) {
+    label.textContent = "";
+    label.removeAttribute("title");
+    label.classList.remove("bad");
+    return;
+  }
+  try {
+    const format = await invoke("tokenizer_format", { path });
+    if (ask !== tokenizerFormatAsk) return;
+    label.textContent = format;
+    label.title = `Detected from ${path}`;
+    label.classList.remove("bad");
+  } catch (error) {
+    if (ask !== tokenizerFormatAsk) return;
+    label.textContent = "Unknown format";
+    label.title = String(error);
+    label.classList.add("bad");
+  }
+}
+
 // The chunking controls belong to the Retrieval chunks box, so with the box clear
 // they are not shown at all — a type and a budget shape a file that is not being
 // written. The tokenizer, budget and overlap are the hybrid chunker's, so they
@@ -1086,7 +1152,8 @@ function wire() {
     }
   });
   el("pick-chunks-tokenizer").addEventListener("click", async () => {
-    await pick("file", "chunks-tokenizer");
+    const path = await pick("file", "chunks-tokenizer");
+    if (path) refreshTokenizerFormat();
     refreshSummary();
   });
 
@@ -1108,6 +1175,7 @@ function wire() {
   ]) {
     el(id).addEventListener("input", refreshSummary);
   }
+  el("chunks-tokenizer").addEventListener("input", refreshTokenizerFormat);
   for (const id of [
     "recursive",
     "preview",
@@ -1135,6 +1203,7 @@ function wire() {
 
   syncChunkOptions();
   syncPreviewOptions();
+  refreshTokenizerFormat();
   el("convert").addEventListener("click", start);
   el("stop").addEventListener("click", stop);
   el("reask-formats").addEventListener("click", reaskFormats);

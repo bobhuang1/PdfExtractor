@@ -44,8 +44,9 @@ const POLL: Duration = Duration::from_millis(40);
 
 /// The events the page listens for.
 const STARTED: &str = "conversion-started";
-/// Sent to the page only by `--selftest`, which asks it to report what it drew
-/// and, for `--selftest-chunks`, to tick the chunking row the run uses.
+/// Sent to the page only by `--selftest`, which asks it to report what it drew,
+/// to tick the chunking row for `--selftest-chunks`, and to show one tokenizer
+/// file's badge for `--selftest-tokenizer`.
 const SELFTEST_ON: &str = "selftest-enabled";
 const PLAN: &str = "conversion-plan";
 const PROGRESS: &str = "conversion-progress";
@@ -73,6 +74,17 @@ static SELFTEST_REFERENCE: OnceLock<Option<String>> = OnceLock::new();
 /// hybrid chunker, so the smoke test checks the row's shown state as well as the
 /// run it describes.
 static SELFTEST_CHUNKS: OnceLock<bool> = OnceLock::new();
+
+/// `--selftest-tokenizer PATH`: with `--selftest`, put PATH in the tokenizer
+/// field and let the page resolve its badge through the real format command.
+/// The page reports the rendered label and exits; no conversion is started.
+static SELFTEST_TOKENIZER: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-bad-range RANGE`: with `--selftest`, fill the page-range box with
+/// a range the CLI refuses, press Convert, and report what the page drew. The
+/// refusal must arrive through the same command the button uses, before a
+/// conversion process exists.
+static SELFTEST_BAD_RANGE: OnceLock<Option<String>> = OnceLock::new();
 
 /// The conversion in flight, if any.
 #[derive(Default)]
@@ -134,6 +146,17 @@ async fn input_formats(formats: State<'_, AcceptedFormats>) -> Result<Formats, S
 #[tauri::command]
 fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
     formats.program()
+}
+
+/// The format of the chosen `--chunks-tokenizer` file and its vocabulary size
+/// or tiktoken family, for the page to name beside it. The chunker's own loader
+/// answers, so an extensionless file is recognized by its bytes and the number
+/// is the one a run will use.
+#[tauri::command]
+fn tokenizer_format(path: String) -> Result<String, String> {
+    pdfextractor_md_exporter::chunks::Tokenizer::from_file(&path)
+        .map(|tokenizer| tokenizer.description().to_string())
+        .map_err(|error| error.to_string())
 }
 
 /// Ask the CLI again, replacing the kept answer.
@@ -282,6 +305,15 @@ fn start_conversion(
     let program = locate_cli();
     let args = settings.to_args();
     let (job, stdout, stderr) = Job::spawn(&program, &args)?;
+    // A bad-range self-test is the one case that must not get here. Say so on
+    // the process's own output, so the test does not have to infer it from an
+    // event that may still be in flight when the page reports back.
+    if SELFTEST_BAD_RANGE
+        .get()
+        .is_some_and(|range| range.is_some())
+    {
+        println!("selftest-conversion-started");
+    }
     // The comparison is the window's own work on what the run produced, so the
     // reference travels beside the process rather than into its arguments.
     let reference = match settings.reference.trim() {
@@ -446,16 +478,41 @@ fn frontend_ready(app: tauri::AppHandle) {
     let Some(selftest_input) = SELFTEST.get().cloned().flatten() else {
         return;
     };
+    let tokenizer = SELFTEST_TOKENIZER.get().cloned().flatten();
 
-    if selftest_input.is_empty() {
+    if selftest_input.is_empty() && tokenizer.is_none() {
         app.exit(0);
         return;
     }
 
     // Told before the run starts, so the page knows to report what it rendered;
-    // `--selftest-chunks` also tells it which row to tick.
+    // `--selftest-chunks` also tells it which row to tick, and
+    // `--selftest-tokenizer` which file's badge to show.
     let chunks = SELFTEST_CHUNKS.get().copied().unwrap_or(false);
-    let _ = app.emit(SELFTEST_ON, serde_json::json!({ "chunks": chunks }));
+    let bad_range = SELFTEST_BAD_RANGE.get().cloned().flatten();
+    let _ = app.emit(
+        SELFTEST_ON,
+        serde_json::json!({
+            "chunks": chunks,
+            "badRange": bad_range.clone(),
+            "input": selftest_input.clone(),
+            "tokenizer": tokenizer.clone(),
+        }),
+    );
+
+    // The badge check is driven by the page and needs no conversion: it fills
+    // the tokenizer field, asks the real format command, reports the label and
+    // exits. Nothing is spawned behind it.
+    if tokenizer.is_some() {
+        return;
+    }
+
+    // This case is driven by the page: it fills the box and presses the same
+    // Convert action a person does, so the refusal comes back through
+    // `start_conversion` and the button's own error path is what reports it.
+    if bad_range.is_some() {
+        return;
+    }
 
     // `Settings::selftest` rather than the form as typed: a smoke test is pointed at
     // the corpus itself, so it writes what it converts into a temporary directory of
@@ -525,6 +582,22 @@ fn selftest_chunks(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--selftest-chunks")
 }
 
+/// Parse `--selftest-tokenizer PATH`, the file whose badge a smoke test checks.
+fn selftest_tokenizer(args: &[String]) -> Option<String> {
+    let position = args.iter().position(|arg| arg == "--selftest-tokenizer")?;
+    args.get(position + 1)
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+}
+
+/// Parse `--selftest-bad-range RANGE`, the malformed range a smoke test types.
+fn selftest_bad_range(args: &[String]) -> Option<String> {
+    let position = args.iter().position(|arg| arg == "--selftest-bad-range")?;
+    args.get(position + 1)
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+}
+
 /// Parse `--selftest-ref PATH`, the Compare mode's reference for a smoke test.
 fn selftest_reference(args: &[String]) -> Option<String> {
     let position = args.iter().position(|arg| arg == "--selftest-ref")?;
@@ -539,14 +612,20 @@ fn main() {
         println!(
             "pdfextractor-ui - graphical front end for pdfextractor-cli\n\n\
              Usage: pdfextractor-ui [--selftest [INPUT]] [--selftest-stop MILLIS]\n\
-                                   [--selftest-ref PATH] [--selftest-chunks] [-h]\n\n\
+                                   [--selftest-ref PATH] [--selftest-chunks]\n\
+                                   [--selftest-tokenizer PATH]\n\
+                                   [--selftest-bad-range RANGE] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
              Compare mode shows each document beside a Docling reference.\n\
              --selftest mounts the window, and if INPUT is given converts it\n\
              through the CLI, then exits; --selftest-ref turns Compare on for\n\
              that run; --selftest-chunks ticks Retrieval chunks and the hybrid\n\
-             chunker before it, so that row is checked too. What such a run\n\
+             chunker before it, so that row is checked too;\n\
+             --selftest-tokenizer names a tokenizer file and reports the badge\n\
+             the window renders for it, without starting a run;\n\
+             --selftest-bad-range fills an unreadable page range and presses\n\
+             Convert, so the page's refusal is checked instead of a run. What such a run\n\
              converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
              smoke-testing the corpus never writes beside it. Set\n\
@@ -559,6 +638,8 @@ fn main() {
     let _ = SELFTEST_STOP.set(selftest_stop_mode(&args));
     let _ = SELFTEST_REFERENCE.set(selftest_reference(&args));
     let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
+    let _ = SELFTEST_TOKENIZER.set(selftest_tokenizer(&args));
+    let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
 
     tauri::Builder::default()
         .manage(ActiveRun::default())
@@ -594,6 +675,7 @@ fn main() {
             pick_path,
             input_formats,
             cli_program,
+            tokenizer_format,
             refresh_input_formats,
             start_conversion,
             reveal_path,

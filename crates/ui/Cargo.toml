@@ -12,7 +12,7 @@ rust-version.workspace = true
 # window in it, so a headless build (the CLI's `--compare` mode, a CI box) can take
 # this off and never needs a webview or GTK.
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:rfd"]
+desktop = ["dep:tauri", "dep:rfd", "dep:pdfextractor-md-exporter"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -35,6 +35,9 @@ serde_json = { workspace = true }
 # A page range is parsed by the same code the CLI's `--page-range` uses, so a typo
 # is refused in the window with the message a run would have shown.
 pdfextractor-core = { path = "../core" }
+# The tokenizer file's format is detected by the same code the chunker uses, so
+# the label beside the chosen file cannot drift from what a run will load.
+pdfextractor-md-exporter = { path = "../md-exporter", optional = true }
 # Native file/folder chooser, served by a command so the frontend needs no
 # JavaScript package manager.
 rfd = { version = "0.17", default-features = false, features = ["gtk3"], optional = true }

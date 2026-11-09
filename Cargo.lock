@@ -3683,6 +3683,7 @@ version = "0.2.0"
 dependencies = [
  "pdfextractor-core",
  "pdfextractor-formats",
+ "pdfextractor-md-exporter",
  "rfd",
  "serde",
  "serde_json",
