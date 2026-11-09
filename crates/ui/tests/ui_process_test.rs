@@ -74,6 +74,123 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Output {
     }
 }
 
+/// Drive the window's refusal path with one malformed chunk count: tick
+/// Retrieval chunks, choose hybrid, type the value and press Convert. Returns
+/// the page's rendered report, or `None` when this machine cannot show a window.
+fn chunk_refusal_report(root: &Path, flag: &str, value: &str) -> Option<String> {
+    let input = root.join("test-data/brief.docx");
+    assert!(input.exists(), "missing fixture {}", input.display());
+
+    let mut command = ui_command()?;
+    command
+        .current_dir(root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg(flag)
+        .arg(value)
+        .env("PDFEXTRACTOR_CLI", false_program());
+
+    let output = run_with_timeout(command, Duration::from_secs(60));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-started"),
+        "a conversion was started instead of refusing the form:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-conversion-started"),
+        "a conversion process was started instead of refusing the form:\n{stdout}"
+    );
+    Some(
+        stdout
+            .lines()
+            .find(|line| line.starts_with("selftest-rendered "))
+            .unwrap_or_else(|| {
+                panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+            })
+            .to_string(),
+    )
+}
+
+/// The refusal a chunk-count check draws: the typed value is in its box, the
+/// message is in the result pane, and nothing was run.
+fn assert_chunk_refusal(report: &str, field: &str, message: &str) {
+    assert!(
+        report.contains(field),
+        "the report does not show the typed value {field}:\n{report}"
+    );
+    assert!(
+        report.contains("run=none"),
+        "a run was on screen:\n{report}"
+    );
+    assert!(
+        report.contains("title=\"Cannot convert\""),
+        "the result pane did not show the refusal:\n{report}"
+    );
+    assert!(
+        report.contains(&format!("verdict=\"{message}\"")),
+        "the refusal message was not {message:?}:\n{report}"
+    );
+    assert!(
+        report.contains("convert=enabled"),
+        "Convert was left disabled after the refusal:\n{report}"
+    );
+    assert!(
+        report.contains("run-visible=hidden"),
+        "the run pane was left on screen after the refusal:\n{report}"
+    );
+    assert!(
+        report.contains("started=0"),
+        "a conversion process was started:\n{report}"
+    );
+}
+
+/// A chunk budget that is not a whole number is refused by the page before the
+/// command is asked, and a budget of zero is refused by the command before a
+/// process exists: either way the window shows the refusal and starts nothing.
+#[test]
+fn a_malformed_chunk_budget_is_refused_before_a_conversion() {
+    let root = repository_root();
+    for (value, message) in [
+        ("1.5", "The chunk token budget must be a whole number."),
+        ("0", "The chunk token budget must be at least 1."),
+    ] {
+        let Some(report) = chunk_refusal_report(&root, "--selftest-bad-budget", value) else {
+            return;
+        };
+        assert_chunk_refusal(&report, &format!("chunk-budget={value}"), message);
+    }
+}
+
+/// The same for the overlap: a fraction is refused by the page, and an overlap
+/// as large as the budget is refused by the command. Neither starts a process.
+#[test]
+fn a_malformed_chunk_overlap_is_refused_before_a_conversion() {
+    let root = repository_root();
+    for (value, message) in [
+        ("1.5", "The chunk overlap must be a whole number."),
+        (
+            "600",
+            "The chunk overlap must be smaller than the token budget.",
+        ),
+    ] {
+        let Some(report) = chunk_refusal_report(&root, "--selftest-bad-overlap", value) else {
+            return;
+        };
+        assert_chunk_refusal(&report, &format!("chunk-overlap={value}"), message);
+    }
+}
+
 #[test]
 fn a_bad_page_range_shows_its_message_and_leaves_convert_enabled() {
     let root = repository_root();
@@ -198,7 +315,7 @@ fn the_chunking_row_is_hidden_before_retrieval_chunks_is_ticked() {
         "the self-test did not choose the hybrid chunker:\n{report}"
     );
     assert!(
-        report.contains("chunk-fields=on|on|on"),
+        report.contains("chunk-fields=on|on|on|on"),
         "the hybrid chunk fields were not enabled:\n{report}"
     );
 }

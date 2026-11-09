@@ -105,6 +105,33 @@ impl ChunkType {
     }
 }
 
+/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to, mirroring
+/// the CLI's `--chunks-tokenizer-encoding`: the family has to be stated when the
+/// file's name does not name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TokenizerEncoding {
+    #[serde(rename = "cl100k_base")]
+    Cl100kBase,
+    #[serde(rename = "o200k_base")]
+    O200kBase,
+    #[serde(rename = "p50k_base")]
+    P50kBase,
+    #[serde(rename = "r50k_base")]
+    R50kBase,
+}
+
+impl TokenizerEncoding {
+    /// The value the CLI expects.
+    pub fn value(self) -> &'static str {
+        match self {
+            TokenizerEncoding::Cl100kBase => "cl100k_base",
+            TokenizerEncoding::O200kBase => "o200k_base",
+            TokenizerEncoding::P50kBase => "p50k_base",
+            TokenizerEncoding::R50kBase => "r50k_base",
+        }
+    }
+}
+
 /// How the Markdown and HTML outputs refer to pictures, mirroring the CLI's
 /// `--image-export-mode`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +195,12 @@ pub struct Settings {
     /// `.model`, or tiktoken `.tiktoken` file whose tokens count a hybrid chunk
     /// budget. Empty means the CLI's reproducible approximation.
     pub chunks_tokenizer: String,
+    /// `--chunks-tokenizer-encoding`: the tiktoken family a `.tiktoken`
+    /// vocabulary belongs to when its name says none. It is the tokenizer's,
+    /// so it is only sent beside one and only when the hybrid chunker will use
+    /// it; `None` leaves the CLI to read the family from the file's name.
+    #[serde(default)]
+    pub chunks_tokenizer_encoding: Option<TokenizerEncoding>,
     /// `--chunks-max-tokens`: the token budget a hybrid chunk packs sentences
     /// into. The CLI's own default when the field is left alone.
     #[serde(default = "default_chunks_max_tokens")]
@@ -207,6 +240,7 @@ impl Default for Settings {
             image_export_mode: ImageExportMode::Referenced,
             chunks_type: ChunkType::Hierarchical,
             chunks_tokenizer: String::new(),
+            chunks_tokenizer_encoding: None,
             chunks_max_tokens: default_chunks_max_tokens(),
             chunks_overlap_tokens: 0,
             preview: false,
@@ -353,6 +387,12 @@ impl Settings {
                 if !tokenizer.is_empty() {
                     args.push("--chunks-tokenizer".to_string());
                     args.push(tokenizer.to_string());
+                    // The family is the tokenizer's: a choice left beside no
+                    // tokenizer is not a flag the CLI can make sense of.
+                    if let Some(encoding) = self.chunks_tokenizer_encoding {
+                        args.push("--chunks-tokenizer-encoding".to_string());
+                        args.push(encoding.value().to_string());
+                    }
                 }
             }
         }
@@ -417,7 +457,13 @@ impl Settings {
                 );
             }
             let tokenizer = self.chunks_tokenizer.trim();
-            if !tokenizer.is_empty() {
+            if tokenizer.is_empty() {
+                if self.chunks_tokenizer_encoding.is_some() {
+                    return Some(
+                        "Choose a tokenizer file before choosing its encoding.".to_string(),
+                    );
+                }
+            } else {
                 let path = PathBuf::from(tokenizer);
                 if !path.exists() {
                     return Some(format!("Tokenizer file does not exist: {tokenizer}"));
@@ -1586,6 +1632,7 @@ mod tests {
         s.to = vec![OutputFormat::Md, OutputFormat::Chunks, OutputFormat::Md];
         s.chunks_type = ChunkType::Hybrid;
         s.chunks_tokenizer = "test-data/tokenizer-mini.json".to_string();
+        s.chunks_tokenizer_encoding = Some(TokenizerEncoding::R50kBase);
 
         let args = s.to_args();
         let joined = args.join(" ");
@@ -1600,6 +1647,10 @@ mod tests {
         assert!(joined.contains("--chunks-type hybrid"), "{joined}");
         assert!(
             joined.contains("--chunks-tokenizer test-data/tokenizer-mini.json"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("--chunks-tokenizer-encoding r50k_base"),
             "{joined}"
         );
     }
@@ -1645,6 +1696,7 @@ mod tests {
             "to": ["md", "chunks"],
             "chunksType": "hybrid",
             "chunksTokenizer": "test-data/tokenizer-mini.json",
+            "chunksTokenizerEncoding": "o200k_base",
             "preview": false,
             "compare": true,
             "reference": "test-data/golden/docling"
@@ -1657,6 +1709,10 @@ mod tests {
         assert_eq!(settings.to, vec![OutputFormat::Md, OutputFormat::Chunks]);
         assert_eq!(settings.chunks_type, ChunkType::Hybrid);
         assert_eq!(settings.chunks_tokenizer, "test-data/tokenizer-mini.json");
+        assert_eq!(
+            settings.chunks_tokenizer_encoding,
+            Some(TokenizerEncoding::O200kBase)
+        );
         assert!(settings.compare);
         let args = settings.to_args().join(" ");
         assert!(args.contains("--page-range 2-3"), "{args}");
@@ -1666,6 +1722,10 @@ mod tests {
         assert!(args.contains("--chunks-type hybrid"), "{args}");
         assert!(
             args.contains("--chunks-tokenizer test-data/tokenizer-mini.json"),
+            "{args}"
+        );
+        assert!(
+            args.contains("--chunks-tokenizer-encoding o200k_base"),
             "{args}"
         );
 
@@ -1688,6 +1748,10 @@ mod tests {
         let settings: Settings =
             serde_json::from_value(payload.clone()).expect("the page's payload");
         assert_eq!(settings.psm, None);
+        assert_eq!(
+            settings.chunks_tokenizer_encoding, None,
+            "an automatic encoding is the CLI's own choice"
+        );
         assert!(!settings.to_args().contains(&"--psm".to_string()));
 
         payload["psm"] = serde_json::json!(0);
@@ -1865,6 +1929,21 @@ mod tests {
             .contains("smaller than the token budget"));
 
         s.chunks_overlap_tokens = 16;
+        assert_eq!(s.problem(), None);
+
+        // An encoding is the tokenizer's: choosing one without a file is
+        // refused the way the CLI refuses it, and it never reaches the command
+        // line on its own.
+        s.chunks_tokenizer.clear();
+        s.chunks_tokenizer_encoding = Some(TokenizerEncoding::Cl100kBase);
+        assert!(s.problem().unwrap().contains("Choose a tokenizer file"));
+        let args = s.to_args().join(" ");
+        assert!(
+            !args.contains("--chunks-tokenizer-encoding"),
+            "an encoding with no tokenizer reached the command line: {args}"
+        );
+
+        s.chunks_tokenizer_encoding = None;
         assert_eq!(s.problem(), None);
     }
 

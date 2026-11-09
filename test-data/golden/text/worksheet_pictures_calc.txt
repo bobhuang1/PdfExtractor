@@ -1,0 +1,11 @@
+| A workbook with pictures. |
+|---------------------------|
+
+| The table the pictures sit under. |     |
+|-----------------------------------|-----|
+| Item                              | Qty |
+| Widget                            | 12  |
+| Gadget                            | 7   |
+
+| A second sheet, with a picture of its own. |
+|--------------------------------------------|

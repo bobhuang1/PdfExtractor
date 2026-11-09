@@ -1,0 +1,565 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  - $ref: '#/groups/1'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/tables/0'
+  - $ref: '#/texts/0'
+  - $ref: '#/pictures/0'
+  content_layer: body
+  label: sheet
+  name: Quarterly
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+- children:
+  - $ref: '#/tables/1'
+  - $ref: '#/pictures/1'
+  content_layer: body
+  label: sheet
+  name: Trend
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/1'
+key_value_items: []
+name: chart_sheet_calc
+origin:
+  binary_hash: 5396863737756017522
+  filename: chart_sheet_calc.ods
+  mimetype: application/vnd.oasis.opendocument.spreadsheet
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 15.171519999999997
+      width: 12.85765
+  '2':
+    page_no: 2
+    size:
+      height: 15.171519999999997
+      width: 11.85765
+pictures:
+- captions:
+  - $ref: '#/texts/0'
+  children: []
+  content_layer: body
+  label: picture
+  meta:
+    classification:
+      predictions:
+      - class_name: bar_chart
+    tabular_chart:
+      chart_data:
+        num_cols: 3
+        num_rows: 4
+        table_cells:
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 1
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 0
+          text: ''
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 2
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 0
+          text: Q1
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 3
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 0
+          text: Q2
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 2
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 1
+          text: North
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 1
+          text: '120'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 1
+          text: '140'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 3
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 2
+          text: South
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 2
+          text: '90'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 2
+          text: '95'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 4
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 3
+          text: West
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 4
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 3
+          text: '60'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 3
+          end_row_offset_idx: 4
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 2
+          start_row_offset_idx: 3
+          text: '80'
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 15.171519999999997
+      coord_origin: TOPLEFT
+      l: 4.0
+      r: 12.85765
+      t: 1.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/0'
+- children: []
+  content_layer: body
+  label: picture
+  meta:
+    classification:
+      predictions:
+      - class_name: line_chart
+    tabular_chart:
+      chart_data:
+        num_cols: 2
+        num_rows: 4
+        table_cells:
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 1
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 0
+          text: ''
+        - col_span: 1
+          column_header: true
+          end_col_offset_idx: 2
+          end_row_offset_idx: 1
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 0
+          text: Q1
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 2
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 1
+          text: North
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 2
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 1
+          text: '120'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 3
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 2
+          text: South
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 3
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 2
+          text: '90'
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 1
+          end_row_offset_idx: 4
+          row_header: true
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 0
+          start_row_offset_idx: 3
+          text: West
+        - col_span: 1
+          column_header: false
+          end_col_offset_idx: 2
+          end_row_offset_idx: 4
+          row_header: false
+          row_section: false
+          row_span: 1
+          start_col_offset_idx: 1
+          start_row_offset_idx: 3
+          text: '60'
+  parent:
+    $ref: '#/groups/1'
+  prov:
+  - bbox:
+      b: 15.171519999999997
+      coord_origin: TOPLEFT
+      l: 3.0
+      r: 11.85765
+      t: 1.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/pictures/1'
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 3
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Region
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Q1
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 3
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 0
+      text: Q2
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: North
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '120'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 1
+      text: '140'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: South
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '90'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 2
+      text: '95'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: West
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: '60'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 3
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 2
+      start_row_offset_idx: 3
+      text: '80'
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 4.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 3.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/0'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Region
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Q1
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: North
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '120'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: South
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '90'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: West
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: '60'
+  label: table
+  parent:
+    $ref: '#/groups/1'
+  prov:
+  - bbox:
+      b: 4.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 2.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/1'
+texts:
+- children: []
+  content_layer: body
+  label: caption
+  orig: Revenue by region
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 15.171519999999997
+      coord_origin: TOPLEFT
+      l: 4.0
+      r: 12.85765
+      t: 1.0
+    charspan:
+    - 0
+    - 17
+    page_no: 1
+  self_ref: '#/texts/0'
+  text: Revenue by region
+version: 1.10.0

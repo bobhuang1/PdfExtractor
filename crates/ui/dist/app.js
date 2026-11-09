@@ -62,6 +62,9 @@ function readSettings() {
     to: [...document.querySelectorAll("#to input:checked")].map((box) => box.value),
     chunksType: el("chunks-type").value,
     chunksTokenizer: el("chunks-tokenizer").value.trim(),
+    // An empty choice is the CLI's own reading: the family comes from the
+    // tokenizer's name. A chosen family travels as the CLI's flag spelling.
+    chunksTokenizerEncoding: el("chunks-tokenizer-encoding").value || null,
     // A number box left empty is the CLI's default; the budget and the overlap
     // only reach the command line when the hybrid chunker will use them.
     chunksMaxTokens: whole(el("chunks-max-tokens").value, 512),
@@ -99,6 +102,9 @@ function describe(settings) {
       if (settings.chunksOverlapTokens) bits.push(`overlap ${settings.chunksOverlapTokens}`);
     }
     if (settings.chunksTokenizer) bits.push(`tokenizer ${baseName(settings.chunksTokenizer)}`);
+    if (settings.chunksTokenizer && settings.chunksTokenizerEncoding) {
+      bits.push(`tiktoken ${settings.chunksTokenizerEncoding}`);
+    }
   }
   if (settings.preview) {
     bits.push(settings.previewDpi === 110 ? "preview" : `preview ${settings.previewDpi} dpi`);
@@ -791,10 +797,18 @@ function renderedSummary() {
     `chunk-controls-before=${chunkControlsBefore}`,
     `chunk-controls=${el("chunk-options").classList.contains("hidden") ? "hidden" : "shown"}`,
     `chunk-type=${el("chunks-type").value}`,
-    `chunk-fields=${["chunks-tokenizer", "chunks-max-tokens", "chunks-overlap-tokens"]
+    `chunk-budget=${el("chunks-max-tokens").value}`,
+    `chunk-overlap=${el("chunks-overlap-tokens").value}`,
+    `chunk-fields=${[
+      "chunks-tokenizer",
+      "chunks-max-tokens",
+      "chunks-overlap-tokens",
+      "chunks-tokenizer-encoding",
+    ]
       .map((id) => (el(id).disabled ? "off" : "on"))
       .join("|")}`,
     `tokenizer="${el("chunks-tokenizer").value}"`,
+    `tokenizer-encoding=${el("chunks-tokenizer-encoding").value || "auto"}`,
     `tokenizer-format="${el("chunks-tokenizer-format").textContent}"`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
@@ -834,6 +848,27 @@ function dispatch(kind, payload) {
     if (payload && payload.badRange) {
       el("input").value = payload.input || "";
       el("page-range").value = payload.badRange;
+      start().then(() => {
+        invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+          console.error(error)
+        );
+      });
+      return;
+    }
+    // `--selftest-bad-budget` and `--selftest-bad-overlap` drive the chunk row
+    // the way a person does: tick Retrieval chunks, choose hybrid, type the
+    // malformed count and press Convert. The page's own check catches a
+    // fraction; an impossible count is caught by the command behind Convert.
+    // Either way the report says what was refused, with no run on screen.
+    if (payload && (payload.badBudget || payload.badOverlap)) {
+      el("input").value = payload.input || "";
+      const box = document.querySelector('#to input[value="chunks"]');
+      box.checked = true;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      el("chunks-type").value = "hybrid";
+      el("chunks-type").dispatchEvent(new Event("change", { bubbles: true }));
+      if (payload.badBudget) el("chunks-max-tokens").value = payload.badBudget;
+      if (payload.badOverlap) el("chunks-overlap-tokens").value = payload.badOverlap;
       start().then(() => {
         invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
           console.error(error)
@@ -1106,7 +1141,12 @@ function syncChunkOptions() {
   }
   el("chunks-type").disabled = !chunks;
   const hybrid = chunks && el("chunks-type").value === "hybrid";
-  for (const id of ["chunks-tokenizer", "chunks-max-tokens", "chunks-overlap-tokens"]) {
+  for (const id of [
+    "chunks-tokenizer",
+    "chunks-max-tokens",
+    "chunks-overlap-tokens",
+    "chunks-tokenizer-encoding",
+  ]) {
     el(id).disabled = !hybrid;
   }
   el("pick-chunks-tokenizer").disabled = !hybrid;
@@ -1170,11 +1210,13 @@ function wire() {
     "chunks-tokenizer",
     "chunks-max-tokens",
     "chunks-overlap-tokens",
+    "chunks-tokenizer-encoding",
     "preview-dpi",
     "image-export-mode",
   ]) {
     el(id).addEventListener("input", refreshSummary);
   }
+  el("chunks-tokenizer-encoding").addEventListener("change", refreshSummary);
   el("chunks-tokenizer").addEventListener("input", refreshTokenizerFormat);
   for (const id of [
     "recursive",

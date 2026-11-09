@@ -253,6 +253,16 @@
             </div>
           </div>
           <label class="stacked">
+            Encoding
+            <select id="chunks-tokenizer-encoding" disabled>
+              <option value="" selected>From the file</option>
+              <option value="cl100k_base">cl100k_base</option>
+              <option value="o200k_base">o200k_base</option>
+              <option value="p50k_base">p50k_base</option>
+              <option value="r50k_base">r50k_base</option>
+            </select>
+          </label>
+          <label class="stacked">
             Token budget
             <input
               id="chunks-max-tokens"
@@ -278,8 +288,10 @@
           pack sentences up to the token budget, carrying that many tokens of one
           chunk into the next; a Hugging Face tokenizer.json, SentencePiece .model
           or tiktoken .tiktoken file counts the budget in the model's own tokens
-          instead of the built-in approximation. The tokenizer, budget and overlap
-          belong to the hybrid chunker; a hierarchical chunk is one per item.
+          instead of the built-in approximation; a .tiktoken file whose name does
+          not name its family reads it from the encoding chosen beside it. The
+          tokenizer, encoding, budget and overlap belong to the hybrid chunker; a
+          hierarchical chunk is one per item.
         </p>
       </section>
 

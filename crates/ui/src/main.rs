@@ -86,6 +86,14 @@ static SELFTEST_TOKENIZER: OnceLock<Option<String>> = OnceLock::new();
 /// conversion process exists.
 static SELFTEST_BAD_RANGE: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-bad-budget VALUE`: with `--selftest`, tick Retrieval chunks, choose
+/// hybrid, type VALUE into the token budget and press Convert, so a malformed
+/// budget is refused in the window a person would see the refusal in.
+static SELFTEST_BAD_BUDGET: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-bad-overlap VALUE`: the same for the overlap box.
+static SELFTEST_BAD_OVERLAP: OnceLock<Option<String>> = OnceLock::new();
+
 /// The conversion in flight, if any.
 #[derive(Default)]
 struct ActiveRun {
@@ -305,12 +313,18 @@ fn start_conversion(
     let program = locate_cli();
     let args = settings.to_args();
     let (job, stdout, stderr) = Job::spawn(&program, &args)?;
-    // A bad-range self-test is the one case that must not get here. Say so on
-    // the process's own output, so the test does not have to infer it from an
-    // event that may still be in flight when the page reports back.
+    // A bad-form self-test must not get here. Say so on the process's own
+    // output, so the test does not have to infer it from an event that may
+    // still be in flight when the page reports back.
     if SELFTEST_BAD_RANGE
         .get()
         .is_some_and(|range| range.is_some())
+        || SELFTEST_BAD_BUDGET
+            .get()
+            .is_some_and(|value| value.is_some())
+        || SELFTEST_BAD_OVERLAP
+            .get()
+            .is_some_and(|value| value.is_some())
     {
         println!("selftest-conversion-started");
     }
@@ -490,11 +504,15 @@ fn frontend_ready(app: tauri::AppHandle) {
     // `--selftest-tokenizer` which file's badge to show.
     let chunks = SELFTEST_CHUNKS.get().copied().unwrap_or(false);
     let bad_range = SELFTEST_BAD_RANGE.get().cloned().flatten();
+    let bad_budget = SELFTEST_BAD_BUDGET.get().cloned().flatten();
+    let bad_overlap = SELFTEST_BAD_OVERLAP.get().cloned().flatten();
     let _ = app.emit(
         SELFTEST_ON,
         serde_json::json!({
             "chunks": chunks,
             "badRange": bad_range.clone(),
+            "badBudget": bad_budget.clone(),
+            "badOverlap": bad_overlap.clone(),
             "input": selftest_input.clone(),
             "tokenizer": tokenizer.clone(),
         }),
@@ -511,6 +529,14 @@ fn frontend_ready(app: tauri::AppHandle) {
     // Convert action a person does, so the refusal comes back through
     // `start_conversion` and the button's own error path is what reports it.
     if bad_range.is_some() {
+        return;
+    }
+
+    // A malformed count is refused either by the page (a fraction or a typo) or
+    // by `start_conversion` (a zero budget, an overlap as large as the budget);
+    // either way the page presses Convert and reports the refusal, so nothing is
+    // started here.
+    if bad_budget.is_some() || bad_overlap.is_some() {
         return;
     }
 
@@ -592,7 +618,22 @@ fn selftest_tokenizer(args: &[String]) -> Option<String> {
 
 /// Parse `--selftest-bad-range RANGE`, the malformed range a smoke test types.
 fn selftest_bad_range(args: &[String]) -> Option<String> {
-    let position = args.iter().position(|arg| arg == "--selftest-bad-range")?;
+    selftest_value(args, "--selftest-bad-range")
+}
+
+/// Parse `--selftest-bad-budget VALUE`, the malformed budget a smoke test types.
+fn selftest_bad_budget(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-budget")
+}
+
+/// Parse `--selftest-bad-overlap VALUE`, the malformed overlap a smoke test types.
+fn selftest_bad_overlap(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-overlap")
+}
+
+/// The value after `flag`, when the flag is present and a value follows it.
+fn selftest_value(args: &[String], flag: &str) -> Option<String> {
+    let position = args.iter().position(|arg| arg == flag)?;
     args.get(position + 1)
         .filter(|value| !value.starts_with("--"))
         .cloned()
@@ -614,7 +655,9 @@ fn main() {
              Usage: pdfextractor-ui [--selftest [INPUT]] [--selftest-stop MILLIS]\n\
                                    [--selftest-ref PATH] [--selftest-chunks]\n\
                                    [--selftest-tokenizer PATH]\n\
-                                   [--selftest-bad-range RANGE] [-h]\n\n\
+                                   [--selftest-bad-range RANGE]\n\
+                                   [--selftest-bad-budget VALUE]\n\
+                                   [--selftest-bad-overlap VALUE] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
              Compare mode shows each document beside a Docling reference.\n\
@@ -625,7 +668,9 @@ fn main() {
              --selftest-tokenizer names a tokenizer file and reports the badge\n\
              the window renders for it, without starting a run;\n\
              --selftest-bad-range fills an unreadable page range and presses\n\
-             Convert, so the page's refusal is checked instead of a run. What such a run\n\
+             Convert, so the page's refusal is checked instead of a run;\n\
+             --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
+             malformed chunk count the same way. What such a run\n\
              converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
              smoke-testing the corpus never writes beside it. Set\n\
@@ -640,6 +685,8 @@ fn main() {
     let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
     let _ = SELFTEST_TOKENIZER.set(selftest_tokenizer(&args));
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
+    let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
+    let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));
 
     tauri::Builder::default()
         .manage(ActiveRun::default())
