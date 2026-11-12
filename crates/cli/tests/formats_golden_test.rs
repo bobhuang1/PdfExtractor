@@ -32,31 +32,31 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `picture_names.html`, whose picture's file name carries a space and an
 /// ampersand, so the HTML golden pins the name the writer escapes.
 const CASES: &[&str] = &[
-    "hello.pdf",                   // the smallest fixture: one heading-sized line
-    "dummy.pdf",                   // a one-paragraph PDF
-    "calibre_demo.docx",           // prose, lists, tables and pictures in one document
-    "math-accents.docx",           // Office Math, which becomes `$$` in Markdown
-    "irs_f1040.pdf",               // a long form: many tables, columns and furniture
-    "flow.html",                   // a flow format: headings, lists, code and a table
-    "late_header.html",            // a table whose header row is declared below a caption
-    "late_merged_header.html",     // a late header row whose own cells merge
-    "social_cards.html",           // the head's description, canonical URL and social cards
-    "picture_names.html",          // a picture named with a space and an ampersand
-    "fenced.md",                   // Markdown in, HTML/text/YAML out
-    "pictures.md",                 // Markdown in with a picture: its file is copied and referenced
-    "merged_cells.docx",           // a DOCX whose table merges cells: rowspan/colspan in HTML
-    "merged_table.rtf",            // the same merged table as a word processor's own RTF export
-    "link_annotations.pdf",        // a PDF whose link is an `<a href>` in the HTML
-    "chart_deck.pptx",             // a deck whose only picture is a chart: no file to place
-    "inventory_calc.ods",          // a workbook whose sheets are pages, its merge a span
-    "annotations_calc.ods",        // a workbook's cell comments, pinned with --include-notes
+    "hello.pdf",                     // the smallest fixture: one heading-sized line
+    "dummy.pdf",                     // a one-paragraph PDF
+    "calibre_demo.docx",             // prose, lists, tables and pictures in one document
+    "math-accents.docx",             // Office Math, which becomes `$$` in Markdown
+    "irs_f1040.pdf",                 // a long form: many tables, columns and furniture
+    "flow.html",                     // a flow format: headings, lists, code and a table
+    "late_header.html",              // a table whose header row is declared below a caption
+    "late_merged_header.html",       // a late header row whose own cells merge
+    "social_cards.html",             // the head's description, canonical URL and social cards
+    "picture_names.html",            // a picture named with a space and an ampersand
+    "fenced.md",                     // Markdown in, HTML/text/YAML out
+    "pictures.md", // Markdown in with a picture: its file is copied and referenced
+    "merged_cells.docx", // a DOCX whose table merges cells: rowspan/colspan in HTML
+    "merged_table.rtf", // the same merged table as a word processor's own RTF export
+    "link_annotations.pdf", // a PDF whose link is an `<a href>` in the HTML
+    "chart_deck.pptx", // a deck whose only picture is a chart: no file to place
+    "inventory_calc.ods", // a workbook whose sheets are pages, its merge a span
+    "annotations_calc.ods", // a workbook's cell comments, pinned with --include-notes
     "worksheet_pictures_calc.ods", // a worksheet's pictures, copied beside the render
-    "chart_sheet_calc.ods",        // a worksheet's charts: tables and captions, no image
-    "chart_types_impress.odp",     // a slide's chart data, with no image to render
-    "brief_odt.odt",               // a Writer document: a flow with a picture, read as one
-    "notes_odt.odt",               // a Writer document with a footnote and a table inside a cell
-    "q3_review_impress.odp",       // the deck as Impress saved it: slides, notes and comments
-    "rtf_bitmap.rtf",              // a word processor's own RTF export, control words and all
+    "chart_sheet_calc.ods", // a worksheet's charts: tables and captions, no image
+    "chart_types_impress.odp", // a slide's chart data, with no image to render
+    "brief_odt.odt", // a Writer document: a flow with a picture, read as one
+    "notes_odt.odt", // a Writer document with a footnote and a table inside a cell
+    "q3_review_impress.odp", // the deck as Impress saved it: slides, notes and comments
+    "rtf_bitmap.rtf", // a word processor's own RTF export, control words and all
 ];
 
 /// What is pinned and under which name: the `--to` value (never the

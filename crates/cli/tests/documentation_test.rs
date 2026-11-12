@@ -27,6 +27,11 @@
 //! count, and README's and the golden README's reference, corpus and fixture
 //! counts — so an added or renamed document cannot leave the prose behind.
 //!
+//! A corpus document with no reference and a reference with no fixture are
+//! collected with the stale counts instead of being asserted inside their
+//! counting helpers, so one run reports every missing reference and every stale
+//! count together.
+//!
 //! The workspace total is the Unix suite, because `crates/ui/tests/job_test.rs`
 //! is Unix-only. On another platform only that total is skipped; the target
 //! counts below are the same everywhere.
@@ -316,41 +321,53 @@ fn reference_count(root: &Path) -> usize {
     reference_stems(root).len()
 }
 
-/// The corpus documents (`test-data/real`), every one of which must have a
-/// reference.
-fn corpus_document_count(root: &Path) -> usize {
+/// The corpus documents (`test-data/real`) and the stem of every one that has
+/// no committed reference.
+fn corpus_document_count(root: &Path) -> (usize, Vec<String>) {
     let corpus = document_stems(&root.join("test-data/real"));
     let references = reference_stems(root);
-    let missing: Vec<&String> = corpus
+    let missing: Vec<String> = corpus
         .iter()
         .filter(|stem| !references.iter().any(|name| name == *stem))
+        .cloned()
         .collect();
-    assert!(
-        missing.is_empty(),
-        "the golden set has no Docling reference for corpus document(s) {missing:?}"
-    );
-    corpus.len()
+    (corpus.len(), missing)
 }
 
 /// The references that name no corpus document — the fixtures beside the corpus
-/// (`inventory.xlsx`, `q3_review_impress.odp`, …) — each of which must be a file
-/// committed under `test-data/`.
-fn fixture_count(root: &Path) -> usize {
+/// (`inventory.xlsx`, `q3_review_impress.odp`, …) — and the stem of every one
+/// that has no file committed under `test-data/`.
+fn fixture_count(root: &Path) -> (usize, Vec<String>) {
     let corpus = document_stems(&root.join("test-data/real"));
     let fixtures: Vec<String> = reference_stems(root)
         .into_iter()
         .filter(|stem| !corpus.contains(stem))
         .collect();
     let present = document_stems(&root.join("test-data"));
-    let missing: Vec<&String> = fixtures
+    let missing: Vec<String> = fixtures
         .iter()
         .filter(|stem| !present.iter().any(|name| name == *stem))
+        .cloned()
         .collect();
-    assert!(
-        missing.is_empty(),
-        "these Docling references name no fixture under test-data/: {missing:?}"
-    );
-    fixtures.len()
+    (fixtures.len(), missing)
+}
+
+/// Add a missing corpus reference or a reference with no fixture to `stale`.
+fn check_reference_files(
+    stale: &mut Vec<String>,
+    missing_corpus_references: &[String],
+    missing_fixture_files: &[String],
+) {
+    if !missing_corpus_references.is_empty() {
+        stale.push(format!(
+            "the golden set has no Docling reference for corpus document(s) {missing_corpus_references:?}"
+        ));
+    }
+    if !missing_fixture_files.is_empty() {
+        stale.push(format!(
+            "these Docling references name no fixture under test-data/: {missing_fixture_files:?}"
+        ));
+    }
 }
 
 /// The number of documents the ratchet baseline remembers.
@@ -405,18 +422,12 @@ fn documented_test_counts_match_the_test_list() {
         .unwrap_or_else(|error| panic!("could not read {}: {error}", golden_readme_path.display()));
     let references = reference_count(&root);
     let baseline_documents = baseline_document_count(&root);
-    let corpus_documents = corpus_document_count(&root);
-    let fixtures = fixture_count(&root);
+    let (corpus_documents, missing_corpus_references) = corpus_document_count(&root);
+    let (fixtures, missing_fixture_files) = fixture_count(&root);
     assert!(
         references > 0 && baseline_documents > 0 && corpus_documents > 0 && fixtures > 0,
         "a reference, baseline, corpus or fixture count came back empty, so this check \
          would pass without checking anything"
-    );
-    assert_eq!(
-        references,
-        corpus_documents + fixtures,
-        "the {references} committed references are not the {corpus_documents} corpus \
-         documents plus the {fixtures} fixtures beside them"
     );
 
     let workspace = listed_tests(&root, &["test", "--workspace"]);
@@ -465,6 +476,17 @@ fn documented_test_counts_match_the_test_list() {
         .count();
 
     let mut stale = Vec::new();
+    check_reference_files(
+        &mut stale,
+        &missing_corpus_references,
+        &missing_fixture_files,
+    );
+    if missing_corpus_references.is_empty() && references != corpus_documents + fixtures {
+        stale.push(format!(
+            "the {references} committed references are not the {corpus_documents} corpus \
+             documents plus the {fixtures} fixtures beside them"
+        ));
+    }
     // `job_test.rs` is `#![cfg(unix)]`; the documented total is the Unix suite
     // the test gate runs, so another platform's smaller total is not drift.
     #[cfg(unix)]
@@ -570,8 +592,8 @@ fn documented_test_counts_match_the_test_list() {
 
     assert!(
         stale.is_empty(),
-        "{} stale count(s) or missing marker(s) in the documentation:\n\n{}\n\n\
-         Update the documented counts and markers in the same change as the suite, references or baseline.",
+        "{} stale count(s), missing marker(s) or reference problem(s) in the documentation:\n\n{}\n\n\
+         Update the documented counts, markers and reference files in the same change as the suite, references or baseline.",
         stale.len(),
         stale.join("\n\n")
     );
@@ -615,4 +637,43 @@ fn every_stale_count_is_collected_before_the_gate_reports_it() {
     assert!(stale[2].contains("section \"Golden set\""));
     assert!(stale[2].contains("There are 41 comparable references."));
     assert!(stale[3].contains("README.md no longer contains marker \"comparable references\""));
+}
+
+#[test]
+fn missing_references_are_collected_with_the_other_problems() {
+    let root = std::env::temp_dir().join(format!(
+        "pdfextractor-documentation-{}-missing-references",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    for directory in ["test-data/real", "test-data/golden/docling"] {
+        std::fs::create_dir_all(root.join(directory)).expect("create the temporary test tree");
+    }
+    for document in ["present.pdf", "absent.pdf"] {
+        std::fs::write(root.join("test-data/real").join(document), b"fixture")
+            .expect("write a corpus document");
+    }
+    for reference in ["present.json", "orphan.json"] {
+        std::fs::write(root.join("test-data/golden/docling").join(reference), b"{}")
+            .expect("write a reference");
+    }
+
+    let (corpus_documents, missing_corpus_references) = corpus_document_count(&root);
+    let (fixtures, missing_fixture_files) = fixture_count(&root);
+    let mut stale = Vec::new();
+    check_reference_files(
+        &mut stale,
+        &missing_corpus_references,
+        &missing_fixture_files,
+    );
+
+    assert_eq!(corpus_documents, 2);
+    assert_eq!(fixtures, 1);
+    assert_eq!(missing_corpus_references, vec!["absent".to_string()]);
+    assert_eq!(missing_fixture_files, vec!["orphan".to_string()]);
+    assert_eq!(stale.len(), 2);
+    assert!(stale[0].contains("absent"));
+    assert!(stale[1].contains("orphan"));
+
+    let _ = std::fs::remove_dir_all(&root);
 }

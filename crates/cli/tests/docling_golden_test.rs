@@ -747,6 +747,19 @@ fn an_odt_document_with_notes_and_a_nested_table_conforms_to_the_docling_schema(
     assert_fixture_conforms("notes_odt.odt", "notes_odt", "odt-notes-schema");
 }
 
+/// The third Writer fixture puts a master page's running header and page footer
+/// around three body items. Neither our reader nor Docling's OpenDocument
+/// backend publishes them, so the reference holds the body alone; the fixture
+/// pins that a producer's header and footer stay out of the body on both sides.
+#[test]
+fn an_odt_document_with_a_header_and_footer_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "header_footer_odt.odt",
+        "header_footer_odt",
+        "odt-header-footer-schema",
+    );
+}
+
 /// A deck adds things no corpus document has: `chapter` groups that hold
 /// their slide's items, list items with a `marker` and `enumerated`, and a
 /// table whose cell spans two columns.
@@ -1914,6 +1927,7 @@ fn docling_core_accepts_our_documents() {
         ("booleans_calc.ods", "booleans_calc"),
         ("brief_odt.odt", "brief_odt"),
         ("notes_odt.odt", "notes_odt"),
+        ("header_footer_odt.odt", "header_footer_odt"),
         ("q3_review.pptx", "q3_review"),
         ("q3_review_impress.odp", "q3_review_impress"),
         ("chart_types_impress.odp", "chart_types_impress"),
