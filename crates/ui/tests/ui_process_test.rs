@@ -928,3 +928,85 @@ fn a_selftest_run_forwards_the_tokenizer_encoding_to_the_cli() {
         "the chosen encoding did not reach the command line:\n{report}"
     );
 }
+
+/// The encoding selector's default is “From the file”. Leaving it there must
+/// still run the tokenizer conversion, but must not add a
+/// `--chunks-tokenizer-encoding` flag: auto is the absence of a choice, not a
+/// family the page guessed.
+#[test]
+fn a_selftest_run_keeps_the_tokenizer_encoding_on_auto_without_a_flag() {
+    let root = repository_root();
+    let input = root.join("test-data/brief.docx");
+    let tokenizer = root.join("test-data/tokenizer-mini.tiktoken");
+    assert!(input.exists(), "missing fixture {}", input.display());
+    assert!(
+        tokenizer.exists(),
+        "missing fixture {}",
+        tokenizer.display()
+    );
+    let cli = root.join("target/debug/pdfextractor-cli");
+    if !cli.exists() {
+        eprintln!("skipped: pdfextractor-cli is not built");
+        return;
+    }
+
+    let Some(mut command) = ui_command() else {
+        return;
+    };
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg("--selftest-chunks")
+        .arg("--selftest-tokenizer")
+        .arg(&tokenizer)
+        .env("PDFEXTRACTOR_CLI", &cli);
+
+    let output = run_with_timeout(command, Duration::from_secs(120));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+
+    let printed = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-started "))
+        .unwrap_or_else(|| {
+            panic!("the run never printed its command line:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        printed.contains(&format!("--chunks-tokenizer {}", tokenizer.display())),
+        "the tokenizer is not on the run's printed command line:\n{printed}"
+    );
+    assert!(
+        !printed.contains("--chunks-tokenizer-encoding"),
+        "an automatic encoding put a family flag on the run's printed command line:\n{printed}"
+    );
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        report.contains("title=\"Finished\"") && report.contains("success=true"),
+        "the automatic-encoding conversion did not finish successfully:\n{report}"
+    );
+    assert!(
+        report.contains("tokenizer-encoding=auto"),
+        "the page did not report the automatic encoding:\n{report}"
+    );
+    assert!(
+        !report.contains("--chunks-tokenizer-encoding"),
+        "the automatic encoding reached the command line:\n{report}"
+    );
+}
