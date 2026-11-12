@@ -8243,6 +8243,107 @@ fn a_workbook_becomes_pages_groups_and_tables() {
     }
 }
 
+/// A cell's comment is about the sheet rather than part of its grid: the
+/// workbook's comments land on the notes layer, one `comment_section` group per
+/// cell, named for the cell, and the cell keeps only its text. A reading that
+/// did not ask for notes never sees a comment pretending to be a cell.
+#[test]
+fn a_workbooks_cell_comments_land_on_the_notes_layer() {
+    let ws = Workspace::new("xlsx-comments");
+    let bytes = fixture("annotations.xlsx");
+    let input = ws.write("annotations.xlsx", &bytes);
+    let output = ws.join("annotations.json");
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+    ]);
+    let doc = json_of(&output);
+
+    let notes: Vec<&str> = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "[author: Ada Lovelace]: Checked against the invoice.",
+            "[author: Grace Hopper]: An empty cell's remark.",
+            "[author: Ada Lovelace]: A remark on another sheet.",
+        ],
+        "the cell comments are on the notes layer, with the authors the file states"
+    );
+
+    // A comment is not a cell: the tables hold the sheet's values only.
+    for table in doc["tables"].as_array().expect("a table list") {
+        for cell in table["data"]["table_cells"].as_array().expect("cells") {
+            let text = cell["text"].as_str().unwrap_or_default();
+            assert!(
+                !text.contains("Checked against the invoice.")
+                    && !text.contains("An empty cell's remark.")
+                    && !text.contains("A remark on another sheet."),
+                "a comment was written as a cell's text: {text:?}"
+            );
+        }
+    }
+
+    let comments: Vec<(&str, &str)> = doc["groups"]
+        .as_array()
+        .expect("a group list")
+        .iter()
+        .filter(|group| group["label"] == "comment_section")
+        .map(|group| {
+            (
+                group["name"].as_str().expect("a comment name"),
+                group["content_layer"].as_str().expect("a layer"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            ("comment-sheet1-1-1", "notes"),
+            ("comment-sheet1-3-2", "notes"),
+            ("comment-sheet2-0-0", "notes"),
+        ],
+        "each comment has its own notes-layer group, named for the cell"
+    );
+
+    // A reading that leaves the notes layer out does not show the remarks; one
+    // that asks for it writes each as a comment, not as a cell of the sheet.
+    let markdown =
+        std::fs::read_to_string(ws.join("annotations.md")).expect("the Markdown without notes");
+    assert!(
+        !markdown.contains("Checked against the invoice."),
+        "a comment was read without --include-notes: {markdown}"
+    );
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        ws.join("with_notes.md").to_str().unwrap(),
+        "--to",
+        "md",
+        "--include-notes",
+    ]);
+    let with_notes =
+        std::fs::read_to_string(ws.join("with_notes.md")).expect("the Markdown with notes");
+    assert!(
+        with_notes.contains("> **Comment:** [author: Ada Lovelace]: Checked against the invoice."),
+        "the comment is not written as a remark: {with_notes}"
+    );
+}
+
 /// A workbook's pictures are handed on the way a Word or PowerPoint package's
 /// are: a PNG and a JPEG travel untouched, and a BMP, a GIF and both spellings of
 /// a JPEG 2000 — the bare `.jpc` codestream and the `.jp2` container around one —

@@ -11,6 +11,12 @@
 //! table is a region of cells connected to each other (a merged range is
 //! connected to itself), and an empty row or column between two blocks of
 //! content leaves them two tables rather than one.
+//!
+//! A cell's comment is not part of its text. The worksheet's relationships name
+//! a comments part, and each `<comment>` there says which cell it is about,
+//! which author it belongs to and what it says. Those remarks are kept apart
+//! from the grid as [`SheetAnnotation`]s, so a workbook can place them on the
+//! notes layer without a comment ever becoming a cell's value.
 
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, TimeDelta, Timelike};
@@ -37,6 +43,27 @@ pub struct Sheet {
     /// a picture file in the package: it is a drawing of data, held as a chart
     /// part, so it reaches the document as a picture with no image behind it.
     pub charts: Vec<pdfextractor_chart::ChartShape>,
+}
+
+/// A comment on a cell.
+///
+/// It is about the cell, not part of it: SpreadsheetML keeps it in a comments
+/// part the worksheet's relationships name, and the cell keeps only its text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetAnnotation {
+    /// The sheet's number in the workbook, 1-based — the page it is read as.
+    pub sheet: usize,
+    /// The cell's row and column on the sheet, both 0-based.
+    pub row: usize,
+    pub col: usize,
+    /// The name the comment's `authorId` names, when the part's `<authors>`
+    /// states one.
+    pub author: Option<String>,
+    /// The time the comment states, when it states one. A legacy XLSX comment
+    /// usually carries no date.
+    pub date: Option<String>,
+    /// Its words, with every text run joined and the result trimmed.
+    pub text: String,
 }
 
 /// A picture a worksheet draws, and where on its grid it was placed.
@@ -81,6 +108,9 @@ pub struct SheetCell {
 #[derive(Debug, Clone)]
 pub struct XlsxDocument {
     pub sheets: Vec<Sheet>,
+    /// The comments the workbook hangs on its cells, in the order the sheets'
+    /// comments parts list them.
+    pub annotations: Vec<SheetAnnotation>,
 }
 
 impl XlsxDocument {
@@ -135,11 +165,13 @@ impl XlsxDocument {
             .collect();
 
         let mut sheets = Vec::with_capacity(book.sheets.len());
+        let mut annotations = Vec::new();
         for (index, sheet) in book.sheets.iter().enumerate() {
             let (name, part, bytes) = &parts[index];
             // A reference with no sheet name of its own is the drawing's sheet.
             let resolve = |reference: &str| resolve_chart_reference(reference, name, &cells);
             let drawing = read_sheet_drawing(&mut archive, part, bytes, &resolve)?;
+            annotations.extend(read_sheet_comments(&mut archive, part, index + 1)?);
             sheets.push(Sheet {
                 name: name.clone(),
                 hidden: !sheet.state.eq_ignore_ascii_case("visible"),
@@ -149,7 +181,10 @@ impl XlsxDocument {
             });
         }
 
-        Ok(Self { sheets })
+        Ok(Self {
+            sheets,
+            annotations,
+        })
     }
 }
 
@@ -261,6 +296,144 @@ fn read_relationships_in(
         buffer.clear();
     }
     Ok(out)
+}
+
+// --- a cell's comments -----------------------------------------------------
+
+/// The cell comments worksheet `sheet_part` declares, in the order its comments
+/// part lists them.
+///
+/// A worksheet does not hold its comments itself: its relationship part names
+/// the comments part (`.../relationships/comments`), and that part holds one
+/// `<comment>` per cell, each naming the cell in `ref` and its author by an
+/// index into the part's `<authors>`. A package whose comments part is missing
+/// or unreadable contributes no comments, rather than losing the worksheet's
+/// cells with it.
+fn read_sheet_comments(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    sheet_part: &str,
+    sheet: usize,
+) -> Result<Vec<SheetAnnotation>> {
+    let Some(bytes) = read_part(archive, &rels_part(sheet_part)) else {
+        return Ok(Vec::new());
+    };
+    let relationships = read_relationships_in(&bytes, part_dir(sheet_part), Some("/comments"))?;
+    let mut parts: Vec<String> = relationships.into_values().map(|(_, part)| part).collect();
+    // A package normally names one comments part per sheet; sorting makes a
+    // package that names more than one read in a stable order.
+    parts.sort();
+    parts.dedup();
+    let mut annotations = Vec::new();
+    for part in parts {
+        let Some(bytes) = read_part(archive, &part) else {
+            continue;
+        };
+        annotations.extend(read_comments(&bytes, sheet)?);
+    }
+    Ok(annotations)
+}
+
+/// One `<comment>` while its part is being read.
+#[derive(Debug, Default)]
+struct CommentRead {
+    cell: Option<String>,
+    author_id: Option<usize>,
+    date: Option<String>,
+    text: String,
+}
+
+/// The comments a comments part holds.
+///
+/// The text is every `<t>` in the comment's `<text>`, joined across runs; a
+/// phonetic guide is not part of it. A comment with no words is no remark, and
+/// an author index that names nothing leaves the author unstated rather than
+/// inventing a name.
+fn read_comments(bytes: &[u8], sheet: usize) -> Result<Vec<SheetAnnotation>> {
+    let mut reader = Reader::from_reader(Cursor::new(bytes));
+    let mut buffer = Vec::new();
+    let mut authors = Vec::new();
+    let mut comments: Vec<CommentRead> = Vec::new();
+    let mut current: Option<CommentRead> = None;
+    let mut author: Option<String> = None;
+    let mut capture_text = false;
+    let mut phonetic = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref()) {
+                b"author" => author = Some(String::new()),
+                b"comment" => {
+                    current = Some(CommentRead {
+                        cell: attr(&e, b"ref"),
+                        author_id: attr(&e, b"authorId").and_then(|id| id.parse().ok()),
+                        date: attr(&e, b"date")
+                            .or_else(|| attr(&e, b"dT"))
+                            .filter(|date| !date.trim().is_empty()),
+                        text: String::new(),
+                    });
+                }
+                b"t" if current.is_some() && phonetic == 0 => capture_text = true,
+                b"rPh" => phonetic += 1,
+                _ => {}
+            },
+            Ok(Event::Empty(e)) => match local_name(e.name().as_ref()) {
+                // An empty author is a name the part does not state, and an
+                // empty comment has no words to be a remark.
+                b"author" => authors.push(String::new()),
+                _ => {}
+            },
+            Ok(Event::Text(e)) => {
+                let text = e.unescape().unwrap_or_default();
+                if let Some(author) = author.as_mut() {
+                    author.push_str(&text);
+                } else if capture_text {
+                    if let Some(comment) = current.as_mut() {
+                        comment.text.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
+                b"author" => {
+                    authors.push(author.take().unwrap_or_default().trim().to_string());
+                }
+                b"t" => capture_text = false,
+                b"rPh" => phonetic = phonetic.saturating_sub(1),
+                b"comment" => {
+                    if let Some(mut comment) = current.take() {
+                        comment.text = comment.text.trim().to_string();
+                        if !comment.text.is_empty() {
+                            comments.push(comment);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => anyhow::bail!("malformed comments part: {e}"),
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    Ok(comments
+        .into_iter()
+        .filter_map(|comment| {
+            let (row, col) = comment.cell.as_deref().and_then(parse_reference)?;
+            let author = comment
+                .author_id
+                .and_then(|id| authors.get(id))
+                .map(|author| author.trim())
+                .filter(|author| !author.is_empty())
+                .map(str::to_string);
+            Some(SheetAnnotation {
+                sheet,
+                row,
+                col,
+                author,
+                date: comment.date,
+                text: comment.text,
+            })
+        })
+        .collect())
 }
 
 /// The part a relationship points at, resolved against `base` — the directory
@@ -1878,6 +2051,71 @@ mod tests {
             ),
         ]);
         let document = XlsxDocument::parse_bytes(&pkg).expect("parse");
+        assert_eq!(
+            texts(&document.sheets[0].tables[0]),
+            vec![(0, 0, "7".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_cell_comment_is_a_note_with_its_author_and_words() {
+        let pkg = package(&[
+            (
+                "xl/workbook.xml",
+                workbook(r#"<sheet name="Sheet1" sheetId="1" r:id="rId1"/>"#),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                relationships(
+                    r#"<Relationship Id="rId1" Type="http://x/worksheet" Target="worksheets/sheet1.xml"/>"#,
+                ),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                worksheet(r#"<row r="1"><c r="A1"><v>7</v></c></row>"#),
+            ),
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                relationships(
+                    r#"<Relationship Id="rId2" Type="http://x/comments" Target="../comments1.xml"/>"#,
+                ),
+            ),
+            (
+                "xl/comments1.xml",
+                format!(
+                    r#"<comments {NS}><authors><author>Ada Lovelace</author></authors><commentList>
+                         <comment ref="A1" authorId="0"><text><r><t>Checked </t></r><r><t>against the invoice.</t></r></text></comment>
+                         <comment ref="C3" authorId="9"><text><t>An empty cell's remark.</t></text></comment>
+                         <comment ref="B2" authorId="0"><text><t>  </t></text></comment>
+                       </commentList></comments>"#
+                ),
+            ),
+        ]);
+        let document = XlsxDocument::parse_bytes(&pkg).expect("parse");
+
+        assert_eq!(
+            document.annotations,
+            vec![
+                SheetAnnotation {
+                    sheet: 1,
+                    row: 0,
+                    col: 0,
+                    author: Some("Ada Lovelace".to_string()),
+                    date: None,
+                    text: "Checked against the invoice.".to_string(),
+                },
+                SheetAnnotation {
+                    sheet: 1,
+                    row: 2,
+                    col: 2,
+                    author: None,
+                    date: None,
+                    text: "An empty cell's remark.".to_string(),
+                },
+            ]
+        );
+        // A comment is about the cell, not its text: the grid holds only what
+        // the cell says.
         assert_eq!(
             texts(&document.sheets[0].tables[0]),
             vec![(0, 0, "7".to_string())]

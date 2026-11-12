@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Cursor, Read};
 
 use pdfextractor_picture_formats::{format_for_mime, mime_for_extension};
-use pdfextractor_xlsx_parser::{Sheet, SheetCell, SheetPicture, SheetTable};
+use pdfextractor_xlsx_parser::{Sheet, SheetAnnotation, SheetCell, SheetPicture, SheetTable};
 
 mod chart;
 
@@ -59,25 +59,8 @@ pub struct OdsDocument {
     pub annotations: Vec<SheetAnnotation>,
 }
 
-/// A comment on a cell.
-///
-/// It is about the cell, not a part of it: Calc writes it as an
-/// `office:annotation` beside the cell's paragraphs, so the words are a remark
-/// on the sheet rather than the cell's content.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SheetAnnotation {
-    /// The sheet's number in the workbook, 1-based — the page it is read as.
-    pub sheet: usize,
-    /// The cell's row and column on the sheet, both 0-based.
-    pub row: usize,
-    pub col: usize,
-    /// The name the comment's `dc:creator` states, when it states one.
-    pub author: Option<String>,
-    /// The time its `dc:date` states, when it states one.
-    pub date: Option<String>,
-    /// Its words, one paragraph per line.
-    pub text: String,
-}
+// A cell's comment is the workbook model's [`SheetAnnotation`], because a
+// comment reaches the command line the same way whichever package wrote it.
 
 impl OdsDocument {
     pub fn parse_file(path: &str) -> Result<Self> {

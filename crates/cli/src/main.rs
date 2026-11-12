@@ -2363,9 +2363,7 @@ fn convert_xlsx(
     let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
     convert_workbook(
         &parsed.sheets,
-        // The XLSX reader does not read a cell's comment yet, so there is none
-        // to place on the notes layer.
-        &[],
+        &parsed.annotations,
         &data,
         path,
         output_path,
@@ -2409,7 +2407,7 @@ fn convert_ods(
 /// the cell — rather than becoming words in a table.
 fn convert_workbook(
     workbook: &[pdfextractor_xlsx_parser::Sheet],
-    annotations: &[pdfextractor_ods_parser::SheetAnnotation],
+    annotations: &[pdfextractor_xlsx_parser::SheetAnnotation],
     data: &[u8],
     path: &Path,
     output_path: &Path,
