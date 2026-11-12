@@ -215,7 +215,7 @@ carries an exception for this one file, since `*.json` is ignored repo-wide.)
   the Empty sheet has no table, and on Filler the header and North block is one
   2×2 table, the repeated empty rows follow, and South is a second 1×2 table after
   the filler. The comparison reports **2/2 pages and text agreement 1.000**;  the filler contributes no rows on either side, and the reference joins the ratchet.
-  `filler_rows_over_cap_calc.ods` moves that empty run past the reader's 1,024-row
+  `filler_rows_over_cap_calc.ods` (`test-data/make_filler_rows_over_cap_ods.py`) moves that empty run past the reader's 1,024-row
   materialization cap: 2,000 repeated empty rows between North and South. The run
   is skipped whole, so South stays at row 2,002 and the page is 2,003 rows tall,
   matching Docling's reference; both readings publish one page and two tables, and
