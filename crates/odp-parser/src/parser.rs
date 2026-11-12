@@ -31,8 +31,8 @@ pub struct OdpDocument {
 }
 
 /// One slide: its page number, whether it is hidden, the shapes it inherits
-/// from its master page, its own shapes in document order, its animations, its
-/// speaker notes and its comments.
+/// from its master page, its own shapes in document order, its transition, its
+/// animations, its speaker notes and its comments.
 #[derive(Debug, Clone)]
 pub struct Slide {
     /// 1-based, the page number a reader gives the slide.
@@ -45,6 +45,9 @@ pub struct Slide {
     /// objects or its master page draws none.
     pub background: Vec<Shape>,
     pub shapes: Vec<Shape>,
+    /// The slide's transition, when it states one. A slide transition changes
+    /// the whole page, so it is kept apart from the shape effects.
+    pub transition: Option<Transition>,
     /// The slide's animation effects, in the timing tree's document order.
     pub animations: Vec<Animation>,
     /// The text of the slide's `presentation:notes` frame, paragraphs joined by
@@ -99,6 +102,29 @@ pub struct Animation {
     pub begin: Option<String>,
     /// `smil:dur`, when stated.
     pub duration: Option<String>,
+}
+
+/// One slide transition.
+///
+/// A transition is a whole-page `anim:transitionFilter` whose timing begins at
+/// `<page draw:id>.begin`, or the older drawing-page style properties that
+/// state the same effect. `smil:type` and `smil:subtype` name the SMIL
+/// transition (for example `slideWipe` / `fromBottom`); the style also states
+/// the producer's speed when it has no explicit duration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transition {
+    /// `smil:type` (or the legacy `presentation:transition-type`).
+    pub effect: Option<String>,
+    /// `smil:subtype` (or the legacy `presentation:transition-style`).
+    pub subtype: Option<String>,
+    /// `smil:direction` (or the legacy
+    /// `presentation:transition-direction`).
+    pub direction: Option<String>,
+    /// `smil:dur`, the transition's duration.
+    pub duration: Option<String>,
+    /// `presentation:transition-speed`, the legacy `slow`/`medium`/`fast`
+    /// setting.
+    pub speed: Option<String>,
 }
 
 /// One shape of a slide.
@@ -194,6 +220,7 @@ impl OdpDocument {
             .find("presentation")
             .context("content.xml has no office:presentation")?;
         let page_visibility = page_background_visibility(&root);
+        let page_transitions = page_transitions(&root);
 
         let mut slides = Vec::new();
         let mut page_size = None;
@@ -229,13 +256,19 @@ impl OdpDocument {
                 Vec::new()
             };
             let names = shape_names(page);
-            let animations = read_animations(page, &names);
+            let (animations, timing_transition) = read_animations(page, &names);
+            let style_transition = page
+                .attr("style-name")
+                .and_then(|name| page_transitions.get(name))
+                .cloned();
+            let transition = merge_transition(timing_transition, style_transition);
 
             slides.push(Slide {
                 number: (index + 1) as i32,
                 hidden: is_hidden(page),
                 background,
                 shapes,
+                transition,
                 animations,
                 notes: read_notes(page),
                 comments: read_comments(page),
@@ -428,6 +461,69 @@ fn page_background_visibility(root: &Node) -> HashMap<String, bool> {
 /// The page's own `presentation:background-objects-visible` wins; otherwise
 /// the drawing-page style it names states the flag; a page that states nothing
 /// inherits them.
+/// The transition each drawing-page style in `content.xml` states.
+///
+/// A producer that writes SMIL timing also mirrors the transition on the style
+/// (`smil:type`, `smil:subtype`, `smil:dur`, `presentation:transition-speed`)
+/// for readers without SMIL support. Older producers write only these style
+/// properties, so reading them is what makes a transition visible in both.
+fn page_transitions(root: &Node) -> HashMap<String, Transition> {
+    let mut transitions = HashMap::new();
+    let Some(styles) = root.find("automatic-styles") else {
+        return transitions;
+    };
+    for style in styles.descendants_named("style") {
+        if style.attr("family") != Some("drawing-page") {
+            continue;
+        }
+        let (Some(name), Some(properties)) =
+            (style.attr("name"), style.child("drawing-page-properties"))
+        else {
+            continue;
+        };
+        if let Some(transition) = transition_from_properties(properties) {
+            transitions.insert(name.to_string(), transition);
+        }
+    }
+    transitions
+}
+
+fn transition_from_properties(node: &Node) -> Option<Transition> {
+    let effect = node.attr("type").or_else(|| node.attr("transition-type"))?;
+    if effect.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    Some(Transition {
+        effect: Some(effect.to_string()),
+        subtype: node
+            .attr("subtype")
+            .or_else(|| node.attr("transition-style"))
+            .map(str::to_string),
+        direction: node
+            .attr("direction")
+            .or_else(|| node.attr("transition-direction"))
+            .map(str::to_string),
+        duration: node.attr("dur").map(str::to_string),
+        speed: node.attr("transition-speed").map(str::to_string),
+    })
+}
+
+/// The SMIL timing is the authoritative transition; the mirrored style fills in
+/// the speed the timing does not state.
+fn merge_transition(timing: Option<Transition>, style: Option<Transition>) -> Option<Transition> {
+    match (timing, style) {
+        (None, style) => style,
+        (timing, None) => timing,
+        (Some(timing), Some(style)) => Some(Transition {
+            effect: timing.effect.or(style.effect),
+            subtype: timing.subtype.or(style.subtype),
+            direction: timing.direction.or(style.direction),
+            duration: timing.duration.or(style.duration),
+            speed: timing.speed.or(style.speed),
+        }),
+    }
+}
+
 fn background_objects_visible(page: &Node, styles: &HashMap<String, bool>) -> bool {
     let stated = |visible: &str| !(visible.eq_ignore_ascii_case("false") || visible == "0");
     if let Some(visible) = page.attr("background-objects-visible") {
@@ -663,14 +759,29 @@ fn is_animation_node(name: &str) -> bool {
 }
 
 /// Read a page's animation effects in document order.
-fn read_animations(page: &Node, names: &HashMap<String, String>) -> Vec<Animation> {
+fn read_animations(
+    page: &Node,
+    names: &HashMap<String, String>,
+) -> (Vec<Animation>, Option<Transition>) {
+    let page_id = page.attr("id");
+    let transition_begin = page_id.map(|id| format!("{id}.begin"));
     let mut animations = Vec::new();
+    let mut transition = None;
     for child in &page.children {
         if is_animation_node(&child.name) {
-            walk_animations(child, None, None, names, &mut animations);
+            walk_animations(
+                child,
+                None,
+                None,
+                page_id,
+                transition_begin.as_deref(),
+                names,
+                &mut animations,
+                &mut transition,
+            );
         }
     }
-    animations
+    (animations, transition)
 }
 
 /// Walk a timing tree, carrying the timing a parent container gives its
@@ -680,14 +791,36 @@ fn walk_animations<'a>(
     node: &'a Node,
     begin: Option<&'a str>,
     duration: Option<&'a str>,
+    page_id: Option<&str>,
+    transition_begin: Option<&str>,
     names: &HashMap<String, String>,
     out: &mut Vec<Animation>,
+    transition: &mut Option<Transition>,
 ) {
     let own_begin = node.attr("begin").filter(|value| !is_zero_time(value));
     let effective_begin = own_begin.or(begin).or_else(|| node.attr("begin"));
     let effective_duration = node.attr("dur").or(duration);
 
     if EFFECTS.contains(&node.name.as_str()) {
+        // A transition filter that targets the page (or begins when the page
+        // begins) changes the slide as a whole; a shape's transitionFilter
+        // names the shape it belongs to and stays an animation.
+        if node.name == "transitionFilter"
+            && is_page_transition(node, effective_begin, page_id, transition_begin)
+        {
+            if let Some(effect) = node.attr("type") {
+                if transition.is_none() {
+                    *transition = Some(Transition {
+                        effect: Some(effect.to_string()),
+                        subtype: node.attr("subtype").map(str::to_string),
+                        direction: node.attr("direction").map(str::to_string),
+                        duration: effective_duration.map(str::to_string),
+                        speed: None,
+                    });
+                }
+            }
+            return;
+        }
         out.push(Animation {
             target: node
                 .attr("targetElement")
@@ -705,7 +838,31 @@ fn walk_animations<'a>(
     }
 
     for child in &node.children {
-        walk_animations(child, effective_begin, effective_duration, names, out);
+        walk_animations(
+            child,
+            effective_begin,
+            effective_duration,
+            page_id,
+            transition_begin,
+            names,
+            out,
+            transition,
+        );
+    }
+}
+
+/// Whether a transition filter changes the page rather than one of its shapes.
+/// LibreOffice writes `smil:begin="<page-id>.begin"` without a target; other
+/// producers may name the page in `smil:targetElement` instead.
+fn is_page_transition(
+    node: &Node,
+    begin: Option<&str>,
+    page_id: Option<&str>,
+    transition_begin: Option<&str>,
+) -> bool {
+    match node.attr("targetElement") {
+        Some(target) => Some(target) == page_id,
+        None => begin.is_some() && begin == transition_begin,
     }
 }
 
@@ -1186,18 +1343,23 @@ mod tests {
       </document-styles>"#;
 
     const MASTER_CONTENT: &str = r#"<document-content>
-        <automatic-styles><style name="hidden" family="drawing-page"><drawing-page-properties background-objects-visible="false"/></style></automatic-styles>
+        <automatic-styles>
+          <style name="hidden" family="drawing-page"><drawing-page-properties background-objects-visible="false"/></style>
+          <style name="fade" family="drawing-page"><drawing-page-properties presentation:transition-type="fade" presentation:transition-speed="medium"/></style>
+        </automatic-styles>
         <body><presentation>
-        <page name="One" master-page-name="Master">
+        <page name="One" id="pageOne" master-page-name="Master">
           <frame name="Body" id="id1" x="2cm" y="3cm" width="8cm" height="2cm">
             <text-box><p>Fade this in.</p></text-box>
           </frame>
-          <anim:par presentation:node-type="timing-root"><anim:seq presentation:node-type="main-sequence">
+          <anim:par presentation:node-type="timing-root">
+            <anim:par smil:begin="pageOne.begin"><anim:transitionFilter smil:dur="2s" smil:type="slideWipe" smil:subtype="fromBottom" smil:direction="reverse"/></anim:par>
+            <anim:seq presentation:node-type="main-sequence">
             <anim:par smil:begin="0s"><anim:set smil:begin="0s" smil:dur="0.5s" smil:targetElement="id1" smil:attributeName="visibility" smil:to="visible"/></anim:par>
             <anim:par smil:begin="1s"><anim:animate smil:begin="0s" smil:dur="2s" smil:targetElement="missing" smil:attributeName="x" smil:from="0" smil:to="5" presentation:preset-class="emphasis" presentation:preset-id="ooo-emphasis-spin"/></anim:par>
           </anim:seq></anim:par>
         </page>
-        <page name="Two" master-page-name="Master" presentation:background-objects-visible="false">
+        <page name="Two" style-name="fade" master-page-name="Master" presentation:background-objects-visible="false">
           <frame name="Own" x="2cm" y="3cm" width="8cm" height="2cm">
             <text-box><p>Own words.</p></text-box>
           </frame>
@@ -1235,7 +1397,20 @@ mod tests {
             other => panic!("the master background is not text: {other:?}"),
         }
 
-        assert_eq!(slide.animations.len(), 2);
+        let transition = slide
+            .transition
+            .as_ref()
+            .expect("the whole-page transition");
+        assert_eq!(transition.effect.as_deref(), Some("slideWipe"));
+        assert_eq!(transition.subtype.as_deref(), Some("fromBottom"));
+        assert_eq!(transition.direction.as_deref(), Some("reverse"));
+        assert_eq!(transition.duration.as_deref(), Some("2s"));
+
+        assert_eq!(
+            slide.animations.len(),
+            2,
+            "the slide transition is not one of the shape effects"
+        );
         let first = &slide.animations[0];
         assert_eq!(first.target.as_deref(), Some("Body"));
         assert_eq!(first.effect, "set");
@@ -1267,6 +1442,12 @@ mod tests {
             page_two.background.is_empty(),
             "a page that hides background objects inherited them anyway"
         );
+        let style_transition = page_two
+            .transition
+            .as_ref()
+            .expect("the transition on the drawing-page style");
+        assert_eq!(style_transition.effect.as_deref(), Some("fade"));
+        assert_eq!(style_transition.speed.as_deref(), Some("medium"));
         assert!(page_two.animations.is_empty());
 
         let page_three = &document.slides[2];
@@ -1274,6 +1455,7 @@ mod tests {
             page_three.background.is_empty(),
             "the drawing-page style's hidden background flag was not read"
         );
+        assert!(page_three.transition.is_none());
     }
 
     #[test]

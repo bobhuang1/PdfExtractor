@@ -7,11 +7,14 @@ follow beyond a slide's own shape tree:
 * a master page carrying a regular background text shape, which every slide
   that uses that master inherits unless it hides the background objects;
 * slide animations, written by Impress' own animation model, so the exported
-  `anim:` tree and its `smil:targetElement` references are a producer's.
+  `anim:` tree and its `smil:targetElement` references are a producer's;
+* a slide transition, so the whole-page `anim:transitionFilter` and the
+  drawing-page style that mirrors it are a producer's too.
 
 The deck has two slides. The first uses the master page with its background
-shape and animates two of its own shapes; the second uses the same master page
-with background objects turned off. `crates/cli/tests/odp_test.rs` reads it.
+shape, runs a bar-wipe transition, and animates two of its own shapes; the
+second uses the same master page with background objects turned off.
+`crates/cli/tests/odp_test.rs` reads it.
 
     python3 test-data/make_master_animations_odp.py
 
@@ -140,6 +143,12 @@ def main() -> None:
                 root.appendChild(sequence)
             add_effect(context, sequence, body, 0.0)
             add_effect(context, sequence, title, 0.5)
+
+            # The transition runs before the shape effects: a two-second bar
+            # wipe, written both as whole-page SMIL and as style properties.
+            first.TransitionType = 1
+            first.TransitionDuration = 2.0
+            first.TransitionDirection = True
 
             second = document.getDrawPages().insertNewByIndex(1)
             second.setMasterPage(master)

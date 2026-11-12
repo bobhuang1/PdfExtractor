@@ -1,0 +1,8 @@
+| Item   | Qty |
+|--------|-----|
+| Widget | 2   |
+| Gadget | 1   |
+
+[author: Ada Lovelace, time: 2024-03-05T00:00:00]: Checked against the invoice.
+
+[author: Grace Hopper, time: 2024-03-06T00:00:00]: An empty cell's remark.

@@ -11,6 +11,10 @@
 //! domain, and a bar chart whose cached `local-table` was removed. The
 //! end-to-end test holds the first three to their plotted grids and the last to
 //! not being invented.
+//!
+//! `master_animations_impress.odp` carries a master-page background shape, a
+//! whole-page bar-wipe transition and two shape effects, so the transition and
+//! the effects are checked as separate notes-layer items.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -504,19 +508,24 @@ fn master_backgrounds_and_animations_are_represented() {
         .iter()
         .any(|item| item["text"] == "Background objects are hidden on this slide."));
 
-    // Docling has no animation item, so each effect is one notes-layer item
-    // naming the target shape and its timing.
+    // Docling has no transition or animation item, so the transition is one
+    // notes-layer item and each effect is another.
     let notes: Vec<&serde_json::Value> = texts
         .iter()
         .filter(|item| item["content_layer"] == "notes")
         .collect();
-    assert_eq!(notes.len(), 2, "one notes item per animation effect");
     assert_eq!(
-        notes[0]["text"],
+        notes.len(),
+        3,
+        "one transition and one notes item per animation effect"
+    );
+    assert_eq!(notes[0]["text"], "Transition: barWipe (duration 2s)");
+    assert_eq!(
+        notes[1]["text"],
         "Animation: set visibility to visible on \"Body\" (begin 0s, duration 0.5s)"
     );
     assert_eq!(
-        notes[1]["text"],
+        notes[2]["text"],
         "Animation: set visibility to visible on \"Title\" (begin 0.5s, duration 0.5s)"
     );
     assert!(notes.iter().all(|note| note["prov"][0]["page_no"] == 1));
@@ -562,6 +571,207 @@ fn a_page_range_selects_slides() {
         !past.exists(),
         "a refused range still wrote {}",
         past.display()
+    );
+}
+
+#[test]
+fn a_page_range_keeps_only_the_selected_slides_pictures_and_notes() {
+    let ws = Workspace::new("range-items");
+    let output = ws.join("range.json");
+    run_ok(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--page-range",
+        "3",
+    ]);
+    let doc = json_of(&output);
+
+    // Only the selected slide's chapter and comment group survive.
+    assert_eq!(page_numbers(&doc), [3]);
+    let groups = doc["groups"].as_array().expect("groups");
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "chapter")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["slide-2"]
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "comment_section")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["comment-slide3-1"]
+    );
+
+    // The selected slide has one speaker note and one comment. The note and
+    // comment from slide 1, and the skipped slide's table, must not leak in.
+    let texts = doc["texts"].as_array().expect("texts");
+    let notes: Vec<&serde_json::Value> = texts
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .collect();
+    assert_eq!(notes.len(), 2, "a skipped slide's note or comment survived");
+    assert!(notes.iter().any(|note| note["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("Say the picture is the growth by quarter"))));
+    assert!(notes
+        .iter()
+        .any(|note| note["text"]
+            == "[author: Grace Hopper, time: 2026-10-18T16:05:00]: Ship this one."));
+    for skipped in [
+        "Open with the revenue line, then the regions.",
+        "Check the Q3 numbers against the ledger.",
+        "Add the regional split to slide 2.",
+        "Q3 Review",
+        "Regional performance",
+    ] {
+        assert!(
+            !texts.iter().any(|item| item["text"] == skipped),
+            "skipped slide text {skipped:?} survived"
+        );
+    }
+    assert!(
+        texts.iter().all(|item| item["prov"]
+            .as_array()
+            .is_none_or(|prov| prov.iter().all(|place| place["page_no"] == 3))),
+        "a text item points at a skipped slide: {texts:#?}"
+    );
+    assert!(
+        doc["tables"].as_array().is_some_and(Vec::is_empty),
+        "the skipped slide's table survived"
+    );
+
+    // The selected slide's picture and chart are the only two pictures; both
+    // point at page 3, and only the picture has a file beside the JSON.
+    let pictures = doc["pictures"].as_array().expect("pictures");
+    assert_eq!(pictures.len(), 2, "a skipped slide's picture survived");
+    assert!(pictures.iter().all(|picture| picture["prov"]
+        .as_array()
+        .is_some_and(|prov| prov.len() == 1 && prov[0]["page_no"] == 3)));
+    let uri = pictures[0]["image"]["uri"]
+        .as_str()
+        .expect("the selected slide's picture");
+    assert!(ws.join(uri).is_file(), "the picture {uri} was not written");
+    assert!(pictures[1]["image"].is_null(), "the chart became an image");
+}
+
+/// A multi-slide selection keeps every selected slide's items, in the deck's order
+/// rather than the range's. The range is deliberately reversed: slide 3's picture
+/// and chart, and both selected slides' notes and comments, must come back in deck
+/// order, and the unselected slide's table must not come back at all.
+#[test]
+fn a_page_range_keeps_every_selected_slides_items_in_deck_order() {
+    let ws = Workspace::new("range-multi");
+    let output = ws.join("range.json");
+    run_ok(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--page-range",
+        "3,1",
+    ]);
+    let doc = json_of(&output);
+
+    assert_eq!(page_numbers(&doc), [1, 3]);
+    let groups = doc["groups"].as_array().expect("groups");
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "chapter")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["slide-0", "slide-2"],
+        "the selected slides are not in deck order"
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .filter(|group| group["label"] == "comment_section")
+            .map(|group| group["name"].as_str().expect("a group name"))
+            .collect::<Vec<_>>(),
+        ["comment-slide1-1", "comment-slide1-2", "comment-slide3-1"],
+        "the selected comments are not in deck order"
+    );
+
+    let texts = doc["texts"].as_array().expect("texts");
+    let find = |text: &str| {
+        texts
+            .iter()
+            .find(|item| item["text"] == text)
+            .unwrap_or_else(|| panic!("no text item {text:?} in {texts:#?}"))
+    };
+    assert_eq!(find("Q3 Review")["prov"][0]["page_no"], 1);
+    assert_eq!(find("Where the growth came from")["prov"][0]["page_no"], 3);
+    assert!(
+        !texts
+            .iter()
+            .any(|item| item["text"] == "Regional performance"),
+        "the unselected slide's title survived: {texts:#?}"
+    );
+
+    // Both slides' speaker notes and comments are kept, slide by slide: the
+    // first slide's note, its two comments, the third slide's note, its comment.
+    let notes: Vec<&serde_json::Value> = texts
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .collect();
+    assert_eq!(
+        notes.len(),
+        5,
+        "a selected slide's note or comment was lost"
+    );
+    let note_text =
+        |note: &serde_json::Value| note["text"].as_str().unwrap_or_default().to_string();
+    assert!(
+        note_text(notes[0]).starts_with("Open with the revenue line"),
+        "the first slide's note is not first: {notes:#?}"
+    );
+    assert!(
+        note_text(notes[1]).contains("Check the Q3 numbers against the ledger.")
+            && note_text(notes[2]).contains("Add the regional split to slide 2."),
+        "the first slide's comments are not beside its note: {notes:#?}"
+    );
+    assert!(
+        note_text(notes[3]).starts_with("Say the picture is the growth by quarter"),
+        "the third slide's note is not next: {notes:#?}"
+    );
+    assert!(
+        note_text(notes[4]).contains("Ship this one."),
+        "the third slide's comment is not last: {notes:#?}"
+    );
+    assert_eq!(notes[0]["prov"][0]["page_no"], 1);
+    assert_eq!(notes[3]["prov"][0]["page_no"], 3);
+
+    // The third slide's picture and chart are kept, in deck order; the first
+    // slide has neither, and the second slide is not selected at all.
+    let pictures = doc["pictures"].as_array().expect("pictures");
+    assert_eq!(pictures.len(), 2, "a selected slide's picture was lost");
+    assert!(
+        pictures.iter().all(|picture| picture["prov"]
+            .as_array()
+            .is_some_and(|prov| prov.len() == 1 && prov[0]["page_no"] == 3)),
+        "a picture points at another slide: {pictures:#?}"
+    );
+    assert_eq!(pictures[0]["image"]["mimetype"], "image/png");
+    let uri = pictures[0]["image"]["uri"]
+        .as_str()
+        .expect("the selected slide's picture");
+    assert!(ws.join(uri).is_file(), "the picture {uri} was not written");
+    assert!(pictures[1]["image"].is_null(), "the chart became an image");
+    assert_eq!(
+        pictures[1]["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+
+    assert!(
+        doc["tables"].as_array().is_some_and(Vec::is_empty),
+        "the unselected slide's table survived"
     );
 }
 

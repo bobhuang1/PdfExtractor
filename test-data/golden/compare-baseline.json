@@ -82,6 +82,21 @@
       "joined": 0,
       "agreement": 1.0
     },
+    "annotations_calc": {
+      "rows": 4,
+      "same": 1,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 2,
+      "theirsOnly": 1,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
     "arxiv_attention": {
       "rows": 334,
       "same": 70,
@@ -112,6 +127,21 @@
       "joined": 1,
       "agreement": 1.0
     },
+    "booleans_calc": {
+      "rows": 1,
+      "same": 1,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
     "brief_odt": {
       "rows": 12,
       "same": 9,
@@ -140,6 +170,21 @@
       "placedBoxes": 0,
       "placedPagePictures": 0,
       "joined": 0,
+      "agreement": 1.0
+    },
+    "chart_sheet_calc": {
+      "rows": 7,
+      "same": 5,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 2,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 1,
       "agreement": 1.0
     },
     "chart_types_impress": {
@@ -207,6 +252,36 @@
       "same": 0,
       "notation": 0,
       "differs": 1,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
+    "filler_rows_calc": {
+      "rows": 2,
+      "same": 2,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
+    "filler_rows_over_cap_calc": {
+      "rows": 2,
+      "same": 2,
+      "notation": 0,
+      "differs": 0,
       "contained": 0,
       "oursOnly": 0,
       "theirsOnly": 0,
@@ -321,6 +396,21 @@
       "placedPagePictures": 0,
       "joined": 0,
       "agreement": 0.9090909090909091
+    },
+    "master_animations_impress": {
+      "rows": 8,
+      "same": 3,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 4,
+      "theirsOnly": 1,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
     },
     "math-accents": {
       "rows": 1,
@@ -727,20 +817,20 @@
       "joined": 0,
       "agreement": 1.0
     },
-    "master_animations_impress": {
-      "rows": 7,
-      "same": 3,
+    "worksheet_pictures_calc": {
+      "rows": 15,
+      "same": 7,
       "notation": 0,
-      "differs": 0,
+      "differs": 1,
       "contained": 0,
-      "oursOnly": 3,
-      "theirsOnly": 1,
+      "oursOnly": 0,
+      "theirsOnly": 7,
       "placed": 0,
       "placedItems": 0,
       "placedBoxes": 0,
       "placedPagePictures": 0,
-      "joined": 0,
-      "agreement": 0.9733333333333334
+      "joined": 1,
+      "agreement": 0.6335403726708074
     }
   }
 }

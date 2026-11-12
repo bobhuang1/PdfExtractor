@@ -3002,9 +3002,10 @@ fn convert_pptx(
 /// Each slide is a `chapter` group holding its text paragraphs, table and
 /// pictures; a slide's speaker notes are one item on the notes layer inside the
 /// same group. The regular shapes a slide inherits from its master page are
-/// emitted with the slide's own, in master-page order, and each animation
-/// effect is one notes-layer item naming its target shape, property and timing.
-/// A hidden slide stays on the `invisible` layer rather than being dropped.
+/// emitted with the slide's own, in master-page order. A slide's transition is
+/// one notes-layer item, and each animation effect is another, naming its
+/// target shape, property and timing. A hidden slide stays on the `invisible`
+/// layer rather than being dropped.
 /// `--page-range` selects slides before any item is emitted, so a deck's page
 /// number is still the slide's number in the document.
 fn convert_odp(
@@ -3178,6 +3179,16 @@ fn convert_odp(
         if let Some(notes) = &slide.notes {
             builder.add_notes_item_in(notes, page_no, [0.0, 0.0, 0.0, 0.0], &group);
         }
+        // A transition changes the slide before its shape effects run. Docling
+        // has no transition item either, so it is the first notes-layer item.
+        if let Some(transition) = &slide.transition {
+            builder.add_notes_item_in(
+                &transition_text(transition),
+                page_no,
+                [0.0, 0.0, 0.0, 0.0],
+                &group,
+            );
+        }
         // An animation has no Docling item of its own, so each effect is one
         // notes-layer item: the slide's timing stays in the document without
         // being mistaken for words the slide shows.
@@ -3207,6 +3218,33 @@ fn convert_odp(
     }
 
     Ok(builder.build())
+}
+
+/// One slide transition as the document records it: Docling has no transition
+/// item either, so the effect and its settings become one notes-layer item.
+fn transition_text(transition: &pdfextractor_odp_parser::Transition) -> String {
+    let mut text = format!(
+        "Transition: {}",
+        transition.effect.as_deref().unwrap_or("unspecified")
+    );
+    if let Some(subtype) = &transition.subtype {
+        text.push(' ');
+        text.push_str(subtype);
+    }
+    let mut details = Vec::new();
+    if let Some(direction) = &transition.direction {
+        details.push(format!("direction {direction}"));
+    }
+    if let Some(speed) = &transition.speed {
+        details.push(format!("speed {speed}"));
+    }
+    if let Some(duration) = &transition.duration {
+        details.push(format!("duration {duration}"));
+    }
+    if !details.is_empty() {
+        text.push_str(&format!(" ({})", details.join(", ")));
+    }
+    text
 }
 
 /// One animation effect as the document records it: Docling has no animation

@@ -234,10 +234,19 @@ fn read_sheet(
     loop {
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table-row" => {
-                let repeat = count(&attrs, "number-rows-repeated").min(MAX_REPEAT);
+                let declared = count(&attrs, "number-rows-repeated");
+                let repeat = declared.min(MAX_REPEAT);
                 let mut row_frames = Vec::new();
                 let mut row_annotations = Vec::new();
                 let cells = read_row(pull, row, &mut row_frames, &mut row_annotations)?;
+                if cells.is_empty() && row_frames.is_empty() && row_annotations.is_empty() {
+                    // The cap bounds what a repeated row can materialize, not
+                    // how far an empty filler run moves the grid: skipping it
+                    // costs nothing, so the block after it keeps the row the
+                    // producer wrote even when the run is longer than the cap.
+                    row = row.saturating_add(declared);
+                    continue;
+                }
                 for copy in 0..repeat {
                     for cell in &cells {
                         place(&mut grid, &mut covered, row + copy, cell);
@@ -1322,6 +1331,46 @@ mod tests {
             (second.num_rows, second.num_cols),
             (2, 2),
             "a repeated row is repeated, and trailing filler is not a column"
+        );
+    }
+
+    #[test]
+    fn a_filler_run_beyond_the_cap_is_skipped_whole() {
+        let body = r#"
+            <table:table table:name="Filler">
+              <table:table-column table:number-columns-repeated="2"/>
+              <table:table-row>
+                <table:table-cell><text:p>Region</text:p></table:table-cell>
+                <table:table-cell><text:p>Total</text:p></table:table-cell>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell><text:p>North</text:p></table:table-cell>
+                <table:table-cell><text:p>10</text:p></table:table-cell>
+              </table:table-row>
+              <table:table-row table:number-rows-repeated="2000">
+                <table:table-cell table:number-columns-repeated="2"/>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell><text:p>South</text:p></table:table-cell>
+                <table:table-cell><text:p>20</text:p></table:table-cell>
+              </table:table-row>
+            </table:table>"#;
+        let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
+        let sheet = &document.sheets[0];
+        assert_eq!(sheet.tables.len(), 2);
+        let first = &sheet.tables[0];
+        assert_eq!(first.anchor, (0, 0));
+        assert_eq!((first.num_rows, first.num_cols), (2, 2));
+        let second = &sheet.tables[1];
+        assert_eq!(
+            second.anchor,
+            (0, 2002),
+            "the filler run is not truncated at the materialization cap"
+        );
+        assert_eq!((second.num_rows, second.num_cols), (1, 2));
+        assert_eq!(
+            texts(sheet),
+            ["Region", "Total", "North", "10", "South", "20"]
         );
     }
 }

@@ -684,6 +684,50 @@ fn an_ods_workbook_conforms_to_the_docling_schema() {
     assert_fixture_conforms("inventory_calc.ods", "inventory_calc", "ods-schema");
 }
 
+/// The commented workbook adds what `inventory_calc.ods` has no instance of:
+/// two `office:annotation` comments, one beside a value and one on an empty
+/// cell, which our reader holds on the notes layer rather than in the grid.
+#[test]
+fn an_ods_workbook_with_cell_comments_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "annotations_calc.ods",
+        "annotations_calc",
+        "ods-comments-schema",
+    );
+}
+
+/// The filler workbook adds an empty worksheet — a page with no table — and a
+/// run of `table:number-rows-repeated` empties between two data blocks, which
+/// both readings skip without materializing a row for each.
+#[test]
+fn an_ods_workbook_with_an_empty_sheet_and_filler_rows_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "filler_rows_calc.ods",
+        "filler_rows_calc",
+        "ods-filler-schema",
+    );
+}
+
+/// The same filler shape with a run longer than the reader's 1,024-row
+/// materialization cap: the empty run is skipped whole, so the block after it
+/// stays at the row the producer wrote and the page matches Docling's height.
+#[test]
+fn an_ods_workbook_with_a_filler_run_beyond_the_cap_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "filler_rows_over_cap_calc.ods",
+        "filler_rows_over_cap_calc",
+        "ods-filler-over-cap-schema",
+    );
+}
+
+/// The boolean workbook isolates what the other Calc fixtures only meet in
+/// passing: displayed `TRUE`/`FALSE` with Docling's `True`/`False` values, and
+/// rows that end before the table's last columns.
+#[test]
+fn an_ods_workbook_with_boolean_flags_and_trailing_empty_cells_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("booleans_calc.ods", "booleans_calc", "ods-booleans-schema");
+}
+
 /// A Writer document is flow-based, so it adds the shapes the corpus's DOCX
 /// files already carry — title, headings, lists, a linked paragraph, a table
 /// with real spans and a picture — without a page: the page style's rectangle
@@ -1572,7 +1616,14 @@ const LABEL_BUDGETS: [(&str, usize, usize); 9] = [
 /// what this comparison calls a defect in *our* output — so 78/93 = 0.839 is this
 /// document's ceiling rather than a shortfall, and every character outside that
 /// duplicate is held. Everything not listed keeps the global floor.
-const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
+///
+/// `worksheet_pictures_calc.ods` is read completely: its five drawings are pictures
+/// on both sides, and the sheets' prose and data are the tables we hold. Docling's
+/// OpenDocument backend also turns each drawing's file name into a one-cell table —
+/// six on `Pictures` and one on `Summary` — and a file name is not document text;
+/// those seven cells are the whole shortfall behind 0.634, so the floor sits just
+/// under what this reading can reach.
+const TEXT_FLOORS: [(&str, f64); 2] = [("late_header", 0.83), ("worksheet_pictures_calc", 0.63)];
 
 /// Documents whose reference publishes no pages although ours does, with the
 /// reason the page count is not compared.
@@ -1857,6 +1908,10 @@ fn docling_core_accepts_our_documents() {
     for (file, stem) in [
         ("inventory.xlsx", "inventory"),
         ("inventory_calc.ods", "inventory_calc"),
+        ("annotations_calc.ods", "annotations_calc"),
+        ("filler_rows_calc.ods", "filler_rows_calc"),
+        ("filler_rows_over_cap_calc.ods", "filler_rows_over_cap_calc"),
+        ("booleans_calc.ods", "booleans_calc"),
         ("brief_odt.odt", "brief_odt"),
         ("notes_odt.odt", "notes_odt"),
         ("q3_review.pptx", "q3_review"),

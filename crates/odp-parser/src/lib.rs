@@ -27,11 +27,13 @@
 //! page states `presentation:background-objects-visible="false"`. A slide's
 //! animation effects are read from its `anim:` timing tree; each effect names
 //! the shape its `smil:targetElement` resolves to, the property it changes and
-//! its timing. Page transitions are not read.
+//! its timing. A slide's transition is the whole-page `anim:transitionFilter`
+//! (or the matching `smil:type` on its drawing-page style), read apart from the
+//! shape effects it precedes.
 
 mod parser;
 
 pub use parser::{
     Animation, Comment, OdpDocument, Paragraph, PictureShape, Shape, Slide, Table, TableCell,
-    TableShape, TextShape,
+    TableShape, TextShape, Transition,
 };

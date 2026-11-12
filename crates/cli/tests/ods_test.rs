@@ -414,6 +414,112 @@ fn an_ods_sheet_chart_is_its_data_rather_than_a_picture() {
     assert!(!ws.join("chart_sheet_calc_images").exists());
 }
 
+/// A chart's ranges name the sheet they read, and the chart sheet's own cells are
+/// not a stand-in for them: this workbook anchors the chart on `Charts`, plots
+/// `Figures`, and puts deliberately wrong numbers on `Charts` so a reading that
+/// ignored the sheet in a range would be visible in the table.
+#[test]
+fn a_chart_on_one_sheet_plots_cells_from_another() {
+    let ws = Workspace::new("cross-sheet-chart");
+    let path = test_data("chart_cross_sheet_calc.ods");
+    let output = ws.join("chart_cross_sheet_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--to",
+        "html",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(page_numbers(&doc), [1, 2]);
+
+    // Both sheets are still pages of their own, and the chart sheet keeps its
+    // decoy cells as that sheet's table.
+    let tables = doc["tables"].as_array().expect("a table list");
+    assert_eq!(tables.len(), 2, "{tables:#?}");
+    assert_eq!(cell(&doc, "999")["text"], "999");
+    assert_eq!(cell(&doc, "North")["text"], "North");
+
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 1, "the chart on Charts: {pictures:#?}");
+    let chart = &pictures[0];
+    assert_eq!(
+        chart["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+    assert!(chart["image"].is_null(), "a chart was written as an image");
+    assert_eq!(chart["prov"][0]["page_no"].as_i64(), Some(2));
+    assert_eq!(chart["prov"][0]["bbox"]["l"].as_f64(), Some(4.0));
+    assert_eq!(chart["prov"][0]["bbox"]["t"].as_f64(), Some(1.0));
+
+    let data = &chart["meta"]["tabular_chart"]["chart_data"];
+    assert_eq!(data["num_rows"].as_u64(), Some(4), "{data:#?}");
+    assert_eq!(data["num_cols"].as_u64(), Some(3), "{data:#?}");
+    let cells: Vec<(u64, u64, &str)> = data["table_cells"]
+        .as_array()
+        .expect("the chart's cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["start_row_offset_idx"].as_u64().unwrap(),
+                cell["start_col_offset_idx"].as_u64().unwrap(),
+                cell["text"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for cell in [
+        (0, 1, "Q1"),
+        (0, 2, "Q2"),
+        (1, 0, "North"),
+        (1, 1, "120"),
+        (1, 2, "140"),
+        (2, 0, "South"),
+        (2, 1, "90"),
+        (2, 2, "95"),
+        (3, 0, "West"),
+        (3, 1, "60"),
+        (3, 2, "80"),
+    ] {
+        assert!(cells.contains(&cell), "{cell:?} is missing: {cells:?}");
+    }
+    assert!(
+        cells
+            .iter()
+            .all(|(_, _, text)| *text != "Wrong" && !text.contains("999")),
+        "the chart plotted the chart sheet's decoys: {cells:?}"
+    );
+
+    let caption = chart["captions"][0]["$ref"]
+        .as_str()
+        .expect("a caption ref");
+    let caption_item = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .find(|item| item["self_ref"] == caption)
+        .expect("the caption item");
+    assert_eq!(caption_item["text"], "Cross-sheet revenue");
+    assert_eq!(caption_item["label"], "caption");
+
+    let markdown =
+        std::fs::read_to_string(ws.join("chart_cross_sheet_calc.md")).expect("the Markdown");
+    assert!(markdown.contains("Cross-sheet revenue"), "{markdown}");
+    assert!(
+        !markdown.contains("!["),
+        "a chart became an image: {markdown}"
+    );
+    let html = std::fs::read_to_string(ws.join("chart_cross_sheet_calc.html")).expect("the HTML");
+    assert!(html.contains("Cross-sheet revenue"), "{html}");
+    assert!(!html.contains("<img"), "a chart became an image: {html}");
+    assert!(!ws.join("chart_cross_sheet_calc_images").exists());
+}
+
 #[test]
 fn a_file_that_is_not_a_package_is_refused_as_such() {
     let ws = Workspace::new("broken");
