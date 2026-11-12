@@ -1025,8 +1025,18 @@ fn a_selftest_run_forwards_the_tokenizer_encoding_to_the_cli() {
         "the page did not choose the requested encoding:\n{report}"
     );
     assert!(
-        report.contains("tokenizer tokenizer-mini.tiktoken (tiktoken · cl100k_base · 257 tokens)"),
+        report.contains(
+            "tokenizer tokenizer-mini.tiktoken (detected: tiktoken · cl100k_base · 257 tokens)"
+        ),
         "the run summary omitted the detected tokenizer format and size:\n{report}"
+    );
+    assert!(
+        report.contains("selected encoding o200k_base"),
+        "the run summary did not distinguish the selected encoding from the detected family:\n{report}"
+    );
+    assert!(
+        !report.contains("· tiktoken o200k_base"),
+        "the selected encoding still reads as a second tokenizer format:\n{report}"
     );
     assert!(
         report.contains("--to json --to chunks") && report.contains("--chunks-type hybrid"),

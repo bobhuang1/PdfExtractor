@@ -107,11 +107,11 @@ function describe(settings) {
       const badge = el("chunks-tokenizer-format");
       const detected = badge.classList.contains("bad") ? "" : badge.textContent.trim();
       bits.push(
-        `tokenizer ${baseName(settings.chunksTokenizer)}${detected ? ` (${detected})` : ""}`
+        `tokenizer ${baseName(settings.chunksTokenizer)}${detected ? ` (detected: ${detected})` : ""}`
       );
     }
     if (settings.chunksTokenizer && settings.chunksTokenizerEncoding) {
-      bits.push(`tiktoken ${settings.chunksTokenizerEncoding}`);
+      bits.push(`selected encoding ${settings.chunksTokenizerEncoding}`);
     }
   }
   if (settings.preview) {
