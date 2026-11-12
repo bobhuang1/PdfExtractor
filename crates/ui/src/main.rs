@@ -105,6 +105,12 @@ static SELFTEST_BAD_BUDGET: OnceLock<Option<String>> = OnceLock::new();
 /// `--selftest-bad-overlap VALUE`: the same for the overlap box.
 static SELFTEST_BAD_OVERLAP: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-bad-encoding VALUE`: with `--selftest`, tick Retrieval chunks,
+/// choose hybrid, choose VALUE in the encoding selector with no tokenizer file,
+/// and press Convert. The form must refuse the orphaned encoding before a
+/// conversion process exists.
+static SELFTEST_BAD_ENCODING: OnceLock<Option<String>> = OnceLock::new();
+
 /// `--selftest-reveal`: with `--selftest`, press the result pane's action once a
 /// run finishes and print the path it asks to reveal. The command reports that
 /// path instead of opening a file manager, so a test can check what the window
@@ -561,6 +567,7 @@ fn frontend_ready(app: tauri::AppHandle) {
     let bad_range = SELFTEST_BAD_RANGE.get().cloned().flatten();
     let bad_budget = SELFTEST_BAD_BUDGET.get().cloned().flatten();
     let bad_overlap = SELFTEST_BAD_OVERLAP.get().cloned().flatten();
+    let bad_encoding = SELFTEST_BAD_ENCODING.get().cloned().flatten();
     let reveal = SELFTEST_REVEAL.get().copied().unwrap_or(false);
     let _ = app.emit(
         SELFTEST_ON,
@@ -569,6 +576,7 @@ fn frontend_ready(app: tauri::AppHandle) {
             "badRange": bad_range.clone(),
             "badBudget": bad_budget.clone(),
             "badOverlap": bad_overlap.clone(),
+            "badEncoding": bad_encoding.clone(),
             "reveal": reveal,
             "input": selftest_input.clone(),
             "output": output,
@@ -594,9 +602,10 @@ fn frontend_ready(app: tauri::AppHandle) {
 
     // A malformed count is refused either by the page (a fraction or a typo) or
     // by `start_conversion` (a zero budget, an overlap as large as the budget);
-    // either way the page presses Convert and reports the refusal, so nothing is
+    // an encoding with no tokenizer is refused by the form's own `problem`. In
+    // every case the page presses Convert and reports the refusal, so nothing is
     // started here.
-    if bad_budget.is_some() || bad_overlap.is_some() {
+    if bad_budget.is_some() || bad_overlap.is_some() || bad_encoding.is_some() {
         return;
     }
 
@@ -698,6 +707,12 @@ fn selftest_bad_overlap(args: &[String]) -> Option<String> {
     selftest_value(args, "--selftest-bad-overlap")
 }
 
+/// Parse `--selftest-bad-encoding VALUE`, the encoding a smoke test chooses
+/// without a tokenizer file.
+fn selftest_bad_encoding(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-encoding")
+}
+
 /// Parse `--selftest-reveal`: press the result pane's action after a run.
 fn selftest_reveal(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--selftest-reveal")
@@ -732,6 +747,7 @@ fn main() {
                                    [--selftest-bad-range RANGE]\n\
                                    [--selftest-bad-budget VALUE]\n\
                                    [--selftest-bad-overlap VALUE]\n\
+                                   [--selftest-bad-encoding VALUE]\n\
                                    [--selftest-reveal] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
@@ -749,7 +765,9 @@ fn main() {
              --selftest-bad-range fills an unreadable page range and presses\n\
              Convert, so the page's refusal is checked instead of a run;\n\
              --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
-             malformed chunk count the same way; --selftest-reveal presses the\n\
+             malformed chunk count the same way; --selftest-bad-encoding VALUE\n\
+             chooses an encoding with no tokenizer and checks that refusal;\n\
+             --selftest-reveal presses the\n\
              result pane's action after a run. What such a run\n\
              converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
@@ -769,6 +787,7 @@ fn main() {
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
     let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
     let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));
+    let _ = SELFTEST_BAD_ENCODING.set(selftest_bad_encoding(&args));
     let _ = SELFTEST_REVEAL.set(selftest_reveal(&args));
 
     tauri::Builder::default()

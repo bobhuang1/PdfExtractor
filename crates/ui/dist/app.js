@@ -901,6 +901,29 @@ function dispatch(kind, payload) {
       });
       return;
     }
+    // `--selftest-bad-encoding` chooses a family with no tokenizer file, the
+    // form the window refuses before it builds a command. The chunk row is
+    // ticked first so the selector is live, then Convert is pressed and the
+    // refusal is reported like any other.
+    if (payload && payload.badEncoding) {
+      el("input").value = payload.input || "";
+      const box = document.querySelector('#to input[value="chunks"]');
+      box.checked = true;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      el("chunks-type").value = "hybrid";
+      el("chunks-type").dispatchEvent(new Event("change", { bubbles: true }));
+      el("chunks-tokenizer").value = "";
+      el("chunks-tokenizer-encoding").value = payload.badEncoding;
+      el("chunks-tokenizer-encoding").dispatchEvent(
+        new Event("change", { bubbles: true })
+      );
+      start().then(() => {
+        invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+          console.error(error)
+        );
+      });
+      return;
+    }
     // `--selftest-chunks` ticks the boxes a person would tick, so the row is
     // drawn by its own gating rather than assumed: the report then says what
     // the window shows, not what the run was told.

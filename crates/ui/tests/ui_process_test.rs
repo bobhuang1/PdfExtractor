@@ -191,6 +191,66 @@ fn a_malformed_chunk_overlap_is_refused_before_a_conversion() {
     }
 }
 
+/// An encoding chosen with no tokenizer is refused by the form before a command
+/// is built: the chunk row is ticked, hybrid chosen, the selector set and the
+/// tokenizer box left empty, then Convert is pressed. No process exists behind
+/// the refusal.
+#[test]
+fn an_encoding_without_a_tokenizer_is_refused_before_a_conversion() {
+    let root = repository_root();
+    let input = root.join("test-data/brief.docx");
+    assert!(input.exists(), "missing fixture {}", input.display());
+
+    let Some(mut command) = ui_command() else {
+        return;
+    };
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg("--selftest-bad-encoding")
+        .arg("o200k_base")
+        .env("PDFEXTRACTOR_CLI", false_program());
+
+    let output = run_with_timeout(command, Duration::from_secs(60));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-started"),
+        "a conversion was started instead of refusing the form:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-conversion-started"),
+        "a conversion process was started instead of refusing the form:\n{stdout}"
+    );
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert_chunk_refusal(
+        report,
+        "tokenizer-encoding=o200k_base",
+        "Choose a tokenizer file before choosing its encoding.",
+    );
+    assert!(
+        report.contains("tokenizer=\"\""),
+        "the refused form kept a tokenizer file:\n{report}"
+    );
+}
+
 #[test]
 fn a_bad_page_range_shows_its_message_and_leaves_convert_enabled() {
     let root = repository_root();
