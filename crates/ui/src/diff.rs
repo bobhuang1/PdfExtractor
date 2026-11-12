@@ -27,17 +27,17 @@
 //!
 //! Where both producers published a box, that box takes part in the score the
 //! alignment picks pairs by, not just in the joining afterwards. The words keep the
-//! gate — a pair is a link at all only if their words clear [`LINK_THRESHOLD`], and
+//! gate — a pair is a link at all only if their words clear `LINK_THRESHOLD`, and
 //! no box can invent one or unmake one — but the boxes decide *which* of two links
 //! the alignment takes: a pair both producers put in the same place on the same page
-//! is worth [`PLACE_BONUS`] more, which is what tells apart two pairs the words
+//! is worth `PLACE_BONUS` more, which is what tells apart two pairs the words
 //! cannot (a picture a document lists twice, in one order on each side: only the box
 //! says which copy is which), and a pair they put in different places loses
-//! [`PLACE_COST`], which is what makes two such pairs lose to the one pair the boxes
+//! `PLACE_COST`, which is what makes two such pairs lose to the one pair the boxes
 //! agree about. A pair the boxes contradict is never hidden by any of this: it is a
 //! row like any other, which then says where each reading put the block. Nothing of
 //! it happens for a pair of equations (their text is a rendering, not words, so the
-//! boxes have nothing to add to what [`EQUATION_SIMILARITY`] already does) nor for a
+//! boxes have nothing to add to what `EQUATION_SIMILARITY` already does) nor for a
 //! document without geometry, which is every flow format — a DOCX is compared by
 //! content exactly as before.
 //!
@@ -135,14 +135,14 @@
 //! are collected the other way round as well — every one of them, grouped by the page it
 //! lies on ([`PlacedPage`]) — and the panel draws each page once, with all of its boxes at
 //! once, so a form's leader pattern is one picture rather than one thumbnail per row. It
-//! is built before the rows are cut to [`MAX_ROWS`], so a long form's page is whole even
+//! is built before the rows are cut to `MAX_ROWS`, so a long form's page is whole even
 //! where its rows are not, and it holds *items* rather than rows: the picture is of what
 //! the reference wrote, dot run by dot run, not of the lines the rows were grouped into.
 //!
 //! The work is bounded, because a window must not hang on a pathological
-//! document: at most [`MAX_BLOCKS`] blocks a side are aligned (the alignment is
-//! quadratic in that), at most [`MAX_ROWS`] rows are sent to the page, and every
-//! text is clipped to [`MAX_TEXT`] characters. What was left out is counted in
+//! document: at most `MAX_BLOCKS` blocks a side are aligned (the alignment is
+//! quadratic in that), at most `MAX_ROWS` rows are sent to the page, and every
+//! text is clipped to `MAX_TEXT` characters. What was left out is counted in
 //! [`Summary::truncated`], so a truncated view never claims to be the whole one.
 //!
 //! A comparison can also be held against a **memory**: the numbers a previous run
@@ -178,7 +178,7 @@ const LINK_THRESHOLD: f64 = 0.5;
 ///
 /// The alignment maximises its total, so this only has to beat leaving the item
 /// alone, which is worth nothing; and it must not outbid a block that really
-/// matches another, which clears [`LINK_THRESHOLD`] — a single contained item ties
+/// matches another, which clears `LINK_THRESHOLD` — a single contained item ties
 /// that at worst. Being per item is what makes a run one row rather than a row for
 /// the first item and a one-sided row for each of the rest.
 const CONTAINED_SCORE: f64 = LINK_THRESHOLD;
@@ -250,10 +250,10 @@ const PLACE_BONUS: f64 = LINK_THRESHOLD / 10.0;
 
 /// What a pairing the boxes contradict loses to one they agree about.
 ///
-/// As much as a link needs at all ([`LINK_THRESHOLD`]). The size is not a taste:
+/// As much as a link needs at all (`LINK_THRESHOLD`). The size is not a taste:
 /// two identical pictures listed in opposite orders are offered to the alignment as
 /// two pairs, each worth the full similarity, while the one pairing the boxes do
-/// agree about is worth one such pair plus [`PLACE_BONUS`]. Losing this much apiece
+/// agree about is worth one such pair plus `PLACE_BONUS`. Losing this much apiece
 /// is what makes those two pairs (worth `2 - 2 * PLACE_COST`) lose to the one right
 /// one, so the alignment takes the pair the boxes point at and leaves the other two
 /// blocks to be joined in the same place afterwards.
@@ -414,7 +414,7 @@ pub struct Placement {
 ///
 /// The rows say *what* was placed, one line of a form at a time; this says where every
 /// one of those items lies, together, on the shape of the page they share. It is built
-/// from the rows *before* they are cut to [`MAX_ROWS`], so a long form's page is whole
+/// from the rows *before* they are cut to `MAX_ROWS`, so a long form's page is whole
 /// even where its rows are not — the drawing is a picture of the document, not of the
 /// part of it the panel had room to list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -673,7 +673,7 @@ impl Numbers {
     /// The placed items are counted from the *rows* rather than from [`Summary`]: the
     /// items of one line of a form are placed as one row, and the row is what names how
     /// many of the reference's items it stands for. The boxes and the pictures come from
-    /// [`Report::placed_pages`], which is built before the rows are cut to [`MAX_ROWS`], so
+    /// [`Report::placed_pages`], which is built before the rows are cut to `MAX_ROWS`, so
     /// a long form's page is counted whole even where its rows are not.
     pub fn of(report: &Report) -> Numbers {
         let summary = &report.summary;
@@ -1390,7 +1390,7 @@ fn align(ours: &[Block], theirs: &[Block]) -> Vec<Row> {
     // theirs[j-1], which is what the walk back follows. `grouped[i][j]`: how many
     // reference items it ends with beside ours[i-1] instead, all of them inside it.
     // (`u16` is enough: a run cannot be longer than the reference's own blocks, and
-    // only [`MAX_BLOCKS`] of those are ever aligned.)
+    // only `MAX_BLOCKS` of those are ever aligned.)
     let mut score = vec![vec![0.0f64; m + 1]; n + 1];
     let mut paired = vec![vec![false; m + 1]; n + 1];
     let mut grouped = vec![vec![0u16; m + 1]; n + 1];
@@ -2529,11 +2529,11 @@ fn picture_similarity(ours: &Block, theirs: &Block, dice: f64) -> f64 {
 /// What the alignment asks of a pair of blocks: whether their words make them a
 /// link at all, and what that link is worth once the boxes have had their say.
 ///
-/// `None` is the words saying no: two blocks that do not clear [`LINK_THRESHOLD`]
+/// `None` is the words saying no: two blocks that do not clear `LINK_THRESHOLD`
 /// are two rows, and no box changes that. What the boxes change is *which* link the
 /// alignment takes where the words offer it more than one: a pair both producers
-/// put in the same place is worth [`PLACE_BONUS`] more, one they put in different
-/// places [`PLACE_COST`] less. Two pairs are left out of that: two equations, whose
+/// put in the same place is worth `PLACE_BONUS` more, one they put in different
+/// places `PLACE_COST` less. Two pairs are left out of that: two equations, whose
 /// text is a rendering rather than words, so that a pair of them is a pair for
 /// reasons that have nothing to do with where either sits.
 fn link_score(ours: &Block, ours_key: &Key, theirs: &Block, theirs_key: &Key) -> Option<f64> {
@@ -2587,7 +2587,7 @@ fn clip(row: &mut Row) {
     }
 }
 
-/// Text clipped to [`MAX_TEXT`] characters, with the clipping made visible.
+/// Text clipped to `MAX_TEXT` characters, with the clipping made visible.
 fn clip_text(text: &str) -> String {
     if text.chars().count() <= MAX_TEXT {
         return text.to_string();
