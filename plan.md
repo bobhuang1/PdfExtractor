@@ -109,7 +109,7 @@ pdf-extractor/
 ### Phase 2: Core Types & JSON Schema (3-5 days)
 - [x] Define Rust structs for Docling JSON (pages, blocks, text, tables, images, bbox/coords, metadata) **Done**: `crates/core/src/types.rs` carries `DoclingDocument` and every node the schema names — `Page`/`Size`, `TextItem`, `TableItem`/`TableData`/`TableCell`, `PictureItem` with its `tabular_chart`, `Group`, `KeyValueItem`, the furniture layers, `Provenance` and `Ref` — and the conformance test walks each against the schema's required fields and enum values.
 - [x] Implement serialization (serde) to match exact JSON format **Done**: `crates/json-exporter` writes the model with `serde_json` at the schema's key order and shape, and every committed golden is that output byte for byte.
-- [x] Golden tests with known Docling outputs **Done**: 57 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
+- [x] Golden tests with known Docling outputs **Done**: 58 real Docling conversions are committed under `test-data/golden/docling/` and compared by `docling_golden_test`; the schema layer holds each document we write to the same standard, and the ratchet holds the agreement figures each reference was measured at.
 
 ### Phase 3: DOCX Parser (1-2 weeks) — largely done
 - [x] Parse DOCX as OPC package (ZIP of XML), reusing the `zip` crate.
@@ -365,7 +365,7 @@ pdf-extractor/
 - [ ] Feature flag/config to enable/disable
 
 ### Phase 10: Testing, Optimization, Docs (Ongoing)
-- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — forty-one tests in the binary: the corpus-wide conformance check, seventeen fixture checks, a version check, twenty comparison units and two acceptance tests.
+- [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 - [ ] Performance tests with varied sizes
 - [ ] Cross-platform testing
 - [x] Error handling tests (malformed docs) **Done**: `cli_test` holds the inputs a run must refuse rather than crash on — `a_failed_document_appears_in_the_progress_stream` (a `.docx` that is not a package), `an_unsupported_file_errors`, `a_missing_input_errors`, `an_empty_directory_errors` and `a_refused_name_is_explained_by_the_files_bytes` — and each asserts the exit status and the reason, not merely that something failed.
@@ -919,7 +919,17 @@ PDFBox and PDF.js.
   two table-less chart pictures, with text agreement 1.000. A third chart
   fixture, `chart_cross_sheet_calc.ods` (`test-data/make_chart_cross_sheet_xlsx.py`),
   anchors its chart on `Charts` and plots cells on `Figures`, with decoys on the
-  chart's own sheet, so a chart's ranges are followed to the sheet each names.
+  chart's own sheet, so a chart's ranges are followed to the sheet each names. It
+  carries a real Docling reference of its own
+  (`test-data/golden/docling/chart_cross_sheet_calc.json`) and joins the ratchet:
+  two pages, one caption, three tables against our two, and one table-less bar
+  chart, with four of five rows agreeing and the fifth the reference's empty
+  anchor table. A fourth fixture, `chart_quoted_sheet_calc.ods`, puts its data
+  on `Quarterly Totals` and the chart on `Dashboard`, so Calc writes every
+  range quoted on both ends (`'Quarterly Totals'.B2:'Quarterly Totals'.B4`);
+  the end-to-end test pins that package spelling and the plotted grid. A range
+  naming a sheet the workbook does not have is refused, naming the chart's
+  sheet, the range and the missing sheet, rather than becoming an empty chart.
   **Done**, and it carries a real Docling reference of its own
   (`test-data/golden/docling/inventory_calc.json`, read through Docling's
   OpenDocument backend): three pages and four tables, the same workbook Docling

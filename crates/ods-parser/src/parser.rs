@@ -196,11 +196,13 @@ fn read_sheets(
         }
     }
 
-    let resolved: Vec<(Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>)> = sheets
-        .iter()
-        .zip(&frames)
-        .map(|(sheet, frames)| drawings(&sheets, &sheet.name, frames, media, objects))
-        .collect();
+    let mut resolved = Vec::with_capacity(sheets.len());
+    for (sheet, frames) in sheets.iter().zip(&frames) {
+        resolved.push(
+            drawings(&sheets, &sheet.name, frames, media, objects)
+                .with_context(|| format!("reading the charts on sheet {:?}", sheet.name))?,
+        );
+    }
     for (sheet, (pictures, charts)) in sheets.iter_mut().zip(resolved) {
         sheet.pictures = pictures;
         sheet.charts = charts;
@@ -718,14 +720,14 @@ fn drawings(
     frames: &[Frame],
     media: &HashMap<String, Vec<u8>>,
     objects: &HashMap<String, Vec<u8>>,
-) -> (Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>) {
+) -> Result<(Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>)> {
     let mut pictures = Vec::new();
     let mut charts = Vec::new();
     for frame in frames {
         if let Some(object) = &frame.object {
             let object = object.trim_start_matches("./");
             if let Some(bytes) = objects.get(object) {
-                if let Some(mut chart) = chart::read_chart(bytes, sheet_name, sheets) {
+                if let Some(mut chart) = chart::read_chart(bytes, sheet_name, sheets)? {
                     chart.bbox = frame.bbox();
                     charts.push(chart);
                 }
@@ -759,7 +761,7 @@ fn drawings(
             });
         }
     }
-    (pictures, charts)
+    Ok((pictures, charts))
 }
 
 /// The value a cell states when it displays no text.

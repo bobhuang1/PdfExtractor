@@ -728,6 +728,30 @@ fn an_ods_workbook_with_boolean_flags_and_trailing_empty_cells_conforms_to_the_d
     assert_fixture_conforms("booleans_calc.ods", "booleans_calc", "ods-booleans-schema");
 }
 
+/// The picture workbook adds the drawings the other Calc fixtures have none of:
+/// five cell-anchored pictures written beside the JSON, each a picture item
+/// rather than a table or an image carried inside one.
+#[test]
+fn an_ods_workbook_with_pictures_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "worksheet_pictures_calc.ods",
+        "worksheet_pictures_calc",
+        "ods-pictures-schema",
+    );
+}
+
+/// The chart workbook adds the chart pictures the picture workbook has no
+/// instance of: two charts read as tabular data with their caption and no image,
+/// on the same sheet groups and tables the schema already knows.
+#[test]
+fn an_ods_workbook_with_charts_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "chart_sheet_calc.ods",
+        "chart_sheet_calc",
+        "ods-charts-schema",
+    );
+}
+
 /// A Writer document is flow-based, so it adds the shapes the corpus's DOCX
 /// files already carry — title, headings, lists, a linked paragraph, a table
 /// with real spans and a picture — without a page: the page style's rectangle

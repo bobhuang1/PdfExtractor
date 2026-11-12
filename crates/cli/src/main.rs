@@ -44,7 +44,7 @@ impl OcrMode {
     /// The name this mode has on the command line — the same name a compare
     /// baseline records its measurement's OCR mode under, so a run measured with
     /// `--ocr never` matches a memory that says `"never"` and one that does not
-    /// match is told apart as what it is (see [`compare::Session`]).
+    /// match is told apart as what it is (see `compare::Session`).
     fn as_str(self) -> &'static str {
         match self {
             OcrMode::Auto => "auto",
@@ -609,12 +609,12 @@ fn announce(
                         "total": total,
                         "input": input.display().to_string(),
                         "ok": false,
-                        "error": err.to_string(),
+                        "error": format!("{err:#}"),
                     })
                 );
                 flush_stdout();
             }
-            eprintln!("error: {}: {err}", input.display());
+            eprintln!("error: {}: {err:#}", input.display());
         }
     }
 }
