@@ -46,6 +46,7 @@ const CASES: &[&str] = &[
     "annotations_calc.ods", // an OpenDocument workbook whose cell comments are on the notes layer
     "worksheet_pictures_calc.ods", // a worksheet's pictures: each frame's media copied beside the render
     "chart_sheet_calc.ods",        // a worksheet's embedded charts: tables and captions, no image
+    "filler_rows_over_cap_calc.ods", // a filler run beyond the cap: the next block keeps its row
     "chart_types_impress.odp",     // a slide whose charts are data, with no image to render
     "brief_odt.odt", // a Writer document: the brief as a package, its flow and picture
     "notes_odt.odt", // the same reader's footnote and table inside a cell: notes and nesting
@@ -80,6 +81,7 @@ fn input_of(name: &str) -> PathBuf {
         | "annotations_calc.ods"
         | "worksheet_pictures_calc.ods"
         | "chart_sheet_calc.ods"
+        | "filler_rows_over_cap_calc.ods"
         | "chart_types_impress.odp"
         | "brief_odt.odt"
         | "notes_odt.odt"
