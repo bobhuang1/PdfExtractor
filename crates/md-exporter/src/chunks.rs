@@ -1514,6 +1514,11 @@ mod tests {
                     original.count_tokens(mixed),
                     "{fixture} counted a longer mixed sentence differently when renamed with {how}"
                 );
+                assert!(
+                    renamed.count_tokens(mixed) > renamed.count_tokens("abcdefgh"),
+                    "{fixture} did not count the mixed sentence as more tokens than one word \
+                     when renamed with {how}"
+                );
             }
         }
 
