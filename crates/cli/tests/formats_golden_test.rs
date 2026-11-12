@@ -49,9 +49,10 @@ const CASES: &[&str] = &[
     "link_annotations.pdf",    // a PDF whose link is an `<a href>` in the HTML
     "chart_deck.pptx",         // a deck whose only picture is a chart: no file to place
     "inventory_calc.ods",      // a workbook whose sheets are pages, its merge a span
+    "chart_types_impress.odp", // a slide's chart data, with no image to render
     "brief_odt.odt",           // a Writer document: a flow with a picture, read as one
     "notes_odt.odt",           // a Writer document with a footnote and a table inside a cell
-    "q3_review_impress.odp",    // the deck as Impress saved it: slides, notes and comments
+    "q3_review_impress.odp",   // the deck as Impress saved it: slides, notes and comments
     "rtf_bitmap.rtf",          // a word processor's own RTF export, control words and all
 ];
 
@@ -59,6 +60,17 @@ const CASES: &[&str] = &[
 /// extension, so a format whose file name changes still fails the same way)
 /// and the file extension it is written under.
 const FORMATS: &[(&str, &str)] = &[("html", "html"), ("text", "txt"), ("yaml", "yaml")];
+
+/// The renderings pinned for `name`. The chart-family deck is pinned in HTML
+/// here, with its Markdown pin in `md_golden_test`; text and YAML are not
+/// pinned for it.
+fn formats_of(name: &str) -> &'static [(&'static str, &'static str)] {
+    if name == "chart_types_impress.odp" {
+        &[("html", "html")]
+    } else {
+        FORMATS
+    }
+}
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -80,6 +92,7 @@ fn input_of(name: &str) -> PathBuf {
         | "link_annotations.pdf"
         | "chart_deck.pptx"
         | "inventory_calc.ods"
+        | "chart_types_impress.odp"
         | "brief_odt.odt"
         | "notes_odt.odt"
         | "q3_review_impress.odp"
@@ -228,8 +241,8 @@ fn html_text_and_yaml_match_the_golden_files() {
     // from a leftover once all of that format's documents have been read.
     let mut goldens: BTreeMap<&str, Vec<String>> = BTreeMap::new();
 
-    for (format, ext) in FORMATS {
-        for name in CASES {
+    for name in CASES {
+        for (format, ext) in formats_of(name) {
             goldens
                 .entry(*format)
                 .or_default()
