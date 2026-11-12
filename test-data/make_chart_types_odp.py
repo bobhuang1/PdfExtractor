@@ -2,10 +2,10 @@
 """Write `test-data/chart_types_impress.odp` with LibreOffice.
 
 The fixture is a real Impress package whose chart objects isolate what the
-ODP reader's inline tests describe: a pie, a line with two series, and a chart
-with no `local-table`. The last object is made by deleting the cached table
-from LibreOffice's own export, so the rest of the object is still what a
-producer writes.
+ODP reader's inline tests describe: a pie, a line with two series, a scatter
+with x-values in `chart:domain`, and a chart with no `local-table`. The last
+object is made by deleting the cached table from LibreOffice's own export, so
+the rest of the object is still what a producer writes.
 
 The Docling reference beside it is generated from this file, not written by
 hand:
@@ -26,7 +26,7 @@ import tempfile
 import zipfile
 
 from pptx import Presentation
-from pptx.chart.data import CategoryChartData
+from pptx.chart.data import CategoryChartData, XyChartData
 from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
@@ -51,15 +51,15 @@ def add_title(slide, text: str) -> None:
 
 
 def add_caption(slide, left: float, text: str) -> None:
-    box = slide.shapes.add_textbox(Inches(left), Inches(6.35), Inches(4.1), Inches(0.55))
+    box = slide.shapes.add_textbox(Inches(left), Inches(6.35), Inches(3.0), Inches(0.55))
     frame = box.text_frame
     frame.text = text
     frame.paragraphs[0].runs[0].font.size = Pt(14)
 
 
-def add_chart(slide, kind, left: float, data: CategoryChartData, title: str):
+def add_chart(slide, kind, left: float, data, title: str):
     chart = slide.shapes.add_chart(
-        kind, Inches(left), Inches(1.2), Inches(4.1), Inches(4.9), data
+        kind, Inches(left), Inches(1.2), Inches(3.0), Inches(4.9), data
     ).chart
     chart.has_title = True
     chart.chart_title.text_frame.text = title
@@ -78,21 +78,28 @@ def main() -> None:
     pie = CategoryChartData()
     pie.categories = ["North America", "Europe", "Asia Pacific"]
     pie.add_series("Revenue", (120, 98, 74))
-    add_chart(slide, XL_CHART_TYPE.PIE, 0.35, pie, "Revenue by region")
-    add_caption(slide, 0.45, "Pie chart with a local table")
+    add_chart(slide, XL_CHART_TYPE.PIE, 0.25, pie, "Revenue by region")
+    add_caption(slide, 0.3, "Pie chart with a local table")
 
     line = CategoryChartData()
     line.categories = ["Q2", "Q3", "Q4"]
     line.add_series("North America", (120, 145, 150))
     line.add_series("Europe", (98, 121, 130))
-    add_chart(slide, XL_CHART_TYPE.LINE_MARKERS, 4.55, line, "Quarterly trend")
-    add_caption(slide, 4.65, "Line chart with two series")
+    add_chart(slide, XL_CHART_TYPE.LINE_MARKERS, 3.4, line, "Quarterly trend")
+    add_caption(slide, 3.45, "Line chart with two series")
+
+    scatter = XyChartData()
+    samples = scatter.add_series("Samples")
+    for x, y in [(1, 2), (2, 4), (3, 3)]:
+        samples.add_data_point(x, y)
+    add_chart(slide, XL_CHART_TYPE.XY_SCATTER, 6.55, scatter, "Signal by sample")
+    add_caption(slide, 6.6, "Scatter chart with x/y points")
 
     uncached = CategoryChartData()
     uncached.categories = ["North America", "Europe", "Asia Pacific"]
     uncached.add_series("Revenue", (120, 98, 74))
-    add_chart(slide, XL_CHART_TYPE.COLUMN_CLUSTERED, 8.75, uncached, "No cached data")
-    add_caption(slide, 8.85, "Chart without a local table")
+    add_chart(slide, XL_CHART_TYPE.COLUMN_CLUSTERED, 9.7, uncached, "No cached data")
+    add_caption(slide, 9.75, "Chart without a local table")
 
     with tempfile.TemporaryDirectory() as scratch:
         source = pathlib.Path(scratch) / "chart_types.pptx"

@@ -142,6 +142,21 @@
       "joined": 0,
       "agreement": 1.0
     },
+    "chart_types_impress": {
+      "rows": 11,
+      "same": 11,
+      "notation": 0,
+      "differs": 0,
+      "contained": 0,
+      "oursOnly": 0,
+      "theirsOnly": 0,
+      "placed": 0,
+      "placedItems": 0,
+      "placedBoxes": 0,
+      "placedPagePictures": 0,
+      "joined": 0,
+      "agreement": 1.0
+    },
     "chartex": {
       "rows": 19,
       "same": 5,

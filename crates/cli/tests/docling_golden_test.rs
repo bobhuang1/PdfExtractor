@@ -731,6 +731,18 @@ fn an_odp_presentation_with_master_backgrounds_and_animations_conforms_to_the_do
     );
 }
 
+/// The chart fixture isolates what the deck above only meets as one bar chart:
+/// a pie, a line with two series, a scatter with x-values in its domain, and a
+/// chart object with no `local-table` to read its numbers from.
+#[test]
+fn an_odp_presentation_with_charts_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "chart_types_impress.odp",
+        "chart_types_impress",
+        "odp-charts-schema",
+    );
+}
+
 /// A plain image is a page whose origin names the image's own media type —
 /// not `application/pdf`, which is what Docling writes for one.
 #[test]
@@ -1568,11 +1580,15 @@ const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
 /// Docling's ODP backend reads a presentation as a flow document: it publishes
 /// no `pages` map, while our reader pages every slide. The content is still
 /// Docling's reading and is compared in full; the slide count is held by the ODP
-/// suite, which converts the same fixture and checks its three pages.
-const PAGE_COUNT_EXEMPT: [(&str, &str); 2] = [
+/// suite, which converts the fixtures and checks their pages.
+const PAGE_COUNT_EXEMPT: [(&str, &str); 3] = [
     (
         "q3_review_impress",
         "Docling's ODP backend publishes no pages; the slides are pages in ours",
+    ),
+    (
+        "chart_types_impress",
+        "Docling's ODP backend publishes no pages; the slide is a page in ours",
     ),
     (
         "master_animations_impress",
@@ -1845,6 +1861,7 @@ fn docling_core_accepts_our_documents() {
         ("notes_odt.odt", "notes_odt"),
         ("q3_review.pptx", "q3_review"),
         ("q3_review_impress.odp", "q3_review_impress"),
+        ("chart_types_impress.odp", "chart_types_impress"),
         ("master_animations_impress.odp", "master_animations_impress"),
         ("invoice_scan.png", "invoice_scan"),
     ] {
