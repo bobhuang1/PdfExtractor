@@ -638,6 +638,12 @@ fn the_tokenizer_badge_names_each_fixture_and_its_size() {
             "tokenizer-mini-p50k.tiktoken",
             "tiktoken · p50k_base · 257 tokens",
         ),
+        (
+            // The extension names no format, so the bytes have to: a valid
+            // rank list still shows tiktoken's detected label and size.
+            "tokenizer-mini.vocab",
+            "tiktoken · cl100k_base · 257 tokens",
+        ),
     ] {
         let path = scratch.join(name);
         std::fs::copy(&tiktoken, &path).unwrap_or_else(|error| {
@@ -856,6 +862,53 @@ fn a_malformed_tokenizer_is_refused_in_the_result_pane_before_conversion() {
         report.contains("convert=enabled"),
         "Convert was left disabled after the refusal:\n{report}"
     );
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// A path that names no file, or names something that cannot be read as one,
+/// is not an unrecognized format: the badge carries the loader's own I/O error,
+/// names the path, and marks the field bad.
+#[test]
+fn the_tokenizer_badge_shows_a_missing_or_unreadable_files_loader_error() {
+    let root = repository_root();
+    if ui_command().is_none() {
+        return;
+    }
+
+    let scratch = std::env::temp_dir().join(format!(
+        "pdfextractor-tokenizer-read-error-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("create the tokenizer read-error directory");
+    let missing = scratch.join("missing.tiktoken");
+    let unreadable = scratch.join("not-a-file.tiktoken");
+    std::fs::create_dir_all(&unreadable).expect("create a directory where a file must be");
+
+    for (path, reason) in [(&missing, "No such file"), (&unreadable, "Is a directory")] {
+        let report = tokenizer_badge_report(&root, path);
+        assert!(
+            report.contains("tokenizer-format=\"Cannot use this tokenizer:"),
+            "the badge did not show the loader's error beside the field:\n{report}"
+        );
+        assert!(
+            !report.contains("Unknown format"),
+            "a read error was called an unknown format:\n{report}"
+        );
+        assert!(
+            report.contains(reason) && report.contains(path.file_name().unwrap().to_str().unwrap()),
+            "the badge did not carry the path and its {reason:?} error:\n{report}"
+        );
+        assert!(
+            report.contains("tokenizer-format-title=\"Tokenizer file cannot be loaded:"),
+            "the badge tooltip did not name the loader's error:\n{report}"
+        );
+        assert!(
+            report.contains("tokenizer-format-bad=1"),
+            "the badge did not mark the unreadable path bad:\n{report}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&scratch);
 }

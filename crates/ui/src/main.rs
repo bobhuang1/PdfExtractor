@@ -185,13 +185,20 @@ fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
 /// is the one a run will use.
 #[tauri::command]
 fn tokenizer_format(path: String) -> Result<String, String> {
+    let path = Path::new(&path);
+    // A missing or unreadable path is an I/O error, not an unrecognized format:
+    // report the loader's own reason so the badge can say why the file could not
+    // be read instead of implying its contents named no tokenizer.
+    if let Err(error) = std::fs::read(path) {
+        return Err(format!("{}: {error}", path.display()));
+    }
     // A file whose name and bytes name no format gets its own label: it is not
     // a malformed tokenizer of a known kind, and the loader's detailed message
     // would imply a format the file never claimed.
-    if pdfextractor_md_exporter::chunks::detect_tokenizer_format(&path).is_err() {
+    if pdfextractor_md_exporter::chunks::detect_tokenizer_format(path).is_err() {
         return Err("Unknown format".to_string());
     }
-    pdfextractor_md_exporter::chunks::Tokenizer::from_file(&path)
+    pdfextractor_md_exporter::chunks::Tokenizer::from_file(path)
         .map(|tokenizer| tokenizer.description().to_string())
         .map_err(|error| error.to_string())
 }
