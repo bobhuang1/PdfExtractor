@@ -324,6 +324,159 @@ fn a_presentation_is_read_as_the_slides_named() {
     }
 }
 
+/// The prose writers see the same selection: `1,3` renders the first and third
+/// slides, with both slides' speaker notes and the third slide's picture, and
+/// nothing from the unnamed second slide. The picture is written beside the
+/// prose and both formats point at that file.
+#[test]
+fn selected_slides_keep_their_notes_and_pictures_in_markdown_and_html() {
+    let ws = Workspace::new("rendered-selection");
+    let output = ws.join("deck.json");
+    run_ok(&[
+        "-i",
+        fixture("test-data/q3_review.pptx").to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--page-range",
+        "1,3",
+        "--to",
+        "md",
+        "--to",
+        "html",
+        "--include-notes",
+        "--ocr",
+        "never",
+    ]);
+
+    let markdown = std::fs::read_to_string(ws.join("deck.md")).expect("the Markdown");
+    let html = std::fs::read_to_string(ws.join("deck.html")).expect("the HTML");
+    let first_note = "Open with the revenue line, then the regions.";
+    let third_note = "Say the picture is the growth by quarter; do not read the table aloud.";
+    let picture = "deck_images/slide3_1.png";
+
+    for reading in [&markdown, &html] {
+        assert!(
+            reading.contains("Q3 Review"),
+            "slide 1 is missing:\n{reading}"
+        );
+        assert!(
+            reading.contains("Where the growth came from"),
+            "slide 3 is missing:\n{reading}"
+        );
+        assert!(
+            reading.contains(first_note) && reading.contains(third_note),
+            "a selected slide's notes are missing:\n{reading}"
+        );
+        assert!(
+            !reading.contains("Regional performance"),
+            "slide 2 was rendered too:\n{reading}"
+        );
+    }
+    assert!(
+        markdown.contains(&format!("![Image]({picture})")),
+        "the Markdown does not link the selected slide's picture:\n{markdown}"
+    );
+    assert!(
+        html.contains(&format!("<img src=\"{picture}\" alt=\"Image\">")),
+        "the HTML does not show the selected slide's picture:\n{html}"
+    );
+    assert!(
+        html.contains("<aside class=\"notes\">"),
+        "the HTML notes are not marked as notes:\n{html}"
+    );
+    let image = std::fs::read(ws.join(picture)).expect("the extracted slide picture");
+    assert!(
+        image.starts_with(b"\x89PNG\r\n\x1a\n") && image.len() > 8,
+        "the picture beside the prose is not a PNG"
+    );
+}
+
+/// A span keeps every selected slide in deck order when one of them has neither
+/// speaker notes nor pictures. In `q3_review.pptx` the middle slide is body text
+/// and a table only; the chapters still run 1, 2, 3, and the notes and picture on
+/// slide 3 stay after slide 2 rather than moving up beside slide 1's notes.
+#[test]
+fn a_slide_without_notes_or_pictures_keeps_its_place_in_a_span() {
+    let ws = Workspace::new("span-empty-slide");
+    let output = ws.join("deck.json");
+    run_ok(&[
+        "-i",
+        fixture("test-data/q3_review.pptx").to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--page-range",
+        "1-3",
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--include-notes",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(page_numbers(&doc), vec![1, 2, 3]);
+    let groups = doc["groups"].as_array().expect("a group list");
+    let chapters: Vec<&str> = groups
+        .iter()
+        .filter(|group| group["label"] == "chapter")
+        .map(|group| group["name"].as_str().expect("a chapter name"))
+        .collect();
+    assert_eq!(
+        chapters,
+        vec!["slide-0", "slide-1", "slide-2"],
+        "the empty middle slide disturbed the deck order"
+    );
+
+    // The middle chapter really is the selected slide without notes or pictures:
+    // its own members are body text and a table, while the remarks and picture
+    // groups stay with the slides that hold them.
+    let middle = groups
+        .iter()
+        .find(|group| group["name"] == "slide-1")
+        .expect("slide 2's chapter");
+    for child in middle["children"].as_array().expect("chapter children") {
+        let reference = child["$ref"].as_str().expect("a reference");
+        let (kind, index) = reference
+            .strip_prefix("#/")
+            .expect("a document reference")
+            .split_once('/')
+            .expect("a kind and an index");
+        let index: usize = index.parse().expect("an index");
+        match kind {
+            "texts" => assert_ne!(
+                doc["texts"][index]["content_layer"], "notes",
+                "slide 2's chapter holds a note: {reference}"
+            ),
+            "pictures" => panic!("slide 2's chapter holds a picture: {reference}"),
+            _ => {}
+        }
+    }
+
+    let markdown = std::fs::read_to_string(ws.join("deck.md")).expect("the Markdown");
+    let positions: Vec<usize> = chapters
+        .iter()
+        .map(|name| {
+            markdown
+                .find(&format!("group chapter body {name}"))
+                .unwrap_or_else(|| panic!("{name} is not marked in:\n{markdown}"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "Markdown rendered the chapters out of order: {positions:?}"
+    );
+    let picture = markdown
+        .find("![Image](deck_images/slide3_1.png)")
+        .expect("slide 3's picture");
+    assert!(
+        picture > positions[2]
+            && markdown.find("Say the picture is the growth").unwrap() > positions[2],
+        "slide 3's notes or picture moved before the middle slide:\n{markdown}"
+    );
+}
+
 /// A legacy `.ppt` is read at all only through the bridge, and the range still
 /// selects among the slides Impress writes: `1,3` keeps the first and the third,
 /// each with its own number, and nothing of slide 2 comes through. The bridged
