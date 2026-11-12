@@ -489,12 +489,15 @@ impl Settings {
     /// directory for a folder input; without it, output is written beside each
     /// input. So the folder is the output path when that is a directory, the
     /// parent of a file output, and the input itself when the input is a folder.
+    /// A folder input's output directory is the answer even before the run has
+    /// created it: the result pane is resolved when the run starts.
     pub fn output_folder(&self) -> PathBuf {
-        let chosen = match self.output.trim() {
+        let output = self.output.trim();
+        let chosen = match output {
             "" => PathBuf::from(self.input.trim()),
             output => PathBuf::from(output),
         };
-        if chosen.is_dir() {
+        if chosen.is_dir() || (!output.is_empty() && PathBuf::from(self.input.trim()).is_dir()) {
             return chosen;
         }
         chosen
@@ -1835,7 +1838,18 @@ mod tests {
         s.output.clear();
         assert_eq!(s.output_folder(), root);
 
+        // A folder input's output is a directory even before the run creates it.
+        s.output = root
+            .join("target/ui-output-folder-not-created")
+            .display()
+            .to_string();
+        assert_eq!(
+            s.output_folder(),
+            root.join("target/ui-output-folder-not-created")
+        );
+
         // A bare file name with no folder of its own is the working directory.
+        s.output.clear();
         s.input = "brief.docx".to_string();
         assert_eq!(s.output_folder(), PathBuf::from("."));
     }

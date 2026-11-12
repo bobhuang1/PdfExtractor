@@ -344,6 +344,106 @@ fn a_single_written_output_is_revealed_as_the_file() {
     );
 }
 
+/// A folder run writes one reading per document, so there is no single file for
+/// the result pane's action to mean. `--selftest-reveal` presses it after the
+/// run; the path it asks to reveal must be the output folder, holding both
+/// readings, rather than either one of them.
+#[test]
+fn a_multi_file_run_is_revealed_as_its_output_folder() {
+    let root = repository_root();
+    let fixture = root.join("test-data/brief.docx");
+    assert!(fixture.exists(), "missing fixture {}", fixture.display());
+    let cli = root.join("target/debug/pdfextractor-cli");
+    if !cli.exists() {
+        eprintln!("skipped: pdfextractor-cli is not built");
+        return;
+    }
+
+    let input_dir =
+        std::env::temp_dir().join(format!("pdfextractor-multi-reveal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&input_dir);
+    std::fs::create_dir_all(&input_dir).expect("create the multi-file input directory");
+    for name in ["first.docx", "second.docx"] {
+        std::fs::copy(&fixture, input_dir.join(name)).expect("copy the multi-file fixture");
+    }
+
+    let Some(mut command) = ui_command() else {
+        return;
+    };
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input_dir)
+        .arg("--selftest-reveal")
+        .env("PDFEXTRACTOR_CLI", &cli);
+
+    let output = run_with_timeout(command, Duration::from_secs(120));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+
+    let revealed = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-reveal path="))
+        .unwrap_or_else(|| {
+            panic!(
+                "the page never pressed the reveal action:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        });
+    let path = revealed
+        .strip_prefix("selftest-reveal path=")
+        .expect("the reveal line names its path");
+    let target = Path::new(path);
+    assert!(
+        target.is_dir(),
+        "the action revealed {path}, not the folder the folder run wrote into"
+    );
+    assert!(
+        target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| { name.starts_with("pdfextractor-selftest-") }),
+        "the action revealed {path}, not the run's scratch output folder"
+    );
+    for name in ["first.json", "second.json"] {
+        assert!(
+            target.join(name).is_file(),
+            "the revealed folder does not hold {name}: {path}"
+        );
+    }
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        report.contains("title=\"Finished\""),
+        "the run did not finish:\n{report}"
+    );
+    assert!(
+        report.contains(&format!("folder=\"{path}\"")),
+        "the result pane did not name the output folder:\n{report}"
+    );
+    assert!(
+        report.contains("folder-action=1"),
+        "the result pane offered no action for the output folder:\n{report}"
+    );
+
+    let _ = std::fs::remove_dir_all(&input_dir);
+    let _ = std::fs::remove_dir_all(target);
+}
+
 #[test]
 fn the_chunking_row_is_hidden_before_retrieval_chunks_is_ticked() {
     let root = repository_root();
