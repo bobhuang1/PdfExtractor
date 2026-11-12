@@ -439,6 +439,45 @@ fn an_unreadable_tokenizer_is_refused_before_conversion() {
     );
 }
 
+/// A tokenizer path that names no file is refused before conversion, with the
+/// path carried in the error: a typo is not a run that reads the whole document
+/// and only then fails at the budget.
+#[test]
+fn a_nonexistent_tokenizer_path_is_refused_before_conversion() {
+    let ws = Workspace::new("missing-tokenizer");
+    let input = ws.write("report.md", DOC);
+    let missing = ws.join("no-such-tokenizer.json");
+
+    let out = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--to",
+        "chunks",
+        "--chunks-type",
+        "hybrid",
+        "--chunks-tokenizer",
+        missing.to_str().unwrap(),
+    ]);
+
+    assert!(
+        !out.status.success(),
+        "a nonexistent tokenizer path was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--chunks-tokenizer"),
+        "the refusal does not name the flag: {stderr}"
+    );
+    assert!(
+        stderr.contains(missing.to_str().unwrap()),
+        "the refusal does not name the path: {stderr}"
+    );
+    assert!(
+        !ws.join("report.jsonl").exists(),
+        "a refused run wrote a chunk file"
+    );
+}
+
 /// Two formats asked for are written as siblings: the JSON document and the
 /// chunks, under the same stem.
 #[test]

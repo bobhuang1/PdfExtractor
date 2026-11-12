@@ -103,7 +103,13 @@ function describe(settings) {
       bits.push(`${settings.chunksMaxTokens} tokens`);
       if (settings.chunksOverlapTokens) bits.push(`overlap ${settings.chunksOverlapTokens}`);
     }
-    if (settings.chunksTokenizer) bits.push(`tokenizer ${baseName(settings.chunksTokenizer)}`);
+    if (settings.chunksTokenizer) {
+      const badge = el("chunks-tokenizer-format");
+      const detected = badge.classList.contains("bad") ? "" : badge.textContent.trim();
+      bits.push(
+        `tokenizer ${baseName(settings.chunksTokenizer)}${detected ? ` (${detected})` : ""}`
+      );
+    }
     if (settings.chunksTokenizer && settings.chunksTokenizerEncoding) {
       bits.push(`tiktoken ${settings.chunksTokenizerEncoding}`);
     }
@@ -821,7 +827,9 @@ function renderedSummary() {
     `tokenizer="${el("chunks-tokenizer").value}"`,
     `tokenizer-encoding=${el("chunks-tokenizer-encoding").value || "auto"}`,
     `tokenizer-format="${el("chunks-tokenizer-format").textContent}"`,
+    `tokenizer-format-title="${el("chunks-tokenizer-format").title}"`,
     `tokenizer-format-bad=${el("chunks-tokenizer-format").classList.contains("bad") ? 1 : 0}`,
+    `summary="${el("summary").textContent}"`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
     // as rendered: the ask round-tripped and the page used its families.
@@ -930,7 +938,13 @@ function dispatch(kind, payload) {
         invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
           console.error(error)
         );
-      refreshTokenizerFormat().then(report, report);
+      refreshTokenizerFormat().then(async () => {
+        if (payload.clearTokenizer) {
+          el("chunks-tokenizer").value = "";
+          await refreshTokenizerFormat();
+        }
+        report();
+      }, report);
       return;
     }
     // The smoke test asks the CLI again on the path a person uses after replacing
@@ -1164,6 +1178,7 @@ async function refreshTokenizerFormat() {
     label.textContent = "";
     label.removeAttribute("title");
     label.classList.remove("bad");
+    refreshSummary();
     return;
   }
   try {
@@ -1172,12 +1187,20 @@ async function refreshTokenizerFormat() {
     label.textContent = format;
     label.title = `Detected from ${path}`;
     label.classList.remove("bad");
+    refreshSummary();
   } catch (error) {
     if (ask !== tokenizerFormatAsk) return;
     const message = String(error);
-    label.textContent = `Cannot use this tokenizer: ${message}`;
-    label.title = message;
+    // An unrecognized format has no loader detail to add: the badge says what
+    // is wrong itself, while a malformed file of a known format keeps the
+    // loader's message.
+    const unknown = message === "Unknown format";
+    label.textContent = unknown ? message : `Cannot use this tokenizer: ${message}`;
+    // The tooltip gives the reason before Convert is pressed, in the same words
+    // the result pane will use if the file still refuses to load.
+    label.title = unknown ? message : `Tokenizer file cannot be loaded: ${message}`;
     label.classList.add("bad");
+    refreshSummary();
   }
 }
 

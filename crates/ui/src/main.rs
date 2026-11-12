@@ -80,6 +80,11 @@ static SELFTEST_CHUNKS: OnceLock<bool> = OnceLock::new();
 /// The page reports the rendered label and exits; no conversion is started.
 static SELFTEST_TOKENIZER: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-clear-tokenizer`: with `--selftest-tokenizer`, clear the field
+/// after its badge is painted, so a smoke test checks that the label and its
+/// tooltip are gone.
+static SELFTEST_CLEAR_TOKENIZER: OnceLock<bool> = OnceLock::new();
+
 /// `--selftest-tokenizer-encoding VALUE`: with `--selftest-tokenizer`, choose
 /// the tiktoken family in the encoding selector. With an input and
 /// `--selftest-chunks`, the page runs the conversion, so the smoke test checks
@@ -174,6 +179,12 @@ fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
 /// is the one a run will use.
 #[tauri::command]
 fn tokenizer_format(path: String) -> Result<String, String> {
+    // A file whose name and bytes name no format gets its own label: it is not
+    // a malformed tokenizer of a known kind, and the loader's detailed message
+    // would imply a format the file never claimed.
+    if pdfextractor_md_exporter::chunks::detect_tokenizer_format(&path).is_err() {
+        return Err("Unknown format".to_string());
+    }
     pdfextractor_md_exporter::chunks::Tokenizer::from_file(&path)
         .map(|tokenizer| tokenizer.description().to_string())
         .map_err(|error| error.to_string())
@@ -366,6 +377,18 @@ fn start_conversion(
         command,
     };
 
+    // The tokenizer self-test is driven by the page, so this is where its run's
+    // command line is printed; `frontend_ready` prints the Rust-driven one.
+    if SELFTEST_TOKENIZER
+        .get()
+        .is_some_and(|tokenizer| tokenizer.is_some())
+    {
+        println!(
+            "selftest-started run={} command={}",
+            started.run, started.command
+        );
+    }
+
     // Announced before either reader thread exists, so the page has the run set
     // up before its first document can arrive. The id is in every event, which
     // is how the page tells this run from one it has already finished showing.
@@ -512,6 +535,7 @@ fn frontend_ready(app: tauri::AppHandle) {
     };
     let tokenizer = SELFTEST_TOKENIZER.get().cloned().flatten();
     let tokenizer_encoding = SELFTEST_TOKENIZER_ENCODING.get().cloned().flatten();
+    let clear_tokenizer = SELFTEST_CLEAR_TOKENIZER.get().copied().unwrap_or(false);
     let reference = SELFTEST_REFERENCE
         .get()
         .cloned()
@@ -550,6 +574,7 @@ fn frontend_ready(app: tauri::AppHandle) {
             "output": output,
             "tokenizer": tokenizer.clone(),
             "tokenizerEncoding": tokenizer_encoding.clone(),
+            "clearTokenizer": clear_tokenizer,
         }),
     );
 
@@ -652,6 +677,12 @@ fn selftest_tokenizer_encoding(args: &[String]) -> Option<String> {
     selftest_value(args, "--selftest-tokenizer-encoding")
 }
 
+/// Parse `--selftest-clear-tokenizer`: clear the badge check's field after its
+/// label is painted.
+fn selftest_clear_tokenizer(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--selftest-clear-tokenizer")
+}
+
 /// Parse `--selftest-bad-range RANGE`, the malformed range a smoke test types.
 fn selftest_bad_range(args: &[String]) -> Option<String> {
     selftest_value(args, "--selftest-bad-range")
@@ -697,6 +728,7 @@ fn main() {
                                    [--selftest-ref PATH] [--selftest-chunks]\n\
                                    [--selftest-tokenizer PATH]\n\
                                    [--selftest-tokenizer-encoding VALUE]\n\
+                                   [--selftest-clear-tokenizer]\n\
                                    [--selftest-bad-range RANGE]\n\
                                    [--selftest-bad-budget VALUE]\n\
                                    [--selftest-bad-overlap VALUE]\n\
@@ -712,6 +744,8 @@ fn main() {
              the window renders for it, without starting a run;\n\
              --selftest-tokenizer-encoding chooses the tiktoken family for that\n\
              file and, with an input and --selftest-chunks, runs the conversion;\n\
+             --selftest-clear-tokenizer clears the field after painting the badge,\n\
+             so the test checks the label and tooltip are removed;\n\
              --selftest-bad-range fills an unreadable page range and presses\n\
              Convert, so the page's refusal is checked instead of a run;\n\
              --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
@@ -731,6 +765,7 @@ fn main() {
     let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
     let _ = SELFTEST_TOKENIZER.set(selftest_tokenizer(&args));
     let _ = SELFTEST_TOKENIZER_ENCODING.set(selftest_tokenizer_encoding(&args));
+    let _ = SELFTEST_CLEAR_TOKENIZER.set(selftest_clear_tokenizer(&args));
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
     let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
     let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));
