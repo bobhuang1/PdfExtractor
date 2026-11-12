@@ -38,6 +38,8 @@ const EVENTS = [
 // started by the self-test is drawn exactly like one started here.
 let display = null;
 let selftest = false;
+// Set by `--selftest-reveal`: press the result pane's action once a run ends.
+let selftestReveal = false;
 let chunkControlsBefore = "?";
 // Bumped per tokenizer-format ask, so a slow answer for an earlier path cannot
 // overwrite the label for the path now in the box.
@@ -730,9 +732,18 @@ function handleFinished(finished) {
   refreshSummary();
 
   if (selftest) {
-    invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
-      console.error(error)
-    );
+    const report = () =>
+      invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+        console.error(error)
+      );
+    // `--selftest-reveal` presses the action a person would press, then reports
+    // what the pane had drawn: the path the click asked to reveal is what the
+    // test compares with the file the run wrote.
+    if (selftestReveal) {
+      revealOutput().then(report, report);
+      return;
+    }
+    report();
   }
 }
 
@@ -836,6 +847,7 @@ function handle(kind, payload) {
 function dispatch(kind, payload) {
   if (kind === "selftest-enabled") {
     selftest = true;
+    selftestReveal = Boolean(payload && payload.reveal);
     // The self-test's input and scratch output are the form's, so a run the page
     // starts writes where the Rust-driven self-test would have written.
     if (payload && payload.input) el("input").value = payload.input;
@@ -997,6 +1009,20 @@ async function stop() {
     appendLog(`could not stop the conversion: ${error}`);
     el("stop").disabled = false;
     el("stop").textContent = "Stop";
+  }
+}
+
+// The result pane's action reaches the single file a run wrote, or the folder it
+// wrote into when there was more than one: `display.file` is the choice the
+// finished run made, so the click and the text the pane shows agree.
+async function revealOutput() {
+  const target = (display && (display.file || display.folder)) || "";
+  if (!target) return;
+  try {
+    await invoke("reveal_path", { path: target });
+    appendLog(`showed ${target}`);
+  } catch (error) {
+    appendLog(`could not show ${target}: ${error}`);
   }
 }
 
@@ -1208,16 +1234,7 @@ function wire() {
   el("pick-reference-file").addEventListener("click", () => pick("file", "reference"));
   el("pick-reference-folder").addEventListener("click", () => pick("folder", "reference"));
   el("reference").addEventListener("input", refreshSummary);
-  el("open-output").addEventListener("click", async () => {
-    const target = (display && (display.file || display.folder)) || "";
-    if (!target) return;
-    try {
-      await invoke("reveal_path", { path: target });
-      appendLog(`showed ${target}`);
-    } catch (error) {
-      appendLog(`could not show ${target}: ${error}`);
-    }
-  });
+  el("open-output").addEventListener("click", revealOutput);
   el("pick-chunks-tokenizer").addEventListener("click", async () => {
     const path = await pick("file", "chunks-tokenizer");
     if (path) refreshTokenizerFormat();

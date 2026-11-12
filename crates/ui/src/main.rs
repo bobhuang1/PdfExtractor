@@ -100,6 +100,12 @@ static SELFTEST_BAD_BUDGET: OnceLock<Option<String>> = OnceLock::new();
 /// `--selftest-bad-overlap VALUE`: the same for the overlap box.
 static SELFTEST_BAD_OVERLAP: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-reveal`: with `--selftest`, press the result pane's action once a
+/// run finishes and print the path it asks to reveal. The command reports that
+/// path instead of opening a file manager, so a test can check what the window
+/// would reveal without a desktop window appearing over it.
+static SELFTEST_REVEAL: OnceLock<bool> = OnceLock::new();
+
 /// The conversion in flight, if any.
 #[derive(Default)]
 struct ActiveRun {
@@ -212,6 +218,12 @@ async fn ask(
 /// that is not there is refused rather than handed to an opener.
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
+    if SELFTEST_REVEAL.get().copied().unwrap_or(false) {
+        // The self-test checks what the action would reveal; opening the desktop's
+        // file manager would put a window on top of the test.
+        println!("selftest-reveal path={path}");
+        return Ok(());
+    }
     let target = PathBuf::from(&path);
     if !target.exists() {
         return Err(format!("There is nothing at {path}."));
@@ -525,6 +537,7 @@ fn frontend_ready(app: tauri::AppHandle) {
     let bad_range = SELFTEST_BAD_RANGE.get().cloned().flatten();
     let bad_budget = SELFTEST_BAD_BUDGET.get().cloned().flatten();
     let bad_overlap = SELFTEST_BAD_OVERLAP.get().cloned().flatten();
+    let reveal = SELFTEST_REVEAL.get().copied().unwrap_or(false);
     let _ = app.emit(
         SELFTEST_ON,
         serde_json::json!({
@@ -532,6 +545,7 @@ fn frontend_ready(app: tauri::AppHandle) {
             "badRange": bad_range.clone(),
             "badBudget": bad_budget.clone(),
             "badOverlap": bad_overlap.clone(),
+            "reveal": reveal,
             "input": selftest_input.clone(),
             "output": output,
             "tokenizer": tokenizer.clone(),
@@ -653,6 +667,11 @@ fn selftest_bad_overlap(args: &[String]) -> Option<String> {
     selftest_value(args, "--selftest-bad-overlap")
 }
 
+/// Parse `--selftest-reveal`: press the result pane's action after a run.
+fn selftest_reveal(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--selftest-reveal")
+}
+
 /// The value after `flag`, when the flag is present and a value follows it.
 fn selftest_value(args: &[String], flag: &str) -> Option<String> {
     let position = args.iter().position(|arg| arg == flag)?;
@@ -680,7 +699,8 @@ fn main() {
                                    [--selftest-tokenizer-encoding VALUE]\n\
                                    [--selftest-bad-range RANGE]\n\
                                    [--selftest-bad-budget VALUE]\n\
-                                   [--selftest-bad-overlap VALUE] [-h]\n\n\
+                                   [--selftest-bad-overlap VALUE]\n\
+                                   [--selftest-reveal] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
              Compare mode shows each document beside a Docling reference.\n\
@@ -695,7 +715,8 @@ fn main() {
              --selftest-bad-range fills an unreadable page range and presses\n\
              Convert, so the page's refusal is checked instead of a run;\n\
              --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
-             malformed chunk count the same way. What such a run\n\
+             malformed chunk count the same way; --selftest-reveal presses the\n\
+             result pane's action after a run. What such a run\n\
              converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
              smoke-testing the corpus never writes beside it. Set\n\
@@ -713,6 +734,7 @@ fn main() {
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
     let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
     let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));
+    let _ = SELFTEST_REVEAL.set(selftest_reveal(&args));
 
     tauri::Builder::default()
         .manage(ActiveRun::default())

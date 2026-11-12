@@ -262,6 +262,88 @@ fn a_bad_page_range_shows_its_message_and_leaves_convert_enabled() {
     );
 }
 
+/// A single-file run writes one reading, and the result pane's action reaches
+/// that file rather than only the folder it sits in. `--selftest-reveal` presses
+/// the action after the run; the command prints the path it was given instead of
+/// opening a file manager, so the test checks the window's choice without a
+/// desktop window appearing over it.
+#[test]
+fn a_single_written_output_is_revealed_as_the_file() {
+    let root = repository_root();
+    let input = root.join("test-data/brief.docx");
+    assert!(input.exists(), "missing fixture {}", input.display());
+    let cli = root.join("target/debug/pdfextractor-cli");
+    if !cli.exists() {
+        eprintln!("skipped: pdfextractor-cli is not built");
+        return;
+    }
+
+    let Some(mut command) = ui_command() else {
+        return;
+    };
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg("--selftest-reveal")
+        .env("PDFEXTRACTOR_CLI", &cli);
+
+    let output = run_with_timeout(command, Duration::from_secs(120));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+
+    let revealed = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-reveal path="))
+        .unwrap_or_else(|| {
+            panic!(
+                "the page never pressed the reveal action:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        });
+    let path = revealed
+        .strip_prefix("selftest-reveal path=")
+        .expect("the reveal line names its path");
+    let target = Path::new(path);
+    assert_eq!(
+        target.file_name().and_then(|name| name.to_str()),
+        Some("brief.json"),
+        "the action revealed {path}, not the file the run wrote"
+    );
+    assert!(
+        target.is_file(),
+        "the revealed path is not the written output file: {path}"
+    );
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        report.contains("title=\"Finished\""),
+        "the run did not finish:\n{report}"
+    );
+    assert!(
+        report.contains(&format!("folder=\"{path}\"")),
+        "the result pane did not name the written file:\n{report}"
+    );
+    assert!(
+        report.contains("folder-action=1"),
+        "the result pane offered no action for the written file:\n{report}"
+    );
+}
+
 #[test]
 fn the_chunking_row_is_hidden_before_retrieval_chunks_is_ticked() {
     let root = repository_root();
