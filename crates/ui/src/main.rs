@@ -80,6 +80,12 @@ static SELFTEST_CHUNKS: OnceLock<bool> = OnceLock::new();
 /// The page reports the rendered label and exits; no conversion is started.
 static SELFTEST_TOKENIZER: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-tokenizer-encoding VALUE`: with `--selftest-tokenizer`, choose
+/// the tiktoken family in the encoding selector. With an input and
+/// `--selftest-chunks`, the page runs the conversion, so the smoke test checks
+/// that the chosen family reaches the CLI's command line.
+static SELFTEST_TOKENIZER_ENCODING: OnceLock<Option<String>> = OnceLock::new();
+
 /// `--selftest-bad-range RANGE`: with `--selftest`, fill the page-range box with
 /// a range the CLI refuses, press Convert, and report what the page drew. The
 /// refusal must arrive through the same command the button uses, before a
@@ -493,6 +499,19 @@ fn frontend_ready(app: tauri::AppHandle) {
         return;
     };
     let tokenizer = SELFTEST_TOKENIZER.get().cloned().flatten();
+    let tokenizer_encoding = SELFTEST_TOKENIZER_ENCODING.get().cloned().flatten();
+    let reference = SELFTEST_REFERENCE
+        .get()
+        .cloned()
+        .flatten()
+        .unwrap_or_default();
+    // The page drives a tokenizer run itself, so it needs the same scratch output
+    // a Rust-driven self-test would use rather than writing beside the corpus.
+    let output = if selftest_input.is_empty() {
+        String::new()
+    } else {
+        Settings::selftest(&selftest_input, &reference).output
+    };
 
     if selftest_input.is_empty() && tokenizer.is_none() {
         app.exit(0);
@@ -514,7 +533,9 @@ fn frontend_ready(app: tauri::AppHandle) {
             "badBudget": bad_budget.clone(),
             "badOverlap": bad_overlap.clone(),
             "input": selftest_input.clone(),
+            "output": output,
             "tokenizer": tokenizer.clone(),
+            "tokenizerEncoding": tokenizer_encoding.clone(),
         }),
     );
 
@@ -545,11 +566,6 @@ fn frontend_ready(app: tauri::AppHandle) {
     // its own instead of beside the documents and the committed references it read.
     // The chunking row is the page's, not the form's, so the one the page ticks and
     // the one the run uses are made here to be the same reading.
-    let reference = SELFTEST_REFERENCE
-        .get()
-        .cloned()
-        .flatten()
-        .unwrap_or_default();
     let mut settings = Settings::selftest(&selftest_input, &reference);
     if chunks {
         settings.to.push(OutputFormat::Chunks);
@@ -616,6 +632,12 @@ fn selftest_tokenizer(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// Parse `--selftest-tokenizer-encoding VALUE`, the tiktoken family a smoke test
+/// chooses for that file.
+fn selftest_tokenizer_encoding(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-tokenizer-encoding")
+}
+
 /// Parse `--selftest-bad-range RANGE`, the malformed range a smoke test types.
 fn selftest_bad_range(args: &[String]) -> Option<String> {
     selftest_value(args, "--selftest-bad-range")
@@ -655,6 +677,7 @@ fn main() {
              Usage: pdfextractor-ui [--selftest [INPUT]] [--selftest-stop MILLIS]\n\
                                    [--selftest-ref PATH] [--selftest-chunks]\n\
                                    [--selftest-tokenizer PATH]\n\
+                                   [--selftest-tokenizer-encoding VALUE]\n\
                                    [--selftest-bad-range RANGE]\n\
                                    [--selftest-bad-budget VALUE]\n\
                                    [--selftest-bad-overlap VALUE] [-h]\n\n\
@@ -667,6 +690,8 @@ fn main() {
              chunker before it, so that row is checked too;\n\
              --selftest-tokenizer names a tokenizer file and reports the badge\n\
              the window renders for it, without starting a run;\n\
+             --selftest-tokenizer-encoding chooses the tiktoken family for that\n\
+             file and, with an input and --selftest-chunks, runs the conversion;\n\
              --selftest-bad-range fills an unreadable page range and presses\n\
              Convert, so the page's refusal is checked instead of a run;\n\
              --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
@@ -684,6 +709,7 @@ fn main() {
     let _ = SELFTEST_REFERENCE.set(selftest_reference(&args));
     let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
     let _ = SELFTEST_TOKENIZER.set(selftest_tokenizer(&args));
+    let _ = SELFTEST_TOKENIZER_ENCODING.set(selftest_tokenizer_encoding(&args));
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
     let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
     let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));

@@ -810,6 +810,7 @@ function renderedSummary() {
     `tokenizer="${el("chunks-tokenizer").value}"`,
     `tokenizer-encoding=${el("chunks-tokenizer-encoding").value || "auto"}`,
     `tokenizer-format="${el("chunks-tokenizer-format").textContent}"`,
+    `tokenizer-format-bad=${el("chunks-tokenizer-format").classList.contains("bad") ? 1 : 0}`,
     `rows=[${rows.join(",")}]`,
     // How many formats the CLI named, and the headings they were grouped under,
     // as rendered: the ask round-tripped and the page used its families.
@@ -835,6 +836,10 @@ function handle(kind, payload) {
 function dispatch(kind, payload) {
   if (kind === "selftest-enabled") {
     selftest = true;
+    // The self-test's input and scratch output are the form's, so a run the page
+    // starts writes where the Rust-driven self-test would have written.
+    if (payload && payload.input) el("input").value = payload.input;
+    if (payload && payload.output) el("output").value = payload.output;
     // What the row looked like before the self-test touches the form. The
     // chunking report pairs this with the state after the tick, so the smoke
     // test checks the transition rather than only its destination.
@@ -886,10 +891,29 @@ function dispatch(kind, payload) {
       el("chunks-type").value = "hybrid";
       el("chunks-type").dispatchEvent(new Event("change", { bubbles: true }));
     }
-    // `--selftest-tokenizer` is a badge check, not a run: fill the field, let
-    // the page's own format ask paint the label, then report what it drew.
+    // `--selftest-tokenizer` alone is a badge check: fill the field, let the
+    // page's own format ask paint the label, then report what it drew. With an
+    // input and chunks it drives a real run, choosing the encoding in the form
+    // so the command the page builds is the one the test checks.
     if (payload && payload.tokenizer) {
       el("chunks-tokenizer").value = payload.tokenizer;
+      if (payload.tokenizerEncoding) {
+        el("chunks-tokenizer-encoding").value = payload.tokenizerEncoding;
+        el("chunks-tokenizer-encoding").dispatchEvent(
+          new Event("change", { bubbles: true })
+        );
+      }
+      if (payload.input && payload.chunks) {
+        refreshTokenizerFormat();
+        start().then((started) => {
+          if (!started) {
+            invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+              console.error(error)
+            );
+          }
+        });
+        return;
+      }
       const report = () =>
         invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
           console.error(error)
@@ -920,7 +944,7 @@ async function start() {
   const settings = readSettings();
   if (!settings.input) {
     showMessage("Choose an input file or folder.");
-    return;
+    return false;
   }
   // The budget and the overlap are typed, so they can be malformed before the
   // page's payload reaches the CLI. They are refused here, the way a bad page
@@ -931,7 +955,7 @@ async function start() {
       countProblem(el("chunks-overlap-tokens"), "chunk overlap");
     if (problem) {
       showMessage(problem);
-      return;
+      return false;
     }
   }
   const previous = display;
@@ -942,18 +966,20 @@ async function start() {
     // The answer only says the process started; the run itself is drawn from
     // the events that follow.
     await invoke("start_conversion", { settings });
+    return true;
   } catch (error) {
     if (previous && !previous.finished) {
       // Another conversion is still going: keep it on screen and say so.
       appendLog(`cannot start another conversion: ${error}`);
       el("convert").disabled = true;
-      return;
+      return false;
     }
     display = null;
     el("convert").disabled = false;
     el("stop").classList.add("hidden");
     el("run").classList.add("hidden");
     showMessage(String(error));
+    return false;
   }
 }
 
@@ -1102,8 +1128,8 @@ async function pick(kind, target) {
 
 // The tokenizer's format is detected by the same code the chunker loads it
 // with, so the label beside the chosen file names what a run will use. An empty
-// box has nothing to describe, and an unrecognized file says so rather than
-// leaving the reader to discover it when the run starts.
+// box has nothing to describe, and a file the loader refuses says why beside the
+// field rather than leaving the reader to discover it when the run starts.
 async function refreshTokenizerFormat() {
   const path = el("chunks-tokenizer").value.trim();
   const label = el("chunks-tokenizer-format");
@@ -1122,8 +1148,9 @@ async function refreshTokenizerFormat() {
     label.classList.remove("bad");
   } catch (error) {
     if (ask !== tokenizerFormatAsk) return;
-    label.textContent = "Unknown format";
-    label.title = String(error);
+    const message = String(error);
+    label.textContent = `Cannot use this tokenizer: ${message}`;
+    label.title = message;
     label.classList.add("bad");
   }
 }

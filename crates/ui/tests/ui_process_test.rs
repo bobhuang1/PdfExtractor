@@ -320,64 +320,218 @@ fn the_chunking_row_is_hidden_before_retrieval_chunks_is_ticked() {
     );
 }
 
+/// Run the real window's badge check for one tokenizer path and return the
+/// report the page rendered. The caller has already established that a window
+/// is available.
+fn tokenizer_badge_report(root: &Path, tokenizer: &Path) -> String {
+    let mut command = ui_command().expect("the window check was available above");
+    command
+        .current_dir(root)
+        .arg("--selftest")
+        .arg("--selftest-chunks")
+        .arg("--selftest-tokenizer")
+        .arg(tokenizer)
+        .env("PDFEXTRACTOR_CLI", false_program());
+
+    let output = run_with_timeout(command, Duration::from_secs(60));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-started"),
+        "the badge check started a conversion:\n{stdout}"
+    );
+
+    stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        })
+        .to_string()
+}
+
 #[test]
 fn the_tokenizer_badge_names_each_fixture_and_its_size() {
     let root = repository_root();
+    if ui_command().is_none() {
+        return;
+    }
 
-    for (fixture, expected) in [
-        ("tokenizer-mini.json", "Hugging Face · 10 tokens"),
-        ("tokenizer-mini.model", "SentencePiece · 13 tokens"),
-        ("tokenizer-mini.tiktoken", "tiktoken · cl100k_base"),
+    let scratch = std::env::temp_dir().join(format!(
+        "pdfextractor-tokenizer-badge-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("create the tokenizer badge scratch directory");
+    let tiktoken = root.join("test-data/tokenizer-mini.tiktoken");
+    assert!(tiktoken.exists(), "missing fixture {}", tiktoken.display());
+
+    let mut cases: Vec<(PathBuf, &str)> = vec![
+        (
+            root.join("test-data/tokenizer-mini.json"),
+            "Hugging Face · 10 tokens",
+        ),
+        (
+            root.join("test-data/tokenizer-mini.model"),
+            "SentencePiece · 13 tokens",
+        ),
+        (tiktoken.clone(), "tiktoken · cl100k_base"),
+    ];
+    for (name, expected) in [
+        ("tokenizer-mini-o200k.tiktoken", "tiktoken · o200k_base"),
+        ("tokenizer-mini-p50k.tiktoken", "tiktoken · p50k_base"),
     ] {
-        let tokenizer = root.join("test-data").join(fixture);
+        let path = scratch.join(name);
+        std::fs::copy(&tiktoken, &path).unwrap_or_else(|error| {
+            panic!("copy {} to {}: {error}", tiktoken.display(), path.display())
+        });
+        cases.push((path, expected));
+    }
+
+    for (tokenizer, expected) in cases {
         assert!(
             tokenizer.exists(),
             "missing fixture {}",
             tokenizer.display()
         );
 
-        let Some(mut command) = ui_command() else {
-            return;
-        };
-        command
-            .current_dir(&root)
-            .arg("--selftest")
-            .arg("--selftest-chunks")
-            .arg("--selftest-tokenizer")
-            .arg(&tokenizer)
-            .env("PDFEXTRACTOR_CLI", false_program());
-
-        let output = run_with_timeout(command, Duration::from_secs(60));
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        assert!(
-            output.status.success(),
-            "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-            output.status
-        );
-        assert!(
-            stdout.contains("webview-ready"),
-            "the window never loaded:\n{stdout}"
-        );
-        assert!(
-            !stdout.contains("selftest-started"),
-            "the badge check started a conversion:\n{stdout}"
-        );
-
-        let report = stdout
-            .lines()
-            .find(|line| line.starts_with("selftest-rendered "))
-            .unwrap_or_else(|| {
-                panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
-            });
+        let report = tokenizer_badge_report(&root, &tokenizer);
         assert!(
             report.contains(&format!("tokenizer=\"{}\"", tokenizer.display())),
             "the report did not name the chosen tokenizer:\n{report}"
         );
         assert!(
             report.contains(&format!("tokenizer-format=\"{expected}\"")),
-            "the badge did not name {fixture}'s format and size:\n{report}"
+            "the badge did not name {}'s format and size:\n{report}",
+            tokenizer.display()
+        );
+        assert!(
+            report.contains("tokenizer-format-bad=0"),
+            "the badge marked a valid tokenizer as bad:\n{report}"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// A malformed tokenizer file is rejected beside the field, with the loader's
+/// message and the badge's error state, without starting a conversion.
+#[test]
+fn the_tokenizer_badge_shows_a_malformed_file_error() {
+    let root = repository_root();
+    if ui_command().is_none() {
+        return;
+    }
+
+    let scratch = std::env::temp_dir().join(format!(
+        "pdfextractor-tokenizer-badge-error-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("create the tokenizer badge error directory");
+    let bad = scratch.join("not-a-tokenizer.tiktoken");
+    std::fs::write(&bad, b"not a rank\n").expect("write a malformed tokenizer");
+
+    let report = tokenizer_badge_report(&root, &bad);
+    assert!(
+        report.contains("tokenizer-format=\"Cannot use this tokenizer:"),
+        "the badge did not show the loader's error beside the field:\n{report}"
+    );
+    assert!(
+        report.contains("expected one base64 token and one rank"),
+        "the badge did not carry the loader's message:\n{report}"
+    );
+    assert!(
+        report.contains("tokenizer-format-bad=1"),
+        "the badge did not mark the field's error state:\n{report}"
+    );
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// With an input and the chunking row, `--selftest-tokenizer` plus an encoding
+/// makes the page choose that family in the form and run. The rendered command
+/// is read back, so the test proves the page's choice reached the CLI rather
+/// than only that the selector changed.
+#[test]
+fn a_selftest_run_forwards_the_tokenizer_encoding_to_the_cli() {
+    let root = repository_root();
+    let input = root.join("test-data/brief.docx");
+    let tokenizer = root.join("test-data/tokenizer-mini.tiktoken");
+    assert!(input.exists(), "missing fixture {}", input.display());
+    assert!(
+        tokenizer.exists(),
+        "missing fixture {}",
+        tokenizer.display()
+    );
+    let cli = root.join("target/debug/pdfextractor-cli");
+    if !cli.exists() {
+        eprintln!("skipped: pdfextractor-cli is not built");
+        return;
+    }
+
+    let Some(mut command) = ui_command() else {
+        return;
+    };
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg("--selftest-chunks")
+        .arg("--selftest-tokenizer")
+        .arg(&tokenizer)
+        .arg("--selftest-tokenizer-encoding")
+        .arg("o200k_base")
+        .env("PDFEXTRACTOR_CLI", &cli);
+
+    let output = run_with_timeout(command, Duration::from_secs(120));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        report.contains("title=\"Finished\"") && report.contains("success=true"),
+        "the encoded conversion did not finish successfully:\n{report}"
+    );
+    assert!(
+        report.contains("tokenizer-encoding=o200k_base"),
+        "the page did not choose the requested encoding:\n{report}"
+    );
+    assert!(
+        report.contains("--to json --to chunks") && report.contains("--chunks-type hybrid"),
+        "the run did not ask for hybrid chunks:\n{report}"
+    );
+    assert!(
+        report.contains(&format!("--chunks-tokenizer {}", tokenizer.display())),
+        "the chosen tokenizer did not reach the command line:\n{report}"
+    );
+    assert!(
+        report.contains("--chunks-tokenizer-encoding o200k_base"),
+        "the chosen encoding did not reach the command line:\n{report}"
+    );
 }
