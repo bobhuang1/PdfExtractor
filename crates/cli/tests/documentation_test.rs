@@ -141,6 +141,8 @@ struct DocumentedCount {
     line: usize,
     section: Option<String>,
     excerpt: String,
+    /// The column of the count within `excerpt`, for the report's caret.
+    caret: usize,
 }
 
 impl DocumentedCount {
@@ -152,8 +154,11 @@ impl DocumentedCount {
             .map(|section| format!(" in section {section:?}"))
             .unwrap_or_default();
         format!(
-            "{}:{}{section}\n    {}",
-            self.source, self.line, self.excerpt
+            "{}:{}{section}\n    {}\n    {}^",
+            self.source,
+            self.line,
+            self.excerpt,
+            " ".repeat(self.caret)
         )
     }
 }
@@ -166,13 +171,15 @@ fn documented_count(source: &str, text: &str, offset: usize, value: usize) -> Do
         .map_or(text.len(), |index| offset + index);
     let line = &text[line_start..line_end];
     let line_number = text[..line_start].matches('\n').count() + 1;
+    let (excerpt, caret) = line_excerpt(line, offset - line_start);
 
     DocumentedCount {
         value,
         source: source.to_string(),
         line: line_number,
         section: section_at(text, offset),
-        excerpt: line_excerpt(line, offset - line_start),
+        excerpt,
+        caret,
     }
 }
 
@@ -189,14 +196,11 @@ fn section_at(text: &str, offset: usize) -> Option<String> {
 }
 
 /// The line holding the count, shortened around `column` when it is very long.
-fn line_excerpt(line: &str, column: usize) -> String {
+/// The line holding the count and the column of the count within that excerpt.
+fn line_excerpt(line: &str, column: usize) -> (String, usize) {
     const LIMIT: usize = 240;
 
     let trimmed = line.trim();
-    if trimmed.chars().count() <= LIMIT {
-        return trimmed.to_string();
-    }
-
     let leading = line.len() - line.trim_start().len();
     let column = column.saturating_sub(leading);
     let column = if column <= trimmed.len() && trimmed.is_char_boundary(column) {
@@ -205,27 +209,42 @@ fn line_excerpt(line: &str, column: usize) -> String {
         trimmed.len()
     };
     let column = trimmed[..column].chars().count();
+    if trimmed.chars().count() <= LIMIT {
+        return (trimmed.to_string(), column);
+    }
+
     let characters: Vec<char> = trimmed.chars().collect();
     let start = column.saturating_sub(LIMIT / 3);
     let end = (start + LIMIT).min(characters.len());
     let start = end.saturating_sub(LIMIT);
 
+    let mut caret = column.saturating_sub(start);
     let mut excerpt = String::new();
     if start > 0 {
         excerpt.push('…');
+        caret += 1;
     }
     excerpt.extend(&characters[start..end]);
     if end < characters.len() {
         excerpt.push('…');
     }
-    excerpt
+    (excerpt, caret)
+}
+
+/// The report for a marker that is absent, naming the section the search
+/// reached the end of instead of only the file and marker.
+fn missing_marker(source: &str, text: &str, marker: &str) -> String {
+    let section = section_at(text, text.len())
+        .map(|section| format!(" in section {section:?}"))
+        .unwrap_or_default();
+    format!("{source} no longer contains marker {marker:?}{section}")
 }
 
 /// The count after `prefix` in `text`, or why its marker or count is missing.
 fn count_after_in(text: &str, prefix: &str, source: &str) -> Result<DocumentedCount, String> {
     let start = text
         .find(prefix)
-        .ok_or_else(|| format!("{source} no longer contains marker {prefix:?}"))?;
+        .ok_or_else(|| missing_marker(source, text, prefix))?;
     let after = &text[start + prefix.len()..];
     let token = after.split_whitespace().next().unwrap_or_default();
     let value = count_from(token)
@@ -238,7 +257,7 @@ fn count_after_in(text: &str, prefix: &str, source: &str) -> Result<DocumentedCo
 fn count_before_in(text: &str, marker: &str, source: &str) -> Result<DocumentedCount, String> {
     let end = text
         .find(marker)
-        .ok_or_else(|| format!("{source} no longer contains marker {marker:?}"))?;
+        .ok_or_else(|| missing_marker(source, text, marker))?;
     let before = &text[..end];
     let token = before.split_whitespace().last().unwrap_or_default();
     let value = count_from(token)
@@ -631,12 +650,58 @@ fn every_stale_count_is_collected_before_the_gate_reports_it() {
     assert!(stale[0].contains("section \"Tests\""));
     assert!(stale[0].contains("The workspace holds 10 tests."));
     assert!(stale[1].contains("plan.md no longer contains marker \"holds \""));
+    assert!(stale[1].contains("in section \"Tests\""));
     assert!(stale[2].contains("README.md says the committed Docling references is 41"));
     assert!(stale[2].contains("has 42"));
     assert!(stale[2].contains("README.md:3"));
     assert!(stale[2].contains("section \"Golden set\""));
     assert!(stale[2].contains("There are 41 comparable references."));
     assert!(stale[3].contains("README.md no longer contains marker \"comparable references\""));
+    assert!(stale[3].contains("in section \"Golden set\""));
+
+    for (report, quoted, number) in [
+        (&stale[0], "The workspace holds 10 tests.", "10"),
+        (&stale[2], "There are 41 comparable references.", "41"),
+    ] {
+        let lines: Vec<&str> = report.lines().collect();
+        let quoted_line = lines
+            .iter()
+            .position(|line| line.contains(quoted))
+            .unwrap_or_else(|| panic!("the report did not quote {quoted:?}:\n{report}"));
+        let caret_line = lines
+            .get(quoted_line + 1)
+            .unwrap_or_else(|| panic!("the report had no caret after {quoted:?}:\n{report}"));
+        assert_eq!(
+            caret_line.trim(),
+            "^",
+            "the caret line held more than its caret:\n{report}"
+        );
+        assert_eq!(
+            caret_line.find('^'),
+            lines[quoted_line].find(number),
+            "the caret did not point at {number} in {quoted:?}:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn two_missing_markers_in_one_document_are_both_collected() {
+    let plan = "## Tests\n\nNo counts here.\n";
+    let after = count_after_in(plan, "holds ", "plan.md");
+    let before = count_before_in(plan, " end-to-end tests", "plan.md");
+
+    let mut stale = Vec::new();
+    check_count(&mut stale, "the workspace suite", &after, 1);
+    check_count(&mut stale, "the `cli_test` suite", &before, 2);
+
+    assert_eq!(
+        stale.len(),
+        2,
+        "one missing marker stopped the other from being collected: {stale:#?}"
+    );
+    assert!(stale[0].contains("plan.md no longer contains marker \"holds \" in section \"Tests\""));
+    assert!(stale[1]
+        .contains("plan.md no longer contains marker \" end-to-end tests\" in section \"Tests\""));
 }
 
 #[test]
