@@ -1,17 +1,18 @@
-# The test gate, on every push: every test of every crate, run as the README's
-# "Build and test" runs it by hand.
+# The test gate, on every push that changes what it reads: every test of every
+# crate, run as the README's "Build and test" runs it by hand.
 #
 #     cargo test --workspace --locked
 #
 # `--locked` so the gate also proves the committed lockfile is the one the
 # workspace builds from: a failing test and a stale lock are then the same red
 # build. Nothing is filtered — the unit tests, the corpus report, the golden
-# suite and the command line's own integration tests all run, the schema layer of
-# the Docling suite included (only its `docling-core` layer is skipped, because
-# that needs a Python with the package and `DOCLING_PY` pointing at it).
+# suite and the command line's own integration tests all run. The `test` job
+# leaves the Docling suite's `docling-core` layer skipped, because it has no
+# Python with the package; the `docling` job installs that Python, points
+# `DOCLING_PY` at it and runs the same suite with the oracle live.
 #
 # The suite compiles the desktop shell as well as the CLI, and OCR is a required
-# capability, so the job installs what both need on Linux: the Tesseract and
+# capability, so both jobs install what they need on Linux: the Tesseract and
 # Leptonica libraries the CLI links (and libclang, which builds the bindings) with
 # `tesseract-ocr`/`tesseract-ocr-eng` for the language data the OCR tests
 # recognise with, and the WebKitGTK and GTK development packages the shell's
@@ -39,7 +40,7 @@
 # without LibreOffice gets, and the bridge is gated on the machines that have it.
 #
 # The runner image is pinned rather than `ubuntu-latest`, for the reason
-# `bridge.yml` pins its own: this job's readings are made with the image's own
+# `bridge.yml` pins its own: these jobs' readings are made with the image's own
 # packages. The OCR floors in `crates/cli/tests/ocr_quality_test.rs` were recorded
 # with Tesseract 5.3.4 and Leptonica 1.82 — the engine family the 24.04 image
 # installs, and the one every push here has passed against — and their margins are
@@ -61,13 +62,45 @@
 
 name: the test gate
 
+# A routine push runs the workspace once, and only when it touches something the
+# suite reads: Rust sources and manifests, the window's frontend, test data, or
+# this workflow. Documentation-only pushes spend no minutes. Superseded runs on
+# the same ref are cancelled rather than left to finish.
+#
+# The Docling oracle is a second full workspace run, so it is not part of the
+# per-push gate: it runs weekly and by hand. A push still runs every test; only
+# the oracle-backed variant is deferred. `branches` is stated so tag pushes do
+# not run this gate as well — releases have their own workflow.
 on:
   push:
+    branches: ["**"]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "crates/ui/dist/**"
+      - "crates/ui/tauri.conf.json"
+      - "crates/ui/capabilities/**"
+      - "test-data/**"
+      - ".cargo/**"
+      - "rust-toolchain*"
+      - ".github/workflows/test.yml"
+  schedule:
+    # The oracle needs no per-push cadence; weekly catches drift without paying
+    # for a second full suite on every change.
+    - cron: '43 6 * * 3'
   workflow_dispatch:
+
+# One run per ref: a new push cancels the run it supersedes, so a force-push or
+# a quick follow-up does not pay for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: every crate, every test
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -94,4 +127,55 @@ jobs:
           key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
 
       - name: The workspace suite
+        run: cargo test --workspace --locked
+
+  docling:
+    name: every crate, every test, with the Docling oracle
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same native libraries and OCR data as the `test` job: this job runs
+      # the whole workspace, including the desktop shell and the OCR tests.
+      - name: The native libraries and OCR data the workspace needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libtesseract-dev libleptonica-dev libclang-dev \
+            tesseract-ocr tesseract-ocr-eng \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev
+
+      - name: The Docling oracle's Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The references were generated with docling-core 2.101.1, so the oracle
+      # is pinned to that version rather than floating with the latest release.
+      - name: Install docling-core
+        env:
+          DOCLING_PY: ${{ runner.temp }}/docling-venv/bin/python
+        run: |
+          python -m venv "$RUNNER_TEMP/docling-venv"
+          "$DOCLING_PY" -m pip install --disable-pip-version-check 'docling-core==2.101.1'
+          "$DOCLING_PY" -c 'from importlib.metadata import version; print("docling-core", version("docling-core"))'
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-docling-${{ hashFiles('**/Cargo.lock') }}
+
+      # `DOCLING_PY` makes `docling_core_accepts_our_documents` run instead of
+      # skipping, so this is the full suite with Docling's own model as the
+      # authority on every document it writes.
+      - name: The workspace suite with the Docling oracle
+        env:
+          DOCLING_PY: ${{ runner.temp }}/docling-venv/bin/python
         run: cargo test --workspace --locked

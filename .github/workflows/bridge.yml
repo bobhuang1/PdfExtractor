@@ -48,6 +48,13 @@ on:
     - cron: '17 6 * * 1'
   workflow_dispatch:
 
+# A manual run and the weekly run each get a group; a newer run of the same kind
+# cancels its predecessor instead of paying for both, without one cancelling the
+# other's coverage.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bridge:
     name: the tests that need LibreOffice

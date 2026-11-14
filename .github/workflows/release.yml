@@ -34,6 +34,13 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Releases are already tag/manual-only; the group keeps a re-tagged build from
+# racing its predecessor. Cancellation is deliberately off: a release uploads
+# into a shared draft, so completing one build is safer than interrupting it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

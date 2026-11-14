@@ -18,9 +18,24 @@
 
 name: the formatting gate
 
+# Formatting can only change with Rust sources, rustfmt's configuration, or the
+# manifests that decide which crates are in the workspace. A docs-only push
+# spends no minutes, and `branches` leaves tag pushes to the release workflow.
 on:
   push:
+    branches: ["**"]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "rustfmt.toml"
+      - ".rustfmt.toml"
+      - "rust-toolchain*"
+      - ".github/workflows/fmt.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rustfmt:
