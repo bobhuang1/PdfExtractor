@@ -684,152 +684,138 @@ fn provenance_records(value: &serde_json::Value, records: &mut Vec<serde_json::V
 }
 
 /// An animation's frames are its pages: the range selects among the frames,
-/// and each keeps the number it has in the file.
+/// and each keeps the number it has in the file. A GIF and an animated WebP
+/// are the same reading, so a new animated format only adds a row.
 #[test]
 fn an_animations_frames_are_pages_of_their_own() {
     let ws = Workspace::new("frames");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/turning.gif").to_str().unwrap(),
-        "-o",
-        ws.join("frames.json").to_str().unwrap(),
-        "--page-range",
-        "2-3",
-        "--ocr",
-        "never",
-    ]);
+    for (tag, relative, label) in [
+        ("gif", "test-data/images/turning.gif", "FRAME"),
+        ("webp", "test-data/images/turning.webp", "WEBP"),
+    ] {
+        let output = ws.join(&format!("{tag}.json"));
+        let out = run_ok(&[
+            "-i",
+            fixture(relative).to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--page-range",
+            "2-3",
+            "--ocr",
+            "always",
+        ]);
 
-    let doc = json_of(&ws.join("frames.json"));
-    assert_eq!(page_numbers(&doc), vec![2, 3]);
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 2 of 3 frames (2-3)"),
-        "the log does not name the frames it read: {logs}"
-    );
-}
-
-/// A range that names one frame of an animation keeps that frame's number in
-/// the file: the second frame of `turning.gif` is page 2, not the first page of
-/// a one-page document, and no provenance record points anywhere else.
-#[test]
-fn a_single_animation_frame_keeps_its_original_page_number() {
-    let ws = Workspace::new("one-frame");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/turning.gif").to_str().unwrap(),
-        "-o",
-        ws.join("frame2.json").to_str().unwrap(),
-        "--page-range",
-        "2",
-        "--ocr",
-        "always",
-    ]);
-
-    let doc = json_of(&ws.join("frame2.json"));
-    assert_eq!(page_numbers(&doc), vec![2]);
-
-    let mut records = Vec::new();
-    provenance_records(&doc, &mut records);
-    assert!(
-        !records.is_empty(),
-        "the range produced no provenance to check: {doc:#?}"
-    );
-    for record in &records {
+        let doc = json_of(&output);
         assert_eq!(
-            record["page_no"], 2,
-            "a provenance record points at another page: {record:#?}"
+            page_numbers(&doc),
+            vec![2, 3],
+            "{tag}: the wrong frames were kept"
+        );
+        let texts = doc["texts"].as_array().expect("texts");
+        let words = texts
+            .iter()
+            .map(|item| item["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for kept in [format!("{label} TWO"), format!("{label} THREE")] {
+            assert!(
+                words.contains(kept.as_str()),
+                "{tag}: the selected frame's words {kept:?} are missing: {words:?}"
+            );
+        }
+        assert!(
+            !words.contains(&format!("{label} ONE")),
+            "{tag}: a skipped frame's words survived: {words:?}"
+        );
+        let logs = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            logs.contains("reading 2 of 3 frames (2-3)"),
+            "{tag}: the log does not name the frames it read: {logs}"
         );
     }
-
-    // Prove the frame read is the one the range named, not merely page 2 of a
-    // document that started again at 1.
-    let texts = doc["texts"].as_array().expect("texts");
-    let words = texts
-        .iter()
-        .map(|item| item["text"].as_str().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        words.contains("FRAME TWO"),
-        "frame 2's words are missing: {words:?}"
-    );
-    assert!(
-        !words.contains("FRAME ONE") && !words.contains("FRAME THREE"),
-        "a skipped frame's words survived: {words:?}"
-    );
-
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 1 of 3 frames (2)"),
-        "the log does not name the single frame it read: {logs}"
-    );
 }
 
-/// A single frame of an animated WebP keeps its number in the file as a GIF's
-/// does: the second frame is page 2, and no provenance record points anywhere
-/// else.
+/// A range that names one page of an image sequence keeps that page's number in
+/// the file: the second frame or directory is page 2, not the first page of a
+/// one-page document, and no provenance record points anywhere else. GIF and
+/// animated WebP frames and a TIFF's directories are the same reading, so a new
+/// frame format only adds a row.
 #[test]
-fn a_single_webp_frame_keeps_its_original_page_number() {
-    let ws = Workspace::new("one-webp-frame");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/turning.webp").to_str().unwrap(),
-        "-o",
-        ws.join("webp-frame2.json").to_str().unwrap(),
-        "--page-range",
-        "2",
-        "--ocr",
-        "always",
-    ]);
+fn a_single_page_keeps_its_original_page_number() {
+    let ws = Workspace::new("one-page");
+    for (tag, relative, label, unit) in [
+        ("gif", "test-data/images/turning.gif", "FRAME", "frames"),
+        ("webp", "test-data/images/turning.webp", "WEBP", "frames"),
+        ("tiff", "test-data/images/pages.tiff", "PAGE", "directories"),
+    ] {
+        let output = ws.join(&format!("{tag}-page2.json"));
+        let out = run_ok(&[
+            "-i",
+            fixture(relative).to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--page-range",
+            "2",
+            "--ocr",
+            "always",
+        ]);
 
-    let doc = json_of(&ws.join("webp-frame2.json"));
-    assert_eq!(page_numbers(&doc), vec![2]);
-
-    let mut records = Vec::new();
-    provenance_records(&doc, &mut records);
-    assert!(
-        !records.is_empty(),
-        "the range produced no provenance to check: {doc:#?}"
-    );
-    for record in &records {
+        let doc = json_of(&output);
         assert_eq!(
-            record["page_no"], 2,
-            "a provenance record points at another page: {record:#?}"
+            page_numbers(&doc),
+            vec![2],
+            "{tag}: the wrong page was kept"
+        );
+
+        let mut records = Vec::new();
+        provenance_records(&doc, &mut records);
+        assert!(
+            !records.is_empty(),
+            "{tag}: the range produced no provenance to check: {doc:#?}"
+        );
+        for record in &records {
+            assert_eq!(
+                record["page_no"], 2,
+                "{tag}: a provenance record points at another page: {record:#?}"
+            );
+        }
+
+        // Prove the page read is the one the range named, not merely page 2 of
+        // a document that started again at 1.
+        let texts = doc["texts"].as_array().expect("texts");
+        let words = texts
+            .iter()
+            .map(|item| item["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let kept = format!("{label} TWO");
+        let skipped = [format!("{label} ONE"), format!("{label} THREE")];
+        assert!(
+            words.contains(kept.as_str()),
+            "{tag}: page 2's words are missing: {words:?}"
+        );
+        assert!(
+            skipped
+                .iter()
+                .all(|skipped| !words.contains(skipped.as_str())),
+            "{tag}: a skipped page's words survived: {words:?}"
+        );
+
+        let logs = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let single = format!("reading 1 of 3 {unit} (2)");
+        assert!(
+            logs.contains(single.as_str()),
+            "{tag}: the log does not name the single page it read: {logs}"
         );
     }
-
-    let texts = doc["texts"].as_array().expect("texts");
-    let words = texts
-        .iter()
-        .map(|item| item["text"].as_str().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        words.contains("WEBP TWO"),
-        "frame 2's words are missing: {words:?}"
-    );
-    assert!(
-        !words.contains("WEBP ONE") && !words.contains("WEBP THREE"),
-        "a skipped frame's words survived: {words:?}"
-    );
-
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 1 of 3 frames (2)"),
-        "the log does not name the single frame it read: {logs}"
-    );
 }
 
 /// A range past the last frame fails naming how many pages the file has, in the
@@ -867,123 +853,78 @@ fn an_out_of_range_frame_names_the_count_and_its_page_unit() {
     }
 }
 
-/// A TIFF's directories are its pages — a scanner's batch is a page per sheet —
-/// and each keeps the number it has in the file.
+/// An out-of-order selection does not reorder the frames: `3,1` reads frames 1
+/// and 3 in the file's order, each with its own page number, and leaves frame 2
+/// out. The log keeps the range as the caller wrote it. A GIF's and an animated
+/// WebP's frames and a TIFF's directories are the same reading, so a new frame
+/// format only adds a row.
 #[test]
-fn a_tiffs_directories_are_pages_of_their_own() {
-    let ws = Workspace::new("tiff");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/pages.tiff").to_str().unwrap(),
-        "-o",
-        ws.join("tiff.json").to_str().unwrap(),
-        "--page-range",
-        "2",
-        "--ocr",
-        "never",
-    ]);
+fn out_of_order_frames_keep_file_order_and_their_page_numbers() {
+    let ws = Workspace::new("frames-3-1");
+    for (tag, relative, label, unit) in [
+        ("gif", "test-data/images/turning.gif", "FRAME", "frames"),
+        ("webp", "test-data/images/turning.webp", "WEBP", "frames"),
+        ("tiff", "test-data/images/pages.tiff", "PAGE", "directories"),
+    ] {
+        let output = ws.join(&format!("{tag}.json"));
+        let out = run_ok(&[
+            "-i",
+            fixture(relative).to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--page-range",
+            "3,1",
+            "--ocr",
+            "always",
+        ]);
 
-    let doc = json_of(&ws.join("tiff.json"));
-    assert_eq!(page_numbers(&doc), vec![2]);
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 1 of 3 directories (2)"),
-        "the log does not name the directories it read: {logs}"
-    );
-}
-
-/// A single directory of a TIFF keeps its number in the file as a frame does:
-/// the second directory is page 2, not the first page of a one-page document,
-/// and no provenance record points anywhere else.
-#[test]
-fn a_single_tiff_directory_keeps_its_original_page_number() {
-    let ws = Workspace::new("one-tiff-directory");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/pages.tiff").to_str().unwrap(),
-        "-o",
-        ws.join("directory2.json").to_str().unwrap(),
-        "--page-range",
-        "2",
-        "--ocr",
-        "always",
-    ]);
-
-    let doc = json_of(&ws.join("directory2.json"));
-    assert_eq!(page_numbers(&doc), vec![2]);
-
-    let mut records = Vec::new();
-    provenance_records(&doc, &mut records);
-    assert!(
-        !records.is_empty(),
-        "the range produced no provenance to check: {doc:#?}"
-    );
-    for record in &records {
+        let doc = json_of(&output);
         assert_eq!(
-            record["page_no"], 2,
-            "a provenance record points at another page: {record:#?}"
+            page_numbers(&doc),
+            vec![1, 3],
+            "{tag}: the selected pages do not keep their file numbers"
+        );
+        let prefix = format!("{label} ");
+        let pages: Vec<(i64, &str)> = doc["texts"]
+            .as_array()
+            .expect("texts")
+            .iter()
+            .filter_map(|item| {
+                let text = item["text"].as_str()?;
+                if !text.starts_with(prefix.as_str()) {
+                    return None;
+                }
+                let page = item["prov"].as_array()?.first()?["page_no"].as_i64()?;
+                Some((page, text))
+            })
+            .collect();
+        let one = format!("{label} ONE");
+        let three = format!("{label} THREE");
+        assert_eq!(
+            pages,
+            vec![(1, one.as_str()), (3, three.as_str())],
+            "{tag}: the pages are not in file order with their original numbers"
+        );
+        for item in doc["texts"].as_array().expect("texts") {
+            for prov in item["prov"].as_array().expect("prov") {
+                let page = prov["page_no"].as_i64().expect("a page number");
+                assert!(
+                    page == 1 || page == 3,
+                    "{tag}: an item points at skipped page 2: {item:#?}"
+                );
+            }
+        }
+
+        let logs = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            logs.contains(&format!("reading 2 of 3 {unit} (3,1)")),
+            "{tag}: the log does not keep the range as written: {logs}"
         );
     }
-
-    // Prove the directory read is the one the range named, not page 2 of a
-    // document that started again at 1.
-    let texts = doc["texts"].as_array().expect("texts");
-    let words = texts
-        .iter()
-        .map(|item| item["text"].as_str().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        words.contains("PAGE TWO"),
-        "directory 2's words are missing: {words:?}"
-    );
-    assert!(
-        !words.contains("PAGE ONE") && !words.contains("PAGE THREE"),
-        "a skipped directory's words survived: {words:?}"
-    );
-
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 1 of 3 directories (2)"),
-        "the log does not name the single directory it read: {logs}"
-    );
-}
-
-/// An animated WebP's frames are pages as a GIF's are: the range selects among
-/// the frames, and each keeps the number it has in the file.
-#[test]
-fn an_animated_webps_frames_are_pages_of_their_own() {
-    let ws = Workspace::new("webp");
-    let out = run_ok(&[
-        "-i",
-        fixture("test-data/images/turning.webp").to_str().unwrap(),
-        "-o",
-        ws.join("webp.json").to_str().unwrap(),
-        "--page-range",
-        "2-3",
-        "--ocr",
-        "never",
-    ]);
-
-    let doc = json_of(&ws.join("webp.json"));
-    assert_eq!(page_numbers(&doc), vec![2, 3]);
-    let logs = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        logs.contains("reading 2 of 3 frames (2-3)"),
-        "the log does not name the frames it read: {logs}"
-    );
 }
 
 /// A format with no pages is read whole, and says so rather than pretending the

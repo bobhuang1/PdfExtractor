@@ -775,6 +775,73 @@ fn a_page_range_keeps_every_selected_slides_items_in_deck_order() {
     );
 }
 
+/// The prose writers see the same selection as the JSON: `1,3` renders the
+/// first and third slides, with both slides' speaker notes and the third
+/// slide's picture, and nothing from the unnamed second slide. The picture is
+/// written beside the prose and both formats point at that file.
+#[test]
+fn selected_slides_keep_their_notes_and_pictures_in_markdown_and_html() {
+    let ws = Workspace::new("rendered-selection");
+    let output = ws.join("deck.json");
+    run_ok(&[
+        "-i",
+        fixture().to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--page-range",
+        "1,3",
+        "--to",
+        "md",
+        "--to",
+        "html",
+        "--include-notes",
+        "--ocr",
+        "never",
+    ]);
+
+    let markdown = std::fs::read_to_string(ws.join("deck.md")).expect("the Markdown");
+    let html = std::fs::read_to_string(ws.join("deck.html")).expect("the HTML");
+    let first_note = "Open with the revenue line, then the regions.";
+    let third_note = "Say the picture is the growth by quarter; do not read the table aloud.";
+    let picture = "deck_images/slide3_1.png";
+
+    for reading in [&markdown, &html] {
+        assert!(
+            reading.contains("Q3 Review"),
+            "slide 1 is missing:\n{reading}"
+        );
+        assert!(
+            reading.contains("Where the growth came from"),
+            "slide 3 is missing:\n{reading}"
+        );
+        assert!(
+            reading.contains(first_note) && reading.contains(third_note),
+            "a selected slide's notes are missing:\n{reading}"
+        );
+        assert!(
+            !reading.contains("Regional performance"),
+            "slide 2 was rendered too:\n{reading}"
+        );
+    }
+    assert!(
+        markdown.contains(&format!("![Image]({picture})")),
+        "the Markdown does not link the selected slide's picture:\n{markdown}"
+    );
+    assert!(
+        html.contains(&format!("<img src=\"{picture}\" alt=\"Image\">")),
+        "the HTML does not show the selected slide's picture:\n{html}"
+    );
+    assert!(
+        html.contains("<aside class=\"notes\">"),
+        "the HTML notes are not marked as notes:\n{html}"
+    );
+    let image = std::fs::read(ws.join(picture)).expect("the extracted slide picture");
+    assert!(
+        image.starts_with(b"\x89PNG\r\n\x1a\n") && image.len() > 8,
+        "the picture beside the prose is not a PNG"
+    );
+}
+
 #[test]
 fn odp_is_offered_under_its_own_family() {
     let out = run_ok(&["--list-input-formats"]);
