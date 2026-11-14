@@ -64,10 +64,16 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// Run the CLI with `args` and return the completed process.
+///
+/// `OMP_THREAD_LIMIT=1` keeps each test's Tesseract from starting a worker per
+/// CPU. The harness runs several children at once, so the default pool is
+/// oversubscribed: on a 4-CPU machine a one-page OCR test took 27 s uncapped
+/// and 1.2 s capped.
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
         .args(args)
         .env("RUST_LOG", "info")
+        .env("OMP_THREAD_LIMIT", "1")
         .output()
         .expect("spawn the CLI binary")
 }
@@ -11712,6 +11718,7 @@ fn run_without_libreoffice(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
         .args(args)
         .env("RUST_LOG", "info")
+        .env("OMP_THREAD_LIMIT", "1")
         .env("PDFE_SOFFICE", "/definitely/not/a/soffice")
         .output()
         .expect("spawn the CLI binary")
