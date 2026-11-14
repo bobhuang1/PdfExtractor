@@ -180,11 +180,12 @@ fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
 }
 
 /// The format of the chosen `--chunks-tokenizer` file and its vocabulary size
-/// or tiktoken family, for the page to name beside it. The chunker's own loader
-/// answers, so an extensionless file is recognized by its bytes and the number
-/// is the one a run will use.
+/// or effective tiktoken family, for the page to name beside it. The chunker's
+/// own loader answers, so an extensionless file is recognized by its bytes, an
+/// explicit encoding overrides the filename's family, and the number is the one
+/// a run will use.
 #[tauri::command]
-fn tokenizer_format(path: String) -> Result<String, String> {
+fn tokenizer_format(path: String, encoding: Option<String>) -> Result<String, String> {
     let path = Path::new(&path);
     // A missing or unreadable path is an I/O error, not an unrecognized format:
     // report the loader's own reason so the badge can say why the file could not
@@ -198,7 +199,13 @@ fn tokenizer_format(path: String) -> Result<String, String> {
     if pdfextractor_md_exporter::chunks::detect_tokenizer_format(path).is_err() {
         return Err("Unknown format".to_string());
     }
-    pdfextractor_md_exporter::chunks::Tokenizer::from_file(path)
+    let encoding = encoding
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::parse::<pdfextractor_md_exporter::chunks::TiktokenEncoding>)
+        .transpose()?;
+    pdfextractor_md_exporter::chunks::Tokenizer::from_file_with_tiktoken_encoding(path, encoding)
         .map(|tokenizer| tokenizer.description().to_string())
         .map_err(|error| error.to_string())
 }

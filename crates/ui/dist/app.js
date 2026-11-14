@@ -106,8 +106,9 @@ function describe(settings) {
     if (settings.chunksTokenizer) {
       const badge = el("chunks-tokenizer-format");
       const detected = badge.classList.contains("bad") ? "" : badge.textContent.trim();
+      const source = settings.chunksTokenizerEncoding ? "loaded" : "detected";
       bits.push(
-        `tokenizer ${baseName(settings.chunksTokenizer)}${detected ? ` (detected: ${detected})` : ""}`
+        `tokenizer ${baseName(settings.chunksTokenizer)}${detected ? ` (${source}: ${detected})` : ""}`
       );
     }
     if (settings.chunksTokenizer && settings.chunksTokenizerEncoding) {
@@ -809,6 +810,7 @@ function renderedSummary() {
     `folder="${el("output-folder").textContent}"`,
     `folder-action=${el("open-output").classList.contains("hidden") ? 0 : 1}`,
     `run-visible=${el("run").classList.contains("hidden") ? "hidden" : "shown"}`,
+    `result-visible=${el("result").classList.contains("hidden") ? "hidden" : "shown"}`,
     `convert=${el("convert").disabled ? "disabled" : "enabled"}`,
     `started=${display ? 1 : 0}`,
     `chunk-controls-before=${chunkControlsBefore}`,
@@ -947,13 +949,16 @@ function dispatch(kind, payload) {
         );
       }
       if (payload.input && payload.chunks) {
-        refreshTokenizerFormat();
-        start().then((started) => {
-          if (!started) {
-            invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
-              console.error(error)
-            );
-          }
+        // The summary reads the badge, so paint it before a run can report;
+        // otherwise a loaded machine can report the previous or empty label.
+        refreshTokenizerFormat().then(() => {
+          start().then((started) => {
+            if (!started) {
+              invoke("selftest_rendered", { summary: renderedSummary() }).catch((error) =>
+                console.error(error)
+              );
+            }
+          });
         });
         return;
       }
@@ -1204,11 +1209,14 @@ async function refreshTokenizerFormat() {
     refreshSummary();
     return;
   }
+  const encoding = el("chunks-tokenizer-encoding").value || null;
   try {
-    const format = await invoke("tokenizer_format", { path });
+    const format = await invoke("tokenizer_format", { path, encoding });
     if (ask !== tokenizerFormatAsk) return;
     label.textContent = format;
-    label.title = `Detected from ${path}`;
+    label.title = encoding
+      ? `Loaded from ${path} as ${encoding}`
+      : `Detected from ${path}`;
     label.classList.remove("bad");
     refreshSummary();
   } catch (error) {
@@ -1306,7 +1314,10 @@ function wire() {
   ]) {
     el(id).addEventListener("input", refreshSummary);
   }
-  el("chunks-tokenizer-encoding").addEventListener("change", refreshSummary);
+  el("chunks-tokenizer-encoding").addEventListener("change", () => {
+    refreshSummary();
+    refreshTokenizerFormat();
+  });
   el("chunks-tokenizer").addEventListener("input", refreshTokenizerFormat);
   for (const id of [
     "recursive",

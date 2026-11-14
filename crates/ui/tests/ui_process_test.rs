@@ -14,7 +14,20 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+/// The two tokenizer-label checks each start several windows and read a label
+/// painted asynchronously. Running them together with the rest of the process
+/// suite can leave one report describing an older badge under load; serialize
+/// just these two so each sees the label its own window painted.
+static TOKENIZER_WINDOW: Mutex<()> = Mutex::new(());
+
+fn tokenizer_window() -> MutexGuard<'static, ()> {
+    TOKENIZER_WINDOW
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -604,6 +617,7 @@ fn tokenizer_badge_report(root: &Path, tokenizer: &Path) -> String {
 
 #[test]
 fn the_tokenizer_badge_names_each_fixture_and_its_size() {
+    let _tokenizer_window = tokenizer_window();
     let root = repository_root();
     if ui_command().is_none() {
         return;
@@ -850,6 +864,10 @@ fn a_malformed_tokenizer_is_refused_in_the_result_pane_before_conversion() {
         "the result pane did not show the refusal:\n{report}"
     );
     assert!(
+        report.contains("result-visible=shown"),
+        "the result pane was populated but left hidden:\n{report}"
+    );
+    assert!(
         report.contains("Tokenizer file cannot be loaded:")
             && report.contains("not-a-tokenizer.json"),
         "the result pane did not carry the loader's error:\n{report}"
@@ -864,6 +882,81 @@ fn a_malformed_tokenizer_is_refused_in_the_result_pane_before_conversion() {
     );
 
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// A nonexistent tokenizer path is refused in the result pane before a
+/// conversion process exists. The page draws the command's form error as
+/// `Cannot convert`; the CLI is `/bin/false`, and the absent started line
+/// proves it was never reached.
+#[test]
+fn a_missing_tokenizer_is_refused_in_the_result_pane_before_conversion() {
+    let root = repository_root();
+    if ui_command().is_none() {
+        return;
+    }
+    let input = root.join("test-data/brief.docx");
+    assert!(input.exists(), "missing fixture {}", input.display());
+
+    let missing = std::env::temp_dir().join(format!(
+        "pdfextractor-missing-tokenizer-{}.tiktoken",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&missing);
+
+    let mut command = ui_command().expect("the window check was available above");
+    command
+        .current_dir(&root)
+        .arg("--selftest")
+        .arg(&input)
+        .arg("--selftest-chunks")
+        .arg("--selftest-tokenizer")
+        .arg(&missing)
+        .env("PDFEXTRACTOR_CLI", false_program());
+
+    let output = run_with_timeout(command, Duration::from_secs(60));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the UI exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("webview-ready"),
+        "the window never loaded:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("selftest-started") && !stdout.contains("selftest-conversion-started"),
+        "a conversion process was started for a missing tokenizer:\n{stdout}"
+    );
+
+    let report = stdout
+        .lines()
+        .find(|line| line.starts_with("selftest-rendered "))
+        .unwrap_or_else(|| {
+            panic!("the page reported nothing:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        });
+    assert!(
+        report.contains("title=\"Cannot convert\""),
+        "the result pane did not show the refusal:\n{report}"
+    );
+    assert!(
+        report.contains("result-visible=shown"),
+        "the result pane was populated but left hidden:\n{report}"
+    );
+    assert!(
+        report.contains("Tokenizer file does not exist:")
+            && report.contains("pdfextractor-missing-tokenizer-"),
+        "the result pane did not carry the missing path:\n{report}"
+    );
+    assert!(
+        report.contains("started=0") && report.contains("run-visible=hidden"),
+        "a run was drawn despite the refusal:\n{report}"
+    );
+    assert!(
+        report.contains("convert=enabled"),
+        "Convert was left disabled after the refusal:\n{report}"
+    );
 }
 
 /// A path that names no file, or names something that cannot be read as one,
@@ -952,6 +1045,7 @@ fn the_tokenizer_badge_calls_an_unrecognized_file_unknown_format() {
 /// page's choice reached the CLI rather than only that the selector changed.
 #[test]
 fn a_selftest_run_forwards_the_tokenizer_encoding_to_the_cli() {
+    let _tokenizer_window = tokenizer_window();
     let root = repository_root();
     let input = root.join("test-data/brief.docx");
     let tokenizer = root.join("test-data/tokenizer-mini.tiktoken");
@@ -1025,18 +1119,29 @@ fn a_selftest_run_forwards_the_tokenizer_encoding_to_the_cli() {
         "the page did not choose the requested encoding:\n{report}"
     );
     assert!(
+        report.contains("tokenizer-format=\"tiktoken · o200k_base · 257 tokens\""),
+        "the badge kept the filename's cl100k_base family:\n{report}"
+    );
+    assert!(
+        report.contains(&format!(
+            "tokenizer-format-title=\"Loaded from {} as o200k_base\"",
+            tokenizer.display()
+        )),
+        "the badge tooltip did not name the selected family:\n{report}"
+    );
+    assert!(
         report.contains(
-            "tokenizer tokenizer-mini.tiktoken (detected: tiktoken · cl100k_base · 257 tokens)"
+            "tokenizer tokenizer-mini.tiktoken (loaded: tiktoken · o200k_base · 257 tokens)"
         ),
-        "the run summary omitted the detected tokenizer format and size:\n{report}"
+        "the run summary omitted the effective tokenizer family and size:\n{report}"
     );
     assert!(
         report.contains("selected encoding o200k_base"),
-        "the run summary did not distinguish the selected encoding from the detected family:\n{report}"
+        "the run summary did not distinguish the selected encoding from the loaded family:\n{report}"
     );
     assert!(
-        !report.contains("· tiktoken o200k_base"),
-        "the selected encoding still reads as a second tokenizer format:\n{report}"
+        !report.contains("cl100k_base"),
+        "the overridden filename family survived in the badge or summary:\n{report}"
     );
     assert!(
         report.contains("--to json --to chunks") && report.contains("--chunks-type hybrid"),
