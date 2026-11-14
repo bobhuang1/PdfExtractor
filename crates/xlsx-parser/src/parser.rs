@@ -375,12 +375,13 @@ fn read_comments(bytes: &[u8], sheet: usize) -> Result<Vec<SheetAnnotation>> {
                 b"rPh" => phonetic += 1,
                 _ => {}
             },
-            Ok(Event::Empty(e)) => match local_name(e.name().as_ref()) {
+            Ok(Event::Empty(e)) => {
                 // An empty author is a name the part does not state, and an
                 // empty comment has no words to be a remark.
-                b"author" => authors.push(String::new()),
-                _ => {}
-            },
+                if local_name(e.name().as_ref()) == b"author" {
+                    authors.push(String::new());
+                }
+            }
             Ok(Event::Text(e)) => {
                 let text = e.unescape().unwrap_or_default();
                 if let Some(author) = author.as_mut() {

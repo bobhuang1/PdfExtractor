@@ -12,7 +12,7 @@
 //!   relationship id — including the preview of an embedded object (`w:object`,
 //!   a MathType equation or a pasted drawing), and including the vector
 //!   drawings Word stores as metafiles, which are played into PNGs first (see
-//!   [`crate::drawing`]),
+//!   `crate::drawing`),
 //! * a chart's title, which exists only in the chart part, as a caption,
 //! * Office Math (`m:oMath`), linearised to readable text — one formula item per
 //!   equation.

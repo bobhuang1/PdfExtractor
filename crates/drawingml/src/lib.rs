@@ -45,7 +45,7 @@
 //!
 //! Not drawn: patterns, 3-D, the effects other than an outer shadow (a glow, a
 //! reflection, a bevel) and any preset outline not in
-//! [`shape::preset_outline`]. A shape that puts no ink down is no picture rather
+//! `shape::preset_outline`. A shape that puts no ink down is no picture rather
 //! than a blank one.
 
 pub mod paint;

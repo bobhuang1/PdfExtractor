@@ -219,7 +219,7 @@ impl OcrEngine {
     /// the language the page is judged in.
     ///
     /// The stored pixels keep the page unless another turn reads *clearly*
-    /// better (see [`DETECT_MARGIN`]). A page with little text, a blurry scan
+    /// better (see `DETECT_MARGIN`). A page with little text, a blurry scan
     /// and one this cannot decode all answer [`QuarterTurn::AsStored`], so a
     /// page is never turned on a difference that is only noise.
     ///
@@ -227,7 +227,7 @@ impl OcrEngine {
     /// horizontal baselines, so Tesseract reads it as other words rather than
     /// as a turned page, and only a stronger reading the right way round shows
     /// it. The two quarter turns are read only when the stored reading is weak
-    /// ([`DETECT_SETTLED_SCORE`]), which is the shape a sideways page makes.
+    /// (`DETECT_SETTLED_SCORE`), which is the shape a sideways page makes.
     pub fn detect_upright(&mut self, image_bytes: &[u8]) -> Result<QuarterTurn> {
         #[cfg(feature = "tesseract")]
         {

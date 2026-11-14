@@ -903,7 +903,7 @@ pub fn analyze(spans: &[Span], page_size: [f64; 2], pictures: &[[f64; 4]]) -> Ve
 /// with a top-left origin — empty for a producer that publishes no drawing, and
 /// empty is what every flow format has. They are asked about a table candidate in the
 /// page's foot, where the rule above a note stands where a table's top border would:
-/// see [`groupings_in`].
+/// see `groupings_in`.
 pub fn analyze_page(
     spans: &[Span],
     page_size: [f64; 2],

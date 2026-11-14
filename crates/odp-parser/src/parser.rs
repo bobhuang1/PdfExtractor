@@ -759,12 +759,24 @@ fn is_animation_node(name: &str) -> bool {
 }
 
 /// Read a page's animation effects in document order.
+/// The page-wide facts every effect in a timing tree is read against.
+struct AnimationContext<'a> {
+    page_id: Option<&'a str>,
+    transition_begin: Option<&'a str>,
+    names: &'a HashMap<String, String>,
+}
+
 fn read_animations(
     page: &Node,
     names: &HashMap<String, String>,
 ) -> (Vec<Animation>, Option<Transition>) {
     let page_id = page.attr("id");
     let transition_begin = page_id.map(|id| format!("{id}.begin"));
+    let context = AnimationContext {
+        page_id,
+        transition_begin: transition_begin.as_deref(),
+        names,
+    };
     let mut animations = Vec::new();
     let mut transition = None;
     for child in &page.children {
@@ -773,9 +785,7 @@ fn read_animations(
                 child,
                 None,
                 None,
-                page_id,
-                transition_begin.as_deref(),
-                names,
+                &context,
                 &mut animations,
                 &mut transition,
             );
@@ -791,9 +801,7 @@ fn walk_animations<'a>(
     node: &'a Node,
     begin: Option<&'a str>,
     duration: Option<&'a str>,
-    page_id: Option<&str>,
-    transition_begin: Option<&str>,
-    names: &HashMap<String, String>,
+    context: &AnimationContext<'a>,
     out: &mut Vec<Animation>,
     transition: &mut Option<Transition>,
 ) {
@@ -806,7 +814,12 @@ fn walk_animations<'a>(
         // begins) changes the slide as a whole; a shape's transitionFilter
         // names the shape it belongs to and stays an animation.
         if node.name == "transitionFilter"
-            && is_page_transition(node, effective_begin, page_id, transition_begin)
+            && is_page_transition(
+                node,
+                effective_begin,
+                context.page_id,
+                context.transition_begin,
+            )
         {
             if let Some(effect) = node.attr("type") {
                 if transition.is_none() {
@@ -822,9 +835,13 @@ fn walk_animations<'a>(
             return;
         }
         out.push(Animation {
-            target: node
-                .attr("targetElement")
-                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.to_string())),
+            target: node.attr("targetElement").map(|id| {
+                context
+                    .names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.to_string())
+            }),
             effect: node.name.clone(),
             attribute: node.attr("attributeName").map(str::to_string),
             from: node.attr("from").map(str::to_string),
@@ -842,9 +859,7 @@ fn walk_animations<'a>(
             child,
             effective_begin,
             effective_duration,
-            page_id,
-            transition_begin,
-            names,
+            context,
             out,
             transition,
         );

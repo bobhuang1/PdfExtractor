@@ -4,7 +4,7 @@
 //! `w:pict`) or DrawingML (`wps:wsp`, `w:drawing`) — but both are painted the
 //! same way: a small XML tree is read, the shapes are reduced to filled polygons,
 //! strokes and strings in points, and those are drawn onto a canvas at 144 dpi.
-//! [`vml`](crate::vml) and [`drawingml`](crate::drawingml) differ in how they
+//! `vml` and `drawingml` differ in how they
 //! read their markup, not in how the ink reaches a PNG, so the frame arithmetic,
 //! the op list, the shape outline helpers and the rasteriser live here.
 //!

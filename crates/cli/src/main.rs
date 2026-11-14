@@ -111,23 +111,23 @@ impl ChunkType {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum TokenizerEncoding {
     #[value(name = "cl100k_base", alias = "cl100k")]
-    Cl100kBase,
+    Cl100k,
     #[value(name = "o200k_base", alias = "o200k")]
-    O200kBase,
+    O200k,
     #[value(name = "p50k_base", alias = "p50k")]
-    P50kBase,
+    P50k,
     #[value(name = "r50k_base", alias = "r50k")]
-    R50kBase,
+    R50k,
 }
 
 impl TokenizerEncoding {
     fn encoding(self) -> pdfextractor_md_exporter::chunks::TiktokenEncoding {
         use pdfextractor_md_exporter::chunks::TiktokenEncoding;
         match self {
-            TokenizerEncoding::Cl100kBase => TiktokenEncoding::Cl100k,
-            TokenizerEncoding::O200kBase => TiktokenEncoding::O200k,
-            TokenizerEncoding::P50kBase => TiktokenEncoding::P50k,
-            TokenizerEncoding::R50kBase => TiktokenEncoding::R50k,
+            TokenizerEncoding::Cl100k => TiktokenEncoding::Cl100k,
+            TokenizerEncoding::O200k => TiktokenEncoding::O200k,
+            TokenizerEncoding::P50k => TiktokenEncoding::P50k,
+            TokenizerEncoding::R50k => TiktokenEncoding::R50k,
         }
     }
 }
