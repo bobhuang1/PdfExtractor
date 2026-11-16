@@ -1,0 +1,383 @@
+# Fixture-to-test ownership for scripts/test.sh.
+#
+# The first field is a fixture path or shell glob matched against a changed
+# path. A bare directory wildcard such as test-data/real/* covers every
+# descendant and the directory itself, including deleted paths; a row such as
+# test-data/real/*.pdf remains an extension filter. The second field is exactly
+# one owner: the source path of a declared test target under crates/<crate>/,
+# including a custom target outside tests/, or crates/<crate>#lib for a fixture
+# read by a crate's unit tests. The runner resolves the source path through
+# cargo metadata, so the target's declared name is used. A row contributes that
+# target only; changing a test target's source is handled by the normal
+# crates/* path selection.
+#
+# The table is intentionally explicit rather than inferring ownership from
+# string search: a fixture may be read through a helper, a directory walk, or a
+# list of stems. A fixture with no matching row is unknown and selects the full
+# workspace; new fixtures should get a row here when their owner is known.
+#
+# Keep owner paths relative to the repository root and tab-separate the fields.
+
+# Small fixtures beside the corpus, read directly by a test.
+test-data/brief.docx	crates/cli/tests/cli_test.rs
+test-data/brief.docx	crates/ui/tests/ui_process_test.rs
+test-data/hello.pdf	crates/doc-parser/tests/real_doc_test.rs
+test-data/hello.pdf	crates/pdf-parser/tests/content_test.rs
+test-data/hello.pdf	crates/pdf-parser/tests/lexer_test.rs
+test-data/hello.pdf	crates/pdf-parser/tests/parser_test.rs
+test-data/hello.pdf	crates/cli/tests/formats_golden_test.rs
+test-data/hello.pdf	crates/cli/tests/md_golden_test.rs
+test-data/jpx_picture.pdf	crates/pdf-parser/tests/images_test.rs
+test-data/jpx_picture.pdf	crates/cli/tests/cli_test.rs
+test-data/scanned.pdf	crates/pdf-parser/tests/images_test.rs
+test-data/scanned.pdf	crates/ocr-engine/tests/ocr_integration.rs
+test-data/scanned.pdf	crates/cli/tests/cli_test.rs
+test-data/scanned_rotated.pdf	crates/cli/tests/cli_test.rs
+test-data/link_annotations.pdf	crates/pdf-parser/tests/links_test.rs
+test-data/link_annotations.pdf	crates/cli/tests/cli_test.rs
+test-data/link_annotations.pdf	crates/cli/tests/formats_golden_test.rs
+test-data/link_annotations.pdf	crates/cli/tests/md_golden_test.rs
+test-data/encrypted.pdf	crates/cli/tests/encrypted_test.rs
+test-data/compressed.pdf	crates/cli/tests/cli_test.rs
+
+test-data/inventory.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/inventory.xlsx	crates/cli/tests/cli_test.rs
+test-data/inventory.xlsx	crates/cli/tests/docling_golden_test.rs
+test-data/inventory.xlsx	crates/cli/tests/page_range_test.rs
+test-data/inventory.xlsx	crates/cli/tests/md_golden_test.rs
+test-data/annotations.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/annotations.xlsx	crates/cli/tests/cli_test.rs
+test-data/worksheet_pictures.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/worksheet_pictures.xlsx	crates/cli/tests/cli_test.rs
+test-data/chart_sheet.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/chart_sheet.xlsx	crates/cli/tests/cli_test.rs
+test-data/chart_cross_sheet.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/chart_quoted_sheet.xlsx	crates/xlsx-parser/tests/fixture_test.rs
+test-data/ledger.xlsx	crates/cli/tests/cli_test.rs
+
+test-data/brief_odt.odt	crates/cli/tests/odt_test.rs
+test-data/brief_odt.odt	crates/cli/tests/cli_test.rs
+test-data/brief_odt.odt	crates/cli/tests/docling_golden_test.rs
+test-data/brief_odt.odt	crates/cli/tests/formats_golden_test.rs
+test-data/brief_odt.odt	crates/cli/tests/md_golden_test.rs
+test-data/notes_odt.odt	crates/cli/tests/odt_test.rs
+test-data/notes_odt.odt	crates/cli/tests/docling_golden_test.rs
+test-data/notes_odt.odt	crates/cli/tests/formats_golden_test.rs
+test-data/notes_odt.odt	crates/cli/tests/md_golden_test.rs
+test-data/header_footer_odt.odt	crates/cli/tests/odt_test.rs
+test-data/header_footer_odt.odt	crates/cli/tests/docling_golden_test.rs
+test-data/inventory_calc.ods	crates/cli/tests/ods_test.rs
+test-data/inventory_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/inventory_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/inventory_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/annotations_calc.ods	crates/cli/tests/ods_test.rs
+test-data/annotations_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/annotations_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/annotations_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/worksheet_pictures_calc.ods	crates/cli/tests/ods_test.rs
+test-data/worksheet_pictures_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/worksheet_pictures_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/worksheet_pictures_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/chart_sheet_calc.ods	crates/cli/tests/ods_test.rs
+test-data/chart_sheet_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/chart_sheet_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/chart_sheet_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/chart_cross_sheet_calc.ods	crates/cli/tests/ods_test.rs
+test-data/chart_cross_sheet_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/chart_cross_sheet_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/chart_cross_sheet_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/chart_quoted_sheet_calc.ods	crates/cli/tests/ods_test.rs
+test-data/filler_rows_calc.ods	crates/cli/tests/ods_test.rs
+test-data/filler_rows_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/filler_rows_over_cap_calc.ods	crates/cli/tests/ods_test.rs
+test-data/filler_rows_over_cap_calc.ods	crates/cli/tests/docling_golden_test.rs
+test-data/filler_rows_over_cap_calc.ods	crates/cli/tests/formats_golden_test.rs
+test-data/filler_rows_over_cap_calc.ods	crates/cli/tests/md_golden_test.rs
+test-data/booleans_calc.ods	crates/cli/tests/ods_test.rs
+test-data/booleans_calc.ods	crates/cli/tests/docling_golden_test.rs
+
+test-data/q3_review.pptx	crates/cli/tests/cli_test.rs
+test-data/q3_review.pptx	crates/cli/tests/page_range_test.rs
+test-data/q3_review.pptx	crates/cli/tests/docling_golden_test.rs
+test-data/q3_review.pptx	crates/cli/tests/md_golden_test.rs
+test-data/q3_review_impress.odp	crates/cli/tests/odp_test.rs
+test-data/q3_review_impress.odp	crates/cli/tests/page_range_test.rs
+test-data/q3_review_impress.odp	crates/cli/tests/docling_golden_test.rs
+test-data/q3_review_impress.odp	crates/cli/tests/formats_golden_test.rs
+test-data/q3_review_impress.odp	crates/cli/tests/md_golden_test.rs
+test-data/chart_types_impress.odp	crates/cli/tests/odp_test.rs
+test-data/chart_types_impress.odp	crates/cli/tests/docling_golden_test.rs
+test-data/chart_types_impress.odp	crates/cli/tests/formats_golden_test.rs
+test-data/chart_types_impress.odp	crates/cli/tests/md_golden_test.rs
+test-data/master_animations_impress.odp	crates/cli/tests/odp_test.rs
+test-data/master_animations_impress.odp	crates/cli/tests/docling_golden_test.rs
+test-data/chart_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/chart_deck.pptx	crates/cli/tests/formats_golden_test.rs
+test-data/chart_deck.pptx	crates/cli/tests/md_golden_test.rs
+test-data/chart_deck.pptx	crates/cli/tests/docling_golden_test.rs
+test-data/comment_times.pptx	crates/cli/tests/cli_test.rs
+test-data/comment_times.ppt	crates/cli/tests/cli_test.rs
+test-data/background_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/background_deck.pptx	crates/pptx-parser/tests/background_test.rs
+test-data/layout_background_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/layout_background_deck.pptx	crates/pptx-parser/tests/background_test.rs
+test-data/layout_colour_background_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/layout_colour_background_deck.pptx	crates/pptx-parser/tests/background_test.rs
+test-data/master_background_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/master_background_deck.pptx	crates/pptx-parser/tests/background_test.rs
+test-data/shape_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/shape_deck.pptx	crates/pptx-parser/tests/shapes_test.rs
+test-data/preset_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/preset_deck.pptx	crates/pptx-parser/tests/preset_shapes_test.rs
+test-data/invoice_scan.png	crates/cli/tests/cli_test.rs
+test-data/invoice_scan.png	crates/pptx-parser/tests/shapes_test.rs
+test-data/invoice_scan.png	crates/cli/tests/docling_golden_test.rs
+
+test-data/blip_fill_shapes.docx	crates/cli/tests/cli_test.rs
+test-data/blip_fill_shapes.pptx	crates/cli/tests/cli_test.rs
+test-data/bmp_tiff_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/bmp_tiff_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/gif_svg_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/gif_svg_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/mc_fallback_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/mc_fallback_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/mc_svg_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/mc_svg_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/oriented_picture.docx	crates/cli/tests/cli_test.rs
+test-data/oriented_picture.pptx	crates/cli/tests/cli_test.rs
+test-data/picture_bullets.docx	crates/cli/tests/cli_test.rs
+test-data/picture_bullets.pptx	crates/cli/tests/cli_test.rs
+test-data/svg_blip_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/svg_blip_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/svg_embed_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/svg_embed_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/svg_stretch_picture.docx	crates/cli/tests/cli_test.rs
+test-data/webp_jp2_pictures.docx	crates/cli/tests/cli_test.rs
+test-data/webp_jp2_pictures.pptx	crates/cli/tests/cli_test.rs
+test-data/nested_table.docx	crates/cli/tests/cli_test.rs
+test-data/nested_table.docx	crates/cli/tests/docling_golden_test.rs
+test-data/merged_cells.docx	crates/cli/tests/cli_test.rs
+test-data/merged_cells.docx	crates/cli/tests/formats_golden_test.rs
+test-data/merged_cells.docx	crates/cli/tests/md_golden_test.rs
+test-data/drawingml_shapes.docx	crates/cli/tests/cli_test.rs
+test-data/vml_shapes.docx	crates/cli/tests/cli_test.rs
+test-data/shaded_deck.pptx	crates/cli/tests/cli_test.rs
+test-data/merged_table.rtf	crates/cli/tests/cli_test.rs
+test-data/merged_table.rtf	crates/cli/tests/formats_golden_test.rs
+test-data/merged_table.rtf	crates/cli/tests/md_golden_test.rs
+test-data/rtf_bitmap.rtf	crates/cli/tests/cli_test.rs
+test-data/rtf_bitmap.rtf	crates/cli/tests/docling_golden_test.rs
+test-data/rtf_bitmap.rtf	crates/cli/tests/formats_golden_test.rs
+test-data/rtf_bitmap.rtf	crates/cli/tests/md_golden_test.rs
+test-data/word_bitmap.rtf	crates/cli/tests/cli_test.rs
+test-data/pictures.md	crates/cli/tests/cli_test.rs
+test-data/pictures.md	crates/cli/tests/formats_golden_test.rs
+test-data/pictures.md	crates/cli/tests/md_golden_test.rs
+test-data/fenced.md	crates/cli/tests/formats_golden_test.rs
+test-data/fenced.md	crates/cli/tests/md_golden_test.rs
+test-data/flow.html	crates/cli/tests/formats_golden_test.rs
+test-data/flow.html	crates/cli/tests/md_golden_test.rs
+test-data/late_header.html	crates/cli/tests/formats_golden_test.rs
+test-data/late_header.html	crates/cli/tests/md_golden_test.rs
+test-data/late_merged_header.html	crates/cli/tests/formats_golden_test.rs
+test-data/late_merged_header.html	crates/cli/tests/md_golden_test.rs
+test-data/social_cards.html	crates/cli/tests/formats_golden_test.rs
+test-data/social_cards.html	crates/cli/tests/md_golden_test.rs
+test-data/picture_names.html	crates/cli/tests/formats_golden_test.rs
+test-data/picture_names.html	crates/cli/tests/md_golden_test.rs
+
+test-data/legacy_brief.doc	crates/cli/tests/cli_test.rs
+test-data/stamp_fields.doc	crates/cli/tests/cli_test.rs
+test-data/legacy_deck.ppt	crates/cli/tests/cli_test.rs
+test-data/legacy_deck.ppt	crates/cli/tests/page_range_test.rs
+test-data/ledger.xls	crates/cli/tests/cli_test.rs
+test-data/ledger.xls	crates/cli/tests/compare_mode_test.rs
+test-data/ledger.xls	crates/cli/tests/page_range_test.rs
+test-data/ledger.xls	crates/ui/tests/corpus_report_test.rs
+test-data/tokenizer-mini.json	crates/cli/tests/chunks_test.rs
+test-data/tokenizer-mini.json	crates/md-exporter#lib
+test-data/tokenizer-mini.json	crates/ui#lib
+test-data/tokenizer-mini.json	crates/ui/tests/ui_process_test.rs
+test-data/tokenizer-mini.model	crates/md-exporter#lib
+test-data/tokenizer-mini.model	crates/ui/tests/ui_process_test.rs
+test-data/tokenizer-mini.tiktoken	crates/cli/tests/chunks_test.rs
+test-data/tokenizer-mini.tiktoken	crates/md-exporter#lib
+test-data/tokenizer-mini.tiktoken	crates/ui/tests/ui_process_test.rs
+
+# The corpus-wide suites read the directory as a set, so their rows stay broad.
+# Layout reads only PDFs and all other targets are named fixture by fixture below.
+test-data/real/*	crates/cli/tests/docling_golden_test.rs
+test-data/real/*	crates/ui/tests/corpus_report_test.rs
+test-data/real/*.pdf	crates/layout/tests/real_corpus_test.rs
+
+# Corpus fixtures read individually by their owning suites.
+test-data/real/arxiv_attention.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/arxiv_attention.pdf	crates/ui/tests/compare_test.rs
+test-data/real/basicapi.pdf	crates/cli/tests/cli_test.rs
+test-data/real/basicapi.pdf	crates/cli/tests/page_range_test.rs
+test-data/real/basicapi.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/calibre_demo.docx	crates/cli/tests/formats_golden_test.rs
+test-data/real/calibre_demo.docx	crates/cli/tests/md_golden_test.rs
+test-data/real/calibre_demo.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/chartex.docx	crates/cli/tests/cli_test.rs
+test-data/real/chartex.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/drawing.docx	crates/cli/tests/cli_test.rs
+test-data/real/drawing.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/drawing.docx	crates/metafile/tests/metafile_test.rs
+test-data/real/dummy.pdf	crates/cli/tests/cli_test.rs
+test-data/real/dummy.pdf	crates/cli/tests/compare_mode_test.rs
+test-data/real/dummy.pdf	crates/cli/tests/formats_golden_test.rs
+test-data/real/dummy.pdf	crates/cli/tests/md_golden_test.rs
+test-data/real/dummy.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/EquationAsScientificNumbering.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/equation.doc	crates/cli/tests/cli_test.rs
+test-data/real/equation.doc	crates/doc-parser/tests/real_doc_test.rs
+test-data/real/EquationWithAboveAndBelowCaption.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/FloatingPictures.doc	crates/doc-parser/tests/real_doc_test.rs
+test-data/real/headerPic.docx	crates/cli/tests/cli_test.rs
+test-data/real/headerPic.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/irs_f1040.pdf	crates/cli/tests/formats_golden_test.rs
+test-data/real/irs_f1040.pdf	crates/cli/tests/md_golden_test.rs
+test-data/real/irs_f1040.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/irs_f1040.pdf	crates/ui/tests/compare_test.rs
+test-data/real/math-accents.docx	crates/cli/tests/formats_golden_test.rs
+test-data/real/math-accents.docx	crates/cli/tests/md_golden_test.rs
+test-data/real/math-accents.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math_batchnorm.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/math-bold-italic.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-escaping.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math_gan.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/math-lim.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-literal.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-matrix.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-mso2k7.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-nary.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-nary.docx	crates/ui/tests/compare_test.rs
+test-data/real/math-overstrike.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-placeholders.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math-rad.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/math_seq2seq.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/math-subscripts.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/mathtype.docx	crates/cli/tests/cli_test.rs
+test-data/real/mathtype.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/mathtype.docx	crates/metafile/tests/metafile_test.rs
+test-data/real/mathtype.docx	crates/ui/tests/compare_test.rs
+test-data/real/math-vertical_stacks.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/README.md	crates/text-parser/tests/real_text_test.rs
+test-data/real/shapes-with-text.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/testPictures.doc	crates/doc-parser/tests/real_doc_test.rs
+test-data/real/tracemonkey.pdf	crates/pdf-parser/tests/real_world_test.rs
+test-data/real/tracemonkey.pdf	crates/ui/tests/compare_test.rs
+test-data/real/two_images.doc	crates/cli/tests/cli_test.rs
+test-data/real/two_images.doc	crates/cli/tests/compare_mode_test.rs
+test-data/real/two_images.doc	crates/doc-parser/tests/real_doc_test.rs
+test-data/real/VariousPictures.docx	crates/cli/tests/cli_test.rs
+test-data/real/VariousPictures.docx	crates/docx-parser/tests/real_docx_test.rs
+test-data/real/VariousPictures.docx	crates/metafile/tests/metafile_test.rs
+test-data/real/VariousPictures.docx	crates/ui/tests/compare_test.rs
+
+# Exact image fixtures; the corpus-wide suites do not read this directory.
+test-data/images/chart.bmp	crates/cli/tests/cli_test.rs
+test-data/images/chart.bmp	crates/cli/tests/ods_test.rs
+test-data/images/chart.bmp	crates/xlsx-parser/tests/fixture_test.rs
+test-data/images/chart.gif	crates/cli/tests/cli_test.rs
+test-data/images/chart.tiff	crates/cli/tests/cli_test.rs
+test-data/images/chart.webp	crates/cli/tests/cli_test.rs
+test-data/images/diagram.jp2	crates/cli/tests/cli_test.rs
+test-data/images/diagram.jpc	crates/cli/tests/cli_test.rs
+test-data/images/diagram.svg	crates/cli/tests/cli_test.rs
+test-data/images/pages.tiff	crates/cli/tests/cli_test.rs
+test-data/images/pages.tiff	crates/cli/tests/page_range_test.rs
+test-data/images/pages.tiff	crates/image-parser/tests/fixture_test.rs
+test-data/images/pages_turned.tiff	crates/cli/tests/cli_test.rs
+test-data/images/Q3 chart & graph.gif	crates/cli/tests/formats_golden_test.rs
+test-data/images/Q3 chart & graph.gif	crates/cli/tests/md_golden_test.rs
+test-data/images/rtf_bitmap.bmp	crates/cli/tests/cli_test.rs
+test-data/images/scan_150dpi.jp2	crates/cli/tests/cli_test.rs
+test-data/images/scan_150dpi.jp2	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.bmp	crates/cli/tests/cli_test.rs
+test-data/images/scan.bmp	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.gif	crates/cli/tests/cli_test.rs
+test-data/images/scan.gif	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.j2c	crates/cli/tests/cli_test.rs
+test-data/images/scan.j2c	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.jp2	crates/cli/tests/cli_test.rs
+test-data/images/scan.jp2	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.jp2	crates/xlsx-parser/tests/fixture_test.rs
+test-data/images/scan.jpc	crates/cli/tests/cli_test.rs
+test-data/images/scan.jpc	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.jpf	crates/cli/tests/cli_test.rs
+test-data/images/scan.jpf	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.jpg	crates/cli/tests/cli_test.rs
+test-data/images/scan.jpg	crates/cli/tests/formats_golden_test.rs
+test-data/images/scan.jpg	crates/cli/tests/md_golden_test.rs
+test-data/images/scan.jpg	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.jpg	crates/pptx-parser/tests/background_test.rs
+test-data/images/scan.tiff	crates/cli/tests/cli_test.rs
+test-data/images/scan.tiff	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.webp	crates/cli/tests/cli_test.rs
+test-data/images/scan.webp	crates/image-parser/tests/fixture_test.rs
+test-data/images/scan.webp	crates/pptx-parser/tests/background_test.rs
+test-data/images/turning.gif	crates/cli/tests/cli_test.rs
+test-data/images/turning.gif	crates/cli/tests/page_range_test.rs
+test-data/images/turning.gif	crates/image-parser/tests/fixture_test.rs
+test-data/images/turning_turned.webp	crates/cli/tests/cli_test.rs
+test-data/images/turning_turned.webp	crates/image-parser/tests/fixture_test.rs
+test-data/images/turning.webp	crates/cli/tests/cli_test.rs
+test-data/images/turning.webp	crates/cli/tests/page_range_test.rs
+test-data/images/turning.webp	crates/image-parser/tests/fixture_test.rs
+
+# stretch.svg is an input to the generator for svg_stretch_picture.docx; no test
+# opens it directly, so it intentionally has no row.
+
+# Photographs read by the OCR and image suites.
+test-data/photos/01_flat.png	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/01_flat.png	crates/ocr-engine/tests/ocr_integration.rs
+test-data/photos/02_skew.png	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/02_skew.png	crates/ocr-engine/tests/ocr_integration.rs
+test-data/photos/03_backlit.png	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/04_shadow.png	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/05_photo.jpg	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/05_photo.jpg	crates/ocr-engine/tests/ocr_integration.rs
+test-data/photos/06_rotated.jpg	crates/cli/tests/cli_test.rs
+test-data/photos/06_rotated.jpg	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/06_rotated.jpg	crates/docx-parser#lib
+test-data/photos/06_rotated.jpg	crates/image-parser/tests/fixture_test.rs
+test-data/photos/06_rotated.jpg	crates/pptx-parser#lib
+test-data/photos/07_sideways.jpg	crates/cli/tests/cli_test.rs
+test-data/photos/07_sideways.jpg	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/07_sideways.jpg	crates/image-parser/tests/fixture_test.rs
+test-data/photos/07_sideways.jpg	crates/ocr-engine/tests/ocr_integration.rs
+test-data/photos/08_upside_down.png	crates/cli/tests/ocr_quality_test.rs
+test-data/photos/08_upside_down.png	crates/ocr-engine/tests/ocr_integration.rs
+test-data/photos/corpus.json	crates/cli/tests/ocr_quality_test.rs
+
+# photos/README.md documents the corpus; no test reads it.
+
+test-data/golden/docling/*	crates/cli/tests/compare_mode_test.rs
+test-data/golden/docling/*	crates/cli/tests/docling_golden_test.rs
+test-data/golden/docling/*	crates/cli/tests/documentation_test.rs
+test-data/golden/docling/*	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/docling/*	crates/ui/tests/compare_test.rs
+test-data/golden/docling/*	crates/ui/tests/corpus_report_test.rs
+test-data/golden/markdown/*	crates/cli/tests/md_golden_test.rs
+test-data/golden/markdown/*	crates/cli/tests/picture_fixed_point_test.rs
+test-data/golden/markdown/*	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/html/*	crates/cli/tests/formats_golden_test.rs
+test-data/golden/html/*	crates/cli/tests/picture_fixed_point_test.rs
+test-data/golden/html/*	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/text/*	crates/cli/tests/formats_golden_test.rs
+test-data/golden/text/*	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/yaml/*	crates/cli/tests/formats_golden_test.rs
+test-data/golden/yaml/*	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/DoclingDocument.json	crates/cli/tests/docling_golden_test.rs
+test-data/golden/DoclingDocument.json	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/validate_with_docling.py	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/compare-baseline.json	crates/cli/tests/compare_mode_test.rs
+test-data/golden/compare-baseline.json	crates/cli/tests/docling_golden_test.rs
+test-data/golden/compare-baseline.json	crates/cli/tests/documentation_test.rs
+test-data/golden/compare-baseline.json	crates/cli/tests/tracked_fixtures_test.rs
+test-data/golden/compare-baseline.json	crates/ui/tests/compare_test.rs
+test-data/golden/compare-baseline.json	crates/ui/tests/corpus_report_test.rs
+test-data/golden/README.md	crates/cli/tests/documentation_test.rs
+test-data/golden/README.md	crates/cli/tests/tracked_fixtures_test.rs
