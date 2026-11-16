@@ -1834,6 +1834,74 @@ fn a_rotated_scan_is_read_upright() {
     }
 }
 
+/// CCITT G3/G4 and JBIG2 scans reach OCR: the codecs real faxes and scanners
+/// use, none of which an image library opens as a file. All fixtures are the
+/// same invoice; `ccitt_scan.pdf` has a G3 one-dimensional page and a G4 page,
+/// `ccitt_g3_2d_scan.pdf` is G3 two-dimensional (`/K 1`), and `jbig2_scan.pdf`
+/// carries its symbol dictionary in `/JBIG2Globals`.
+#[test]
+fn a_ccitt_or_jbig2_scan_is_read_end_to_end() {
+    for (name, pages) in [
+        ("ccitt_scan.pdf", 2),
+        ("ccitt_g3_2d_scan.pdf", 1),
+        ("jbig2_scan.pdf", 1),
+    ] {
+        let ws = Workspace::new("scan-codec");
+        let input = repository_root().join("test-data").join(name);
+        let output = ws.join("scan.json");
+
+        run_ok(&[
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--ocr",
+            "auto",
+        ]);
+
+        let doc = json_of(&output);
+        let page_map = doc["pages"].as_object().expect("a page map");
+        assert_eq!(page_map.len(), pages, "{name}: page count");
+        for page in page_map.values() {
+            assert_eq!(page["size"]["width"], 620.0, "{name}: page width");
+            assert_eq!(page["size"]["height"], 350.0, "{name}: page height");
+        }
+
+        let text = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .map(|t| t["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for needle in ["ACME", "12345", "Total Due"] {
+            assert!(
+                text.contains(needle),
+                "{name}: missing {needle:?} in: {text}"
+            );
+        }
+
+        // The boxes are in the 620 x 350 page's space, not the encoded grid's
+        // raw coordinates: a codec that decoded to the wrong row width would
+        // put them outside it.
+        for text in doc["texts"].as_array().expect("a text list") {
+            for prov in text["prov"].as_array().expect("provenance") {
+                let bbox = &prov["bbox"];
+                let (l, t, r, b) = (
+                    bbox["l"].as_f64().unwrap(),
+                    bbox["t"].as_f64().unwrap(),
+                    bbox["r"].as_f64().unwrap(),
+                    bbox["b"].as_f64().unwrap(),
+                );
+                assert!(
+                    l >= 0.0 && t >= 0.0 && r <= 620.5 && b <= 350.5,
+                    "{name}: box outside the page: {bbox}"
+                );
+            }
+        }
+    }
+}
+
 /// A one-page PDF whose page is this JPEG, drawn to fill it.
 ///
 /// The bytes are assembled here rather than committed as an opaque fixture, so

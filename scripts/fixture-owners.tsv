@@ -27,6 +27,12 @@ test-data/hello.pdf	crates/pdf-parser/tests/lexer_test.rs
 test-data/hello.pdf	crates/pdf-parser/tests/parser_test.rs
 test-data/hello.pdf	crates/cli/tests/formats_golden_test.rs
 test-data/hello.pdf	crates/cli/tests/md_golden_test.rs
+test-data/ccitt_scan.pdf	crates/pdf-parser/tests/images_test.rs
+test-data/ccitt_scan.pdf	crates/cli/tests/cli_test.rs
+test-data/ccitt_g3_2d_scan.pdf	crates/pdf-parser/tests/images_test.rs
+test-data/ccitt_g3_2d_scan.pdf	crates/cli/tests/cli_test.rs
+test-data/jbig2_scan.pdf	crates/pdf-parser/tests/images_test.rs
+test-data/jbig2_scan.pdf	crates/cli/tests/cli_test.rs
 test-data/jpx_picture.pdf	crates/pdf-parser/tests/images_test.rs
 test-data/jpx_picture.pdf	crates/cli/tests/cli_test.rs
 test-data/scanned.pdf	crates/pdf-parser/tests/images_test.rs

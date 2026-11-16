@@ -6,6 +6,8 @@ use crate::filters;
 use crate::images::{self, PageImage};
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::objects::{ObjId, PdfValue};
+use pdfextractor_limits::{Deadline, LimitError, Limits};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
 
@@ -70,12 +72,36 @@ pub struct PdfDocument {
     /// dictionary is understood, and that search is fooled by a payload that
     /// happens to contain those bytes.
     stream_offsets: HashMap<ObjId, usize>,
+    /// The budgets this document was read under, kept for extraction.
+    limits: Limits,
+    /// One clock for parsing and extraction, so a file cannot spend the whole
+    /// budget in each phase separately.
+    deadline: Deadline,
+    /// The first stream that exceeded its budget, returned by extraction.
+    limit_hit: RefCell<Option<LimitError>>,
 }
 
 impl PdfDocument {
     pub fn parse(data: &[u8]) -> anyhow::Result<Self> {
+        Self::parse_with_limits(data, Limits::default())
+    }
+
+    /// Read a PDF under an explicit budget.
+    pub fn parse_with_limits(data: &[u8], limits: Limits) -> anyhow::Result<Self> {
+        limits.check_input(data.len())?;
+        let deadline = limits.deadline();
+        deadline.check("reading the PDF header")?;
         let mut lexer = Lexer::new(data);
-        let tokens = lexer.tokenize_spanned();
+        let (tokens, truncated) = lexer.tokenize_spanned_limited(limits.max_pdf_tokens);
+        limits.check_pdf_tokens(tokens.len())?;
+        if truncated {
+            return Err(LimitError::TooManyPdfTokens {
+                actual: limits.max_pdf_tokens.saturating_add(1),
+                limit: limits.max_pdf_tokens,
+            }
+            .into());
+        }
+        deadline.check("tokenizing the PDF")?;
 
         let mut version = "1.4".to_string();
         if let Some(first) = tokens.first() {
@@ -89,6 +115,9 @@ impl PdfDocument {
         let mut encrypted = false;
         let mut i = 0usize;
         while i + 2 < tokens.len() {
+            if i.is_multiple_of(4096) {
+                deadline.check("reading PDF objects")?;
+            }
             let (num, gen) = match (&tokens[i].token, &tokens[i + 1].token, &tokens[i + 2].token) {
                 (Token::Integer(n), Token::Integer(g), Token::Obj) => (*n as usize, *g as i32),
                 _ => {
@@ -99,7 +128,9 @@ impl PdfDocument {
                     // known before any of them is believed.
                     if matches!(tokens[i].token, Token::Trailer) {
                         let mut j = i + 1;
-                        if let Some(trailer) = Self::parse_value(&tokens, &mut j, data) {
+                        if let Some(trailer) =
+                            Self::parse_value(&tokens, &mut j, data, limits.max_pdf_nesting)
+                        {
                             if trailer.get("Encrypt").is_some() {
                                 encrypted = true;
                             }
@@ -111,7 +142,7 @@ impl PdfDocument {
             };
             i += 3; // past "n g obj"
 
-            let value = Self::parse_value(&tokens, &mut i, data);
+            let value = Self::parse_value(&tokens, &mut i, data, limits.max_pdf_nesting);
 
             // A dictionary immediately followed by `stream` becomes a stream.
             // The lexer already skipped the opaque payload, so the Stream token's
@@ -150,6 +181,7 @@ impl PdfDocument {
             if let Some(value) = value {
                 objects.insert((num, gen), value);
             }
+            limits.check_pdf_objects(objects.len())?;
 
             // Skip to endobj without swallowing the next object.
             while i < tokens.len() && !matches!(tokens[i].token, Token::EndObj) {
@@ -168,14 +200,20 @@ impl PdfDocument {
             }
         }
 
+        limits.check_pdf_objects(objects.len())?;
         let mut doc = Self {
             version,
             encrypted,
             objects,
             stream_offsets,
+            limits,
+            deadline,
+            limit_hit: RefCell::new(None),
         };
         doc.honour_stream_lengths(data);
-        doc.expand_object_streams();
+        doc.deadline.check("honouring stream lengths")?;
+        doc.expand_object_streams()?;
+        doc.deadline.check("expanding object streams")?;
 
         // A PDF 1.5 file states its encryption in the cross-reference stream's
         // own dictionary, which is an object and has no classic trailer to say
@@ -191,6 +229,9 @@ impl PdfDocument {
                 })
             });
             doc.encrypted |= in_xref;
+        }
+        if let Some(error) = doc.limit_hit.take() {
+            return Err(error.into());
         }
         Ok(doc)
     }
@@ -247,7 +288,7 @@ impl PdfDocument {
     /// inside these streams, so without this a file can appear to have no pages
     /// at all. An object stream holds `N` pairs of `objnum offset` integers
     /// after which the object bodies follow, with offsets relative to `/First`.
-    fn expand_object_streams(&mut self) {
+    fn expand_object_streams(&mut self) -> anyhow::Result<()> {
         let stream_ids: Vec<ObjId> = self
             .objects
             .iter()
@@ -261,6 +302,10 @@ impl PdfDocument {
             .collect();
 
         for id in stream_ids {
+            self.deadline.check("expanding an object stream")?;
+            if self.limit_hit.borrow().is_some() {
+                break;
+            }
             // Clone out of the map so we can insert into it afterwards.
             let (dict, raw) = match self.objects.get(&id) {
                 Some(PdfValue::Stream(d, b)) => (d.clone(), b.clone()),
@@ -274,7 +319,29 @@ impl PdfDocument {
             }
 
             let decoded = self.decode_stream(&PdfValue::Stream(dict, raw));
-            let tokens = Lexer::new(&decoded).tokenize_spanned();
+            let (tokens, truncated) =
+                Lexer::new(&decoded).tokenize_spanned_limited(self.limits.max_pdf_tokens);
+            if truncated {
+                return Err(LimitError::TooManyPdfTokens {
+                    actual: self.limits.max_pdf_tokens.saturating_add(1),
+                    limit: self.limits.max_pdf_tokens,
+                }
+                .into());
+            }
+
+            // A stream cannot promise more objects than the document budget
+            // has left; the capacity is allocated only after that check.
+            let remaining = self
+                .limits
+                .max_pdf_objects
+                .saturating_sub(self.objects.len());
+            if count > remaining {
+                return Err(LimitError::TooManyPdfObjects {
+                    actual: self.objects.len().saturating_add(count),
+                    limit: self.limits.max_pdf_objects,
+                }
+                .into());
+            }
 
             // Header: `count` pairs of integers, then the object bodies.
             let mut cursor = 0usize;
@@ -299,19 +366,41 @@ impl PdfDocument {
             // Parse each body. Offsets are authoritative, so skip tokens that
             // fall before the declared start of the next object.
             for (objnum, offset) in pairs {
-                let target = first + offset;
+                let target = first.saturating_add(offset);
                 while cursor < tokens.len() && tokens[cursor].start < target {
                     cursor += 1;
                 }
-                if let Some(value) = Self::parse_value(&tokens, &mut cursor, &decoded) {
+                if let Some(value) =
+                    Self::parse_value(&tokens, &mut cursor, &decoded, self.limits.max_pdf_nesting)
+                {
                     // A direct object always wins over a compressed duplicate.
                     self.objects.entry((objnum, 0)).or_insert(value);
                 }
+                self.limits.check_pdf_objects(self.objects.len())?;
             }
         }
+        Ok(())
     }
 
-    fn parse_value(tokens: &[SpannedToken], i: &mut usize, data: &[u8]) -> Option<PdfValue> {
+    fn parse_value(
+        tokens: &[SpannedToken],
+        i: &mut usize,
+        data: &[u8],
+        max_depth: usize,
+    ) -> Option<PdfValue> {
+        Self::parse_value_at(tokens, i, data, max_depth, 0)
+    }
+
+    fn parse_value_at(
+        tokens: &[SpannedToken],
+        i: &mut usize,
+        data: &[u8],
+        max_depth: usize,
+        depth: usize,
+    ) -> Option<PdfValue> {
+        if depth > max_depth {
+            return None;
+        }
         let tok = tokens.get(*i)?.token.clone();
         let _ = data;
         match tok {
@@ -327,7 +416,9 @@ impl PdfDocument {
                         Token::Name(key) => {
                             let key = key.clone();
                             *i += 1;
-                            if let Some(v) = Self::parse_value(tokens, i, data) {
+                            if let Some(v) =
+                                Self::parse_value_at(tokens, i, data, max_depth, depth + 1)
+                            {
                                 dict.insert(key, v);
                             }
                         }
@@ -344,7 +435,7 @@ impl PdfDocument {
                         *i += 1;
                         break;
                     }
-                    match Self::parse_value(tokens, i, data) {
+                    match Self::parse_value_at(tokens, i, data, max_depth, depth + 1) {
                         Some(v) => arr.push(v),
                         None => *i += 1,
                     }
@@ -413,15 +504,26 @@ impl PdfDocument {
         None
     }
 
-    fn collect_pages<'a>(&'a self, node: &'a PdfValue, out: &mut Vec<&'a PdfValue>, depth: usize) {
-        if depth > 32 {
-            return;
+    fn collect_pages<'a>(
+        &'a self,
+        node: &'a PdfValue,
+        out: &mut Vec<&'a PdfValue>,
+        depth: usize,
+    ) -> Result<(), LimitError> {
+        if out.len().is_multiple_of(1024) {
+            self.deadline.check("walking the PDF page tree")?;
+        }
+        if depth > self.limits.max_pdf_nesting {
+            return Err(LimitError::PdfTooDeep {
+                actual: depth,
+                limit: self.limits.max_pdf_nesting,
+            });
         }
         let dict = match self.resolve(node).and_then(|v| v.as_dict()) {
             Some(d) => d,
             None => {
                 // Not a node; if it is a bare reference, resolution already failed.
-                return;
+                return Ok(());
             }
         };
         let node_type = dict
@@ -430,8 +532,14 @@ impl PdfDocument {
             .and_then(|v| v.as_name());
 
         if node_type == Some("Page") {
+            if out.len() >= self.limits.max_pages {
+                return Err(LimitError::TooManyPages {
+                    actual: out.len() + 1,
+                    limit: self.limits.max_pages,
+                });
+            }
             out.push(node);
-            return;
+            return Ok(());
         }
 
         // /Pages (or an untyped intermediate) -> recurse into /Kids.
@@ -441,9 +549,10 @@ impl PdfDocument {
             .and_then(|v| v.as_array())
         {
             for kid in kids {
-                self.collect_pages(kid, out, depth + 1);
+                self.collect_pages(kid, out, depth + 1)?;
             }
         }
+        Ok(())
     }
 
     /// The page's `/Link` annotations.
@@ -577,7 +686,27 @@ impl PdfDocument {
     }
 
     /// Extract every page's text together with its size.
+    ///
+    /// This is the un-fallible facade kept for existing callers. A document
+    /// that exceeded a budget yields no pages here; a caller that has to report
+    /// the refusal uses [`Self::extract_checked`].
     pub fn extract(&self) -> Vec<ExtractedPage> {
+        match self.extract_checked() {
+            Ok(pages) => pages,
+            Err(error) => {
+                tracing::warn!("PDF extraction refused: {error}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Extract every page, reporting a resource limit instead of silently
+    /// returning a truncated document.
+    pub fn extract_checked(&self) -> anyhow::Result<Vec<ExtractedPage>> {
+        if let Some(error) = self.limit_hit.take() {
+            return Err(error.into());
+        }
+        self.deadline.check("starting page extraction")?;
         let mut page_nodes: Vec<&PdfValue> = Vec::new();
 
         // Prefer the trailer's /Root; fall back to scanning for /Type /Catalog.
@@ -598,12 +727,23 @@ impl PdfDocument {
 
         if let Some(root) = root {
             if let Some(pages) = root.as_dict().and_then(|d| d.get("Pages")) {
-                self.collect_pages(pages, &mut page_nodes, 0);
+                self.collect_pages(pages, &mut page_nodes, 0)?;
             }
         }
+        self.limits.check_pages(page_nodes.len())?;
 
         let mut pages = Vec::new();
         for (idx, node) in page_nodes.iter().enumerate() {
+            if idx % 16 == 0 {
+                self.deadline.check("extracting PDF pages")?;
+            }
+            if pages.len() >= self.limits.max_pages {
+                return Err(LimitError::TooManyPages {
+                    actual: pages.len() + 1,
+                    limit: self.limits.max_pages,
+                }
+                .into());
+            }
             let dict = match self.resolve(node).and_then(|v| v.as_dict()) {
                 Some(d) => d,
                 None => continue,
@@ -634,7 +774,10 @@ impl PdfDocument {
                 let resolved = self.resolve(contents);
                 match resolved {
                     Some(PdfValue::Array(items)) => {
-                        for item in items {
+                        for (index, item) in items.iter().enumerate() {
+                            if index.is_multiple_of(1024) {
+                                self.deadline.check("reading a page's content streams")?;
+                            }
                             if let Some(v) = self.resolve(item) {
                                 content_bytes.extend(self.decode_stream(v));
                                 content_bytes.push(b'\n');
@@ -647,6 +790,7 @@ impl PdfDocument {
                     None => {}
                 }
             }
+            self.cap_stream(&mut content_bytes);
 
             // `/Rotate` turns the page clockwise before the viewer shows it
             // (PDF 1.7, 7.7.3) and is inheritable like `/MediaBox`. The
@@ -746,7 +890,28 @@ impl PdfDocument {
             });
         }
 
-        pages
+        if let Some(error) = self.limit_hit.take() {
+            return Err(error.into());
+        }
+        Ok(pages)
+    }
+
+    /// Refuse a decoded byte sequence that grew past its budget.
+    ///
+    /// The first refusal is kept for the caller; the bytes are still truncated
+    /// here so a decoder that a caller ignored cannot keep the allocation.
+    fn cap_stream(&self, data: &mut Vec<u8>) {
+        let limit = self.limits.max_decoded_stream_bytes;
+        if data.len() as u64 <= limit {
+            return;
+        }
+        if self.limit_hit.borrow().is_none() {
+            *self.limit_hit.borrow_mut() = Some(LimitError::DecodedStreamTooLarge {
+                actual: data.len() as u64,
+                limit,
+            });
+        }
+        data.truncate(limit.min(usize::MAX as u64) as usize);
     }
 
     /// The `/Filter` chain of a stream dictionary, as names.
@@ -1194,8 +1359,103 @@ impl PdfDocument {
         }
         let width = width as u32;
         let height = height as u32;
+        if self.limits.check_image(width, height).is_err() {
+            tracing::warn!("an image XObject is {width}x{height}; leaving it out");
+            return None;
+        }
 
         let filters = self.stream_filters(dict);
+        let parms = self.decode_params(dict, filters.len());
+
+        // CCITT and JBIG2 are bi-level codecs, not encodings an image reader
+        // can open. Decode them here so a scanned page reaches OCR as pixels.
+        if let Some(index) = filters
+            .iter()
+            .position(|f| f == "CCITTFaxDecode" || f == "CCF")
+        {
+            let params = parms.get(index).and_then(|p| p.as_ref());
+            let number = |key: &str| -> Option<i64> {
+                params
+                    .and_then(|p| p.get(key))
+                    .and_then(|v| self.resolve(v))
+                    .and_then(|v| v.as_number())
+                    .map(|n| n as i64)
+            };
+            let flag = |key: &str, default: bool| -> bool {
+                params
+                    .and_then(|p| p.get(key))
+                    .and_then(|v| self.resolve(v))
+                    .map(|v| matches!(v, PdfValue::Boolean(true)))
+                    .unwrap_or(default)
+            };
+            let columns = number("Columns")
+                .filter(|n| *n > 0)
+                .map(|n| n as u32)
+                .unwrap_or(width);
+            if self.limits.check_image(columns, height).is_err() {
+                tracing::warn!("a CCITT image is {columns}x{height}; leaving it out");
+                return None;
+            }
+            let settings = images::CcittParams {
+                k: number("K").unwrap_or(0),
+                end_of_line: flag("EndOfLine", false),
+                end_of_block: flag("EndOfBlock", true),
+                encoded_byte_align: flag("EncodedByteAlign", false),
+            };
+            let data = self.decode_stream_before(value, index);
+            match images::decode_ccitt_limited(
+                &data,
+                columns,
+                height,
+                &settings,
+                self.limits.max_image_pixels,
+            )
+            .and_then(|samples| images::encode_gray(columns, height, &samples))
+            {
+                Some(png) => {
+                    return Some(PageImage {
+                        width: columns,
+                        height,
+                        data: png,
+                        mime: "image/png",
+                    })
+                }
+                None => {
+                    tracing::debug!("a CCITT image did not decode; leaving it out");
+                    return None;
+                }
+            }
+        }
+
+        if let Some(index) = filters.iter().position(|f| f == "JBIG2Decode") {
+            let params = parms.get(index).and_then(|p| p.as_ref());
+            let globals = params
+                .and_then(|p| p.get("JBIG2Globals"))
+                .and_then(|v| self.resolve(v))
+                .map(|v| self.decode_stream(v));
+            let data = self.decode_stream_before(value, index);
+            match images::decode_jbig2_limited(
+                &data,
+                globals.as_deref(),
+                self.limits.max_image_pixels,
+            )
+            .and_then(|(w, h, samples)| images::encode_gray(w, h, &samples).map(|png| (w, h, png)))
+            {
+                Some((width, height, png)) => {
+                    return Some(PageImage {
+                        width,
+                        height,
+                        data: png,
+                        mime: "image/png",
+                    })
+                }
+                None => {
+                    tracing::debug!("a JBIG2 image did not decode; leaving it out");
+                    return None;
+                }
+            }
+        }
+
         // Encoded formats pass straight through: the image decoder reads them.
         if filters.iter().any(|f| f == "DCTDecode") {
             return Some(PageImage {
@@ -1268,6 +1528,59 @@ impl PdfDocument {
         })
     }
 
+    /// The stream's bytes after the filters before its terminal image codec.
+    ///
+    /// A CCITT or JBIG2 stream may be wrapped in an ASCII or Flate filter. The
+    /// image decoder needs the codec's own bytes, so the prefix is built as a
+    /// stream of its own and passed through the ordinary filter chain. Leaving
+    /// the terminal filter out is what makes this different from
+    /// [`Self::decode_stream`], which would stop at the unknown codec and return
+    /// the encoded bytes untouched.
+    fn decode_stream_before(&self, value: &PdfValue, terminal_index: usize) -> Vec<u8> {
+        let (dict, raw) = match value {
+            PdfValue::Stream(d, b) => (d, b),
+            _ => return Vec::new(),
+        };
+        if terminal_index == 0 {
+            let mut data = raw.clone();
+            self.cap_stream(&mut data);
+            return data;
+        }
+
+        let filters = self.stream_filters(dict);
+        let parms = self.decode_params(dict, filters.len());
+        let mut prefix = dict.clone();
+        prefix.insert(
+            "Filter".to_string(),
+            PdfValue::Array(
+                filters
+                    .iter()
+                    .take(terminal_index)
+                    .cloned()
+                    .map(PdfValue::Name)
+                    .collect(),
+            ),
+        );
+        if parms.iter().take(terminal_index).any(Option::is_some) {
+            prefix.insert(
+                "DecodeParms".to_string(),
+                PdfValue::Array(
+                    parms
+                        .iter()
+                        .take(terminal_index)
+                        .map(|p| {
+                            p.clone()
+                                .map(PdfValue::Dictionary)
+                                .unwrap_or(PdfValue::Null)
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        prefix.remove("DP");
+        self.decode_stream(&PdfValue::Stream(prefix, raw.clone()))
+    }
+
     /// Return a stream's decoded bytes, applying `/Filter /FlateDecode`.
     fn decode_stream(&self, value: &PdfValue) -> Vec<u8> {
         let (dict, raw) = match value {
@@ -1285,6 +1598,7 @@ impl PdfDocument {
         // filter rather than once at the end.
         let parms = self.decode_params(dict, filter.len());
         let mut data = raw.clone();
+        self.cap_stream(&mut data);
         for (index, f) in filter.iter().enumerate() {
             match f.as_str() {
                 "ASCIIHexDecode" | "AHx" => match filters::ascii_hex(&data) {
@@ -1316,15 +1630,18 @@ impl PdfDocument {
                     }
                 },
                 "FlateDecode" | "Fl" => {
+                    let ceiling = self.limits.max_decoded_stream_bytes.saturating_add(1);
                     let mut out = Vec::new();
-                    let mut decoder = flate2::read::ZlibDecoder::new(&data[..]);
+                    let mut decoder = flate2::read::ZlibDecoder::new(&data[..]).take(ceiling);
                     if decoder.read_to_end(&mut out).is_ok() {
+                        self.cap_stream(&mut out);
                         data = out;
                     } else {
                         // Some producers omit the zlib header; retry raw deflate.
                         let mut out2 = Vec::new();
-                        let mut dec = flate2::read::DeflateDecoder::new(&data[..]);
+                        let mut dec = flate2::read::DeflateDecoder::new(&data[..]).take(ceiling);
                         if dec.read_to_end(&mut out2).is_ok() {
+                            self.cap_stream(&mut out2);
                             data = out2;
                         } else {
                             tracing::warn!("FlateDecode failed; using raw stream bytes");
@@ -1337,6 +1654,7 @@ impl PdfDocument {
                     return raw.clone();
                 }
             }
+            self.cap_stream(&mut data);
             // A predictor is defined for LZW and Flate, so it is only undone
             // after those two.
             if matches!(f.as_str(), "FlateDecode" | "Fl" | "LZWDecode" | "LZW") {
@@ -1546,6 +1864,9 @@ mod tests {
             encrypted: false,
             objects: HashMap::new(),
             stream_offsets: HashMap::new(),
+            limits: Limits::default(),
+            deadline: Limits::default().deadline(),
+            limit_hit: RefCell::new(None),
         }
     }
 
@@ -1623,6 +1944,25 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
+    }
+
+    /// A CCITT or JBIG2 image may be wrapped in an ASCII or Flate filter. The
+    /// codec has to receive the prefix's output, not the raw stream, and the
+    /// terminal codec must not be run by the generic filter walk.
+    #[test]
+    fn a_filter_wrapped_around_an_image_codec_is_undone_first() {
+        let value = PdfValue::Stream(
+            dict(&[(
+                "Filter",
+                PdfValue::Array(vec![
+                    PdfValue::Name("ASCIIHexDecode".to_string()),
+                    PdfValue::Name("CCITTFaxDecode".to_string()),
+                ]),
+            )]),
+            b"35 14>".to_vec(),
+        );
+        let decoded = document().decode_stream_before(&value, 1);
+        assert_eq!(decoded, vec![0x35, 0x14]);
     }
 
     /// A content stream that carries a `/Predictor` is what a scanner produces

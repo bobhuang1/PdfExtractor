@@ -1928,6 +1928,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hayro-ccitt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbed896e99325bc312778bb9c9c289d795d51c12775c44dd5e4352f679c7e46"
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb5c7f3a4eb551c2bb7fa16e268f728d4bc2a5c9b090554b8dc0ee2503fb5840"
+dependencies = [
+ "hayro-ccitt",
+]
+
+[[package]]
 name = "hayro-jpeg2000"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3554,6 +3569,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfextractor-limits"
+version = "0.2.0"
+dependencies = [
+ "quick-xml 0.36.2",
+ "thiserror 1.0.69",
+ "zip",
+]
+
+[[package]]
 name = "pdfextractor-md-exporter"
 version = "0.2.0"
 dependencies = [
@@ -3630,9 +3654,12 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "hayro-ccitt",
+ "hayro-jbig2",
  "image",
  "pdfextractor-core",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "thiserror 1.0.69",
  "tracing",
 ]

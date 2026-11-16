@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/core",
+  "crates/limits",
   "crates/pdf-parser",
   "crates/docx-parser",
   "crates/odt-parser",
@@ -52,6 +53,11 @@ rayon = "1"
 
 # Image handling (reuse - pragmatic)
 image = "0.25"
+# CCITT Group 3/4 and JBIG2 are the two codecs scanned PDFs actually use.
+# They are codecs, not domain logic, so maintained pure-Rust decoders are used
+# rather than a second implementation of T.4/T.6/T.88 in this workspace.
+hayro-ccitt = "0.5"
+hayro-jbig2 = { version = "0.4", default-features = false, features = ["std"] }
 # JPEG 2000 pixels, which `image` does not decode. A JP2 picture is transcoded
 # to PNG before it reaches the model, because Docling cannot name `image/jp2`.
 hayro-jpeg2000 = "0.4"
