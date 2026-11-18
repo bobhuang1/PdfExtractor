@@ -2055,6 +2055,37 @@ does_not_contain "$shard_two" 'cargo test -p fake-b --lib --locked' 'even partia
 does_not_contain "$shard_two" 'cargo test -p fake-b --doc --locked' 'even partial timing'
 ok 'even-count partial timings use the median fallback'
 
+# With four unrecorded targets and only two recordings, the median estimate
+# must still spread the work across three shards instead of collapsing to a
+# count split. Timed targets are sorted by descending duration: the 12s target
+# anchors shard one, the four 11.5s median targets fill the other slots, and
+# the 11s target returns to shard one. Every shard totals 23s and holds two
+# targets.
+reset_fixture
+: >"$TMP/crates/b/tests/three.rs"
+: >"$TMP/crates/b/tests/four.rs"
+mkdir -p "$TMP/target"
+cat >"$TMP/target/test-runner-timings.tsv" <<'EOF'
+12	cargo test -p fake-b --test one --locked
+11	cargo test -p fake-b --test two --locked
+EOF
+shard_one=$(list --package fake-b --shard 1/3)
+shard_two=$(list --package fake-b --shard 2/3)
+shard_three=$(list --package fake-b --shard 3/3)
+[[ $(printf '%s\n' "$shard_one" | wc -l) -eq 2 ]] \
+    || fail "three-shard partial timing: shard one is not balanced: $shard_one"
+[[ $(printf '%s\n' "$shard_two" | wc -l) -eq 2 ]] \
+    || fail "three-shard partial timing: shard two is not balanced: $shard_two"
+[[ $(printf '%s\n' "$shard_three" | wc -l) -eq 2 ]] \
+    || fail "three-shard partial timing: shard three is not balanced: $shard_three"
+contains "$shard_one" 'cargo test -p fake-b --test one --locked' 'three-shard partial timing'
+contains "$shard_one" 'cargo test -p fake-b --test two --locked' 'three-shard partial timing'
+contains "$shard_two" 'cargo test -p fake-b --doc --locked' 'three-shard partial timing'
+contains "$shard_two" 'cargo test -p fake-b --test four --locked' 'three-shard partial timing'
+contains "$shard_three" 'cargo test -p fake-b --lib --locked' 'three-shard partial timing'
+contains "$shard_three" 'cargo test -p fake-b --test three --locked' 'three-shard partial timing'
+ok 'known runtimes balance three shards with multiple unrecorded targets'
+
 # Malformed timing rows are ignored, not treated as zero or as valid timings.
 # The valid recordings still steer the split; the malformed doc row becomes the
 # median estimate, just like any other target with no valid recording.
