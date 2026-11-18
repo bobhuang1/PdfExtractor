@@ -3459,6 +3459,7 @@ dependencies = [
  "pdfextractor-image-parser",
  "pdfextractor-json-exporter",
  "pdfextractor-layout",
+ "pdfextractor-limits",
  "pdfextractor-md-exporter",
  "pdfextractor-ocr-engine",
  "pdfextractor-odp-parser",

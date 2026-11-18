@@ -1,5 +1,6 @@
 mod compare;
 mod preview;
+mod redline;
 
 // The range grammar is the window's too: a typo is refused there before a run
 // starts, with the message a process would have printed.
@@ -313,6 +314,13 @@ struct Args {
     /// below the floor the memory beside that reference remembers it by
     #[arg(long, value_hint = ValueHint::AnyPath)]
     compare: Option<PathBuf>,
+
+    /// Compare two versions of the same PDF or DOCX and write a page-aware
+    /// HTML redline report with page and picture placement previews. `--input`
+    /// is the newer version and this is the older one; `--output` names the
+    /// report
+    #[arg(long, value_name = "OLD", value_hint = ValueHint::AnyPath)]
+    redline: Option<PathBuf>,
 }
 
 const MAX_PARALLEL: usize = 256;
@@ -361,6 +369,13 @@ fn main() -> anyhow::Result<()> {
 
     if !input.exists() {
         anyhow::bail!("input path does not exist: {}", input.display());
+    }
+
+    // Redline is a two-document mode of its own: it converts both versions and
+    // writes one report, rather than running the directory/format/compare
+    // pipeline. Handle it before the input is expanded into a queue.
+    if let Some(old) = args.redline.as_deref() {
+        return run_redline(old, input, &args);
     }
 
     let found = collect_inputs(input, args.recursive)?;
@@ -552,6 +567,150 @@ fn main() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Convert two versions of one PDF or DOCX, compare them through the same
+/// `diff` engine the Compare panel uses, and write the redline HTML report.
+///
+/// The older version is `old` and the newer one is `new` (`--input`). Only the
+/// two document families whose readers publish enough structure for the
+/// comparison are accepted: a PDF's page provenance makes the report page-aware
+/// and gives it placement-box previews, and a DOCX is compared as the flow
+/// document it is.
+fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
+    if args.compare.is_some() {
+        anyhow::bail!("--redline and --compare are separate modes; use one or the other");
+    }
+    if args.preview {
+        anyhow::bail!("--redline writes its own HTML report; drop --preview");
+    }
+    if args.progress {
+        anyhow::bail!("--redline writes one report; it has no progress stream");
+    }
+    if !args.to.is_empty() {
+        anyhow::bail!("--redline writes its own HTML report; drop --to");
+    }
+    if args
+        .output
+        .as_deref()
+        .is_some_and(|path| path.as_os_str() == "-")
+    {
+        anyhow::bail!("--redline writes an HTML file; `-o -` is not a report path");
+    }
+    for (role, path) in [("old", old), ("new", new)] {
+        if !path.exists() {
+            anyhow::bail!("redline {role} version does not exist: {}", path.display());
+        }
+        if !path.is_file() {
+            anyhow::bail!(
+                "redline {role} version must be a file, not a directory: {}",
+                path.display()
+            );
+        }
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("read the size of {}", path.display()))?;
+        pdfextractor_limits::Limits::default()
+            .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    }
+
+    let family = match (detect(old)?, detect(new)?) {
+        (Format::Pdf, Format::Pdf) => "PDF",
+        (Format::Docx, Format::Docx) => "DOCX",
+        (old_format, new_format) => anyhow::bail!(
+            "--redline compares two versions of the same PDF or DOCX; the old file is {old_format:?} and the new file is {new_format:?}"
+        ),
+    };
+
+    let output = args
+        .output
+        .clone()
+        .unwrap_or_else(|| new.with_extension("redline.html"));
+    let output = if output.extension().is_none() {
+        output.with_extension("html")
+    } else {
+        output
+    };
+    if same_path(&output, old) || same_path(&output, new) {
+        anyhow::bail!(
+            "the redline report would overwrite one of its inputs: {}",
+            output.display()
+        );
+    }
+
+    let scratch = RedlineScratch::new()?;
+    let old_doc = build_document(old, &scratch.path("old.json"), args)?;
+    let new_doc = build_document(new, &scratch.path("new.json"), args)?;
+    let old_name = file_name(old);
+    let new_name = file_name(new);
+    let html = redline::render(&old_doc, &new_doc, &old_name, &new_name, family)?;
+    redline::write(&output, &html)?;
+    eprintln!(
+        "redline: {} against {} -> {}",
+        new.display(),
+        old.display(),
+        output.display()
+    );
+    Ok(())
+}
+
+/// Whether two paths name the same file, including when only one of them can
+/// be canonicalized because the report does not exist yet.
+fn same_path(one: &Path, other: &Path) -> bool {
+    if one == other {
+        return true;
+    }
+    match (resolved_path(one), resolved_path(other)) {
+        (Some(one), Some(other)) => one == other,
+        _ => false,
+    }
+}
+
+/// A path with its parent resolved even when the file itself does not exist
+/// yet, so a report path cannot overwrite an input through a symlinked folder.
+fn resolved_path(path: &Path) -> Option<PathBuf> {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return Some(resolved);
+    }
+    let parent = path.parent()?;
+    let parent = std::fs::canonicalize(parent).ok()?;
+    Some(parent.join(path.file_name()?))
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// A scratch directory for the two conversions' extracted images, removed when
+/// the report is finished.
+///
+/// The report is text, so the pictures the converters write are not referenced;
+/// keeping them out of the user's folder is the point of the directory.
+struct RedlineScratch(PathBuf);
+
+impl RedlineScratch {
+    fn new() -> anyhow::Result<Self> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "pdfextractor-redline-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+        Ok(Self(path))
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for RedlineScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Report one finished document.
