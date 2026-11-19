@@ -2553,6 +2553,13 @@ fn crop(fill: &Node) -> [f64; 4] {
 /// decoded, and one the image crate has no decoder for — WebP, JPEG 2000 — is
 /// transcoded to PNG first, exactly as a picture in the document's flow is.
 /// `None` when the picture cannot be read at all.
+///
+/// The decode takes the image defaults rather than the run's budgets: this
+/// renderer has no `Limits` — the [`Media`] handle it is given carries bytes, not
+/// a policy — so `--max-image-pixels` reaches the pictures a package's flow
+/// carries, not one painted into a shape. What bounds this decode is the default
+/// ceiling (100 million pixels, a 512 MiB working set) and the package's own
+/// per-part cap.
 fn decode(mime: &str, data: &[u8], frame: Frame) -> Option<paint::Image> {
     if mime.starts_with("image/svg") {
         let raster = pdfextractor_svg::rasterize(

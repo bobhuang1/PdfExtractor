@@ -1536,7 +1536,7 @@ impl PdfDocument {
             // leaves as a PNG. The stream may be either of the two things a
             // `.jp2` file is made of, the container with its boxes or the bare
             // codestream, and the image reader takes both.
-            match pdfextractor_image_parser::transcode_to_png(raw) {
+            match pdfextractor_image_parser::transcode_to_png_with_limits(raw, &self.limits) {
                 Some(picture) => {
                     return Some(PageImage {
                         width: picture.width,

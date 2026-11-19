@@ -3907,8 +3907,8 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     let decoded = if animated {
         Some(animation[0].data.clone())
     } else if matches!(image.mimetype, "image/jp2" | "image/gif") {
-        let decoded =
-            pdfextractor_image_parser::transcode_to_png(&data).map(|picture| picture.data);
+        let decoded = pdfextractor_image_parser::transcode_to_png_with_limits(&data, &budgets())
+            .map(|picture| picture.data);
         if decoded.is_none() {
             tracing::warn!(
                 "could not decode {}; OCR sees the stored bytes",
@@ -4950,10 +4950,21 @@ fn link_covering(links: &[pdfextractor_pdf_parser::PageLink], bbox: [f64; 4]) ->
 /// type every reader knows rather than dropped. A picture that cannot be
 /// decoded keeps its own type and bytes: a payload is never replaced by a guess.
 fn docling_media(mime: &'static str, data: Vec<u8>) -> (&'static str, Vec<u8>) {
+    docling_media_with_limits(mime, data, &budgets())
+}
+
+/// [`docling_media`] under the run's image budgets: a picture past
+/// `max_image_pixels`, `max_image_dimension` or the allocation ceiling keeps its
+/// own type and bytes rather than being decoded anyway.
+fn docling_media_with_limits(
+    mime: &'static str,
+    data: Vec<u8>,
+    limits: &pdfextractor_limits::Limits,
+) -> (&'static str, Vec<u8>) {
     if pdfextractor_core::is_representable_media_type(mime) {
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png(&data) {
+    match pdfextractor_image_parser::transcode_to_png_with_limits(&data, limits) {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -4987,6 +4998,19 @@ fn office_media(
     width_pt: Option<f64>,
     height_pt: Option<f64>,
 ) -> (&'static str, Vec<u8>) {
+    office_media_with_limits(mime, data, width_pt, height_pt, &budgets())
+}
+
+/// [`office_media`] under the run's image budgets: a picture past the pixel,
+/// dimension or allocation ceiling keeps its own type and bytes rather than
+/// being decoded anyway — the same answer an undecodable picture gets.
+fn office_media_with_limits(
+    mime: &'static str,
+    data: Vec<u8>,
+    width_pt: Option<f64>,
+    height_pt: Option<f64>,
+    limits: &pdfextractor_limits::Limits,
+) -> (&'static str, Vec<u8>) {
     if mime == "image/png" || mime == "image/jpeg" {
         return (mime, data);
     }
@@ -5007,7 +5031,7 @@ fn office_media(
         }
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png(&data) {
+    match pdfextractor_image_parser::transcode_to_png_with_limits(&data, limits) {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -5594,6 +5618,69 @@ mod tests {
         assert_eq!(ext_for_mime("application/octet-stream"), "bin");
         assert_eq!(image_mimetype_for_path(Path::new("picture.avif")), None);
         assert_eq!(image_mimetype_for_path(Path::new("picture")), None);
+    }
+
+    /// The office-media transcode takes the run's image budgets. A picture past
+    /// the pixel ceiling keeps its own type and bytes instead of being decoded
+    /// anyway, so the budget reaches this decode and not only the readers.
+    #[test]
+    fn a_picture_over_the_budget_keeps_its_own_bytes_for_an_office_package() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/images/scan.gif");
+        let gif =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+        let (mime, png) = office_media_with_limits(
+            "image/gif",
+            gif.clone(),
+            None,
+            None,
+            &pdfextractor_limits::Limits::default(),
+        );
+        assert_eq!(mime, "image/png", "the defaults must decode the picture");
+        assert!(!png.is_empty(), "the transcode produced no bytes");
+
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            office_media_with_limits("image/gif", gif.clone(), None, None, &tight),
+            ("image/gif", gif),
+            "a one-pixel budget must leave the picture as it was"
+        );
+    }
+
+    /// The same rule where a picture is transcoded for Docling: a WebP past the
+    /// budget is left as itself, which the builder then leaves out rather than
+    /// naming a type Docling cannot read.
+    #[test]
+    fn a_picture_over_the_budget_is_not_transcoded_for_docling() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/images/chart.webp");
+        let webp =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+        assert_eq!(
+            docling_media_with_limits(
+                "image/webp",
+                webp.clone(),
+                &pdfextractor_limits::Limits::default()
+            )
+            .0,
+            "image/png",
+            "the defaults must transcode the picture"
+        );
+
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            docling_media_with_limits("image/webp", webp.clone(), &tight),
+            ("image/webp", webp),
+            "a one-pixel budget must leave the picture as it was"
+        );
     }
 
     /// An office SVG is played at the frame the package gives it, and a frame of
