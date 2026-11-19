@@ -16,6 +16,11 @@ Seed them with the committed fixtures; the real corpus is useful too:
 ```sh
 mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image fuzz/corpus/xml
 cp test-data/*.pdf fuzz/corpus/pdf/
+# The committed crash reproducers seed the pdf target as well, so a run starts
+# from the input shape that took the PNG encoder down instead of rediscovering
+# it. They are ignored by `.gitignore` only as corpus copies; the originals
+# under `fuzz/artifacts/pdf/` are tracked.
+cp fuzz/artifacts/pdf/* fuzz/corpus/pdf/
 cp test-data/*.docx test-data/*.xlsx test-data/*.pptx test-data/*.odt fuzz/corpus/zip/ 2>/dev/null || true
 cp test-data/*.png test-data/*.jpg test-data/*.tif fuzz/corpus/image/ 2>/dev/null || true
 printf '<a><b/></a>' > fuzz/corpus/xml/basic.xml
@@ -38,7 +43,9 @@ repository (see `.gitignore`); the seeding commands above rebuild the corpus
 from fixtures that are committed. A finding that becomes a regression test is
 the exception: the two PDF crashes are committed under `fuzz/artifacts/pdf/`
 and replayed by `crates/pdf-parser/tests/fuzz_regressions_test.rs`, so the case
-stays covered without a nightly toolchain.
+stays covered without a nightly toolchain. The seeding step above also copies
+those reproducers into `fuzz/corpus/pdf/`, so a later `cargo +nightly fuzz run
+pdf` begins from the shape that crashed even before the fuzzer mutates it.
 
 ## Lowered budgets
 
