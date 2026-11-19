@@ -748,8 +748,10 @@ PDFBox and PDF.js.
   `06_rotated.jpg` — the invoice stored 90° counter-clockwise with orientation 6 — is
   read at 100% and reports an A4 portrait page, and the same page with the tag cleared
   reads as noise, so the fixture pins the tag and not just the rotation.
-  Not read yet: a multi-frame TIFF's later frames, PDF-style `--preview`, and a text
-  layer (there is none to read). An animated GIF's frames after the first *are* read:
+  A multi-frame TIFF is a page per directory in the same way — `tiff_frames` reads every
+  sheet, each at its own grid and its own orientation tag — and what this input still has
+  no reading for is PDF-style `--preview` and a text layer (there is none to read).
+  An animated GIF's frames after the first *are* read:
   each is a page of its own — the logical screen's size, its own pixels, its own words
   — and `test-data/images/turning.gif` (three frames that name themselves) is held to
   three pages with their own text by `crates/cli/tests/cli_test.rs`.
