@@ -1411,11 +1411,9 @@ fn table_grid(table: &Value) -> TableGrid {
     for (row, column, row_span, col_span, text) in placed {
         let row_end = row.saturating_add(row_span).min(row_count);
         let column_end = column.saturating_add(col_span).min(column_count);
-        for covered_row in row..row_end {
-            for covered_column in column..column_end {
-                if covered_row != row || covered_column != column {
-                    rows[covered_row][covered_column] = None;
-                }
+        for covered in &mut rows[row..row_end] {
+            for slot in &mut covered[column..column_end] {
+                *slot = None;
             }
         }
         rows[row][column] = Some(TableGridCell {
