@@ -10,6 +10,7 @@ rust-version.workspace = true
 anyhow.workspace = true
 # The SpreadsheetML parts are XML in a ZIP: the same infrastructure DOCX uses.
 quick-xml.workspace = true
+pdfextractor-limits = { path = "../limits" }
 zip.workspace = true
 # Excel dates are serial day numbers; turning one into a date is exactly the
 # calendar arithmetic `chrono` is for, and the workspace already carries it.

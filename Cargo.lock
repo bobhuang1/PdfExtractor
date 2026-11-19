@@ -3508,6 +3508,7 @@ dependencies = [
  "pdfextractor-core",
  "pdfextractor-drawingml",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
@@ -3544,6 +3545,7 @@ dependencies = [
  "anyhow",
  "hayro-jpeg2000",
  "image",
+ "pdfextractor-limits",
  "tiff",
 ]
 
@@ -3610,6 +3612,7 @@ dependencies = [
  "image",
  "leptess",
  "pdfextractor-core",
+ "pdfextractor-image-parser",
  "pdfextractor-pdf-parser",
  "tracing",
 ]
@@ -3621,6 +3624,7 @@ dependencies = [
  "anyhow",
  "pdfextractor-chart",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",
@@ -3632,6 +3636,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-chart",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "pdfextractor-xlsx-parser",
  "quick-xml 0.36.2",
@@ -3644,6 +3649,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",
@@ -3678,6 +3684,7 @@ dependencies = [
  "pdfextractor-chart",
  "pdfextractor-drawingml",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "tracing",
@@ -3726,6 +3733,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "pdfextractor-chart",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",

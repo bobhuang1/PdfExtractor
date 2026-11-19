@@ -9,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 pdfextractor-core = { path = "../core" }
+# The orientation check decodes an input scan; the image reader's guarded
+# decoder keeps that from bypassing the shared pixel and allocation budgets.
+pdfextractor-image-parser = { path = "../image-parser" }
 image.workspace = true
 tracing.workspace = true
 

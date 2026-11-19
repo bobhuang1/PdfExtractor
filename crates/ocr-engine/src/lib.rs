@@ -231,7 +231,7 @@ impl OcrEngine {
     pub fn detect_upright(&mut self, image_bytes: &[u8]) -> Result<QuarterTurn> {
         #[cfg(feature = "tesseract")]
         {
-            let bitmap = image::load_from_memory(image_bytes)
+            let bitmap = pdfextractor_image_parser::decode_checked(image_bytes)
                 .context("failed to decode the image whose orientation was to be found")?;
             let sample = downscale_for_detection(&bitmap);
 

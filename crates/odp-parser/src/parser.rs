@@ -1,10 +1,11 @@
 //! Reading an OpenDocument presentation into its slides and shapes.
 
 use anyhow::{Context, Result};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use pdfextractor_picture_formats::{format_for_extension, format_for_mime};
 
@@ -196,8 +197,15 @@ impl OdpDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read an ODP under an explicit input, ZIP, XML and page budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
+        budget.check_zip(&mut archive)?;
 
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
@@ -221,6 +229,7 @@ impl OdpDocument {
             .context("content.xml has no office:presentation")?;
         let page_visibility = page_background_visibility(&root);
         let page_transitions = page_transitions(&root);
+        budget.check_pages(presentation.children_named("page").count())?;
 
         let mut slides = Vec::new();
         let mut page_size = None;
@@ -286,9 +295,7 @@ impl OdpDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
-    Some(buffer)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 fn read_parts(
@@ -304,8 +311,7 @@ fn read_parts(
         if file.is_dir() || !name.starts_with(prefix) {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
             parts.insert(name, buffer);
         }
     }
@@ -327,8 +333,7 @@ fn read_object_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<St
         if !object.starts_with("Object ") {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
             objects.insert(object.to_string(), buffer);
         }
     }
@@ -1239,6 +1244,36 @@ mod tests {
           <table-row><table-cell><p>Asia Pacific</p></table-cell><table-cell><p>74</p></table-cell><table-cell><p>NaN</p></table-cell></table-row>
         </table>
       </chart></body></document-content>"#;
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&[("content.xml", CONTENT.as_bytes())]);
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 0,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdpDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has one entry");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let content = r#"<document-content><body><presentation>
+            <page name="One"/><page name="Two"/>
+          </presentation></body></document-content>"#;
+        let pkg = package(&[("content.xml", content.as_bytes())]);
+        let budget = pdfextractor_limits::Limits {
+            max_pages: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdpDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the deck has two pages");
+        assert!(error.to_string().contains("2 pages"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
+    }
 
     #[test]
     fn a_slide_reads_text_lists_tables_pictures_and_notes() {

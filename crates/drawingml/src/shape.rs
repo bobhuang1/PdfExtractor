@@ -2567,11 +2567,11 @@ fn decode(mime: &str, data: &[u8], frame: Frame) -> Option<paint::Image> {
             crop: [0.0; 4],
         });
     }
-    let bitmap = match image::load_from_memory(data) {
-        Ok(bitmap) => bitmap,
-        Err(_) => {
+    let bitmap = match pdfextractor_image_parser::decode_checked(data) {
+        Some(bitmap) => bitmap,
+        None => {
             let png = pdfextractor_image_parser::transcode_to_png(data)?;
-            image::load_from_memory(&png.data).ok()?
+            pdfextractor_image_parser::decode_checked(&png.data)?
         }
     }
     .to_rgba8();

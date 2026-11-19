@@ -11,6 +11,7 @@ anyhow.workspace = true
 # PresentationML is XML in a ZIP, the same container DOCX and XLSX are read
 # from.
 quick-xml.workspace = true
+pdfextractor-limits = { path = "../limits" }
 zip.workspace = true
 tracing.workspace = true
 # A picture the deck stored the way the camera wrote it is turned the way its

@@ -184,6 +184,17 @@ impl Limits {
         Ok(())
     }
 
+    /// Reject an image decode whose working set exceeds the budget.
+    pub fn check_image_alloc(&self, bytes: u64) -> Result<()> {
+        if bytes > self.max_image_alloc_bytes {
+            return Err(LimitError::ImageAllocTooLarge {
+                actual: bytes,
+                limit: self.max_image_alloc_bytes,
+            });
+        }
+        Ok(())
+    }
+
     /// Reject an animation or TIFF with more sheets than the budget allows.
     pub fn check_image_frames(&self, count: usize) -> Result<()> {
         if count > self.max_image_frames {
@@ -297,14 +308,22 @@ impl Limits {
                 });
             }
             actual_total = actual_total.saturating_add(bytes.len() as u64);
-            if name.to_ascii_lowercase().ends_with(".xml") {
+            if is_xml_part(&name) {
                 if bytes.len() as u64 > self.max_xml_bytes {
                     return Err(LimitError::XmlTooLarge {
                         actual: bytes.len() as u64,
                         limit: self.max_xml_bytes,
                     });
                 }
-                self.check_xml(&bytes)?;
+                // SVG media is carried as bytes: the renderer decides whether
+                // the markup can be drawn, and a malformed drawing is left as
+                // the bytes it is. A well-formed one still gets the same depth
+                // and `DOCTYPE` gate as every other XML part.
+                let is_svg = name.to_ascii_lowercase().ends_with(".svg");
+                match self.check_xml(&bytes) {
+                    Err(LimitError::XmlMalformed { .. }) if is_svg => {}
+                    result => result?,
+                }
             }
         }
         Ok(())
@@ -364,6 +383,19 @@ impl Limits {
         }
         Ok(())
     }
+}
+
+/// Whether a ZIP part is XML a package reader may parse.
+///
+/// OOXML relationship parts (`.rels`), legacy VML drawings (`.vml`) and SVG
+/// media are XML even though their names do not end in `.xml`; they need the
+/// same size, nesting and `DOCTYPE` gate as the document parts.
+fn is_xml_part(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".xml")
+        || name.ends_with(".rels")
+        || name.ends_with(".vml")
+        || name.ends_with(".svg")
 }
 
 /// A wall-clock budget for one parser run.
@@ -470,6 +502,8 @@ pub enum LimitError {
         pixels: u64,
         limit: u64,
     },
+    #[error("the image decode needs {actual} bytes; the limit is {limit} bytes")]
+    ImageAllocTooLarge { actual: u64, limit: u64 },
     #[error("the image has {actual} frames; the limit is {limit}")]
     TooManyImageFrames { actual: usize, limit: usize },
     #[error("parsing timed out after {elapsed:?} during {stage}; the limit is {limit:?}")]
@@ -519,6 +553,22 @@ mod tests {
             .check_xml(b"<!DOCTYPE a [<!ENTITY x \"boom\">]><a>&x;</a>")
             .unwrap_err();
         assert_eq!(error, LimitError::XmlDoctype);
+    }
+
+    #[test]
+    fn an_image_allocation_over_budget_is_named() {
+        let limits = Limits {
+            max_image_alloc_bytes: 1024,
+            ..Limits::default()
+        };
+        let error = limits.check_image_alloc(1025).unwrap_err();
+        assert!(matches!(
+            error,
+            LimitError::ImageAllocTooLarge {
+                actual: 1025,
+                limit: 1024
+            }
+        ));
     }
 
     #[test]

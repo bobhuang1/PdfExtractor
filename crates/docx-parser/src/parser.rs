@@ -34,10 +34,11 @@ use pdfextractor_drawingml::{
     paints_a_picture_fill, render as render_drawing, render_with as render_drawing_with, Media,
     Theme,
 };
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 /// English Metric Units per point (914400 EMU per inch, 72 points per inch).
 const EMU_PER_POINT: f64 = 12700.0;
@@ -211,8 +212,15 @@ impl DocxDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> anyhow::Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read a DOCX under an explicit input, ZIP and XML budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> anyhow::Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("not a DOCX (ZIP) package: {e}"))?;
+        budget.check_zip(&mut archive)?;
 
         // Snapshot every media part up front. Holding the archive open while the
         // extractor walks the XML would tangle the mutable borrows for no gain.
@@ -226,8 +234,7 @@ impl DocxDocument {
             if !name.starts_with("word/media/") {
                 continue;
             }
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_ok() {
+            if let Ok(buf) = limits::read_zip_entry(&mut file) {
                 media.insert(name, buf);
             }
         }
@@ -245,8 +252,7 @@ impl DocxDocument {
             if !name.starts_with("word/charts/") || !name.ends_with(".xml") {
                 continue;
             }
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_ok() {
+            if let Ok(buf) = limits::read_zip_entry(&mut file) {
                 charts.insert(name, buf);
             }
         }
@@ -328,9 +334,7 @@ impl DocxDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    Some(buf)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 /// Map relationship ids to part names, e.g. `rId5` -> `word/media/image1.png`.
@@ -3059,6 +3063,23 @@ mod tests {
 
     const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     const M: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(
+            &format!(r#"<w:document {W}><w:body/></w:document>"#),
+            "",
+            &[],
+        );
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocxDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has two entries");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
 
     #[test]
     fn extracts_paragraphs_and_heading_labels() {

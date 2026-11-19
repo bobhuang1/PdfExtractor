@@ -18,6 +18,7 @@ pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
 pdfextractor-picture-formats = { path = "../picture-formats" }
 # A chart is the shared ChartShape the XLSX and PPTX readers place.
 pdfextractor-chart = { path = "../chart" }
+pdfextractor-limits = { path = "../limits" }
 zip.workspace = true
 quick-xml.workspace = true
 

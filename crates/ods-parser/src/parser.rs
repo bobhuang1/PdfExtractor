@@ -30,10 +30,11 @@
 //! displays is read.
 
 use anyhow::{Context, Result};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use pdfextractor_picture_formats::{format_for_mime, mime_for_extension};
 use pdfextractor_xlsx_parser::{Sheet, SheetAnnotation, SheetCell, SheetPicture, SheetTable};
@@ -69,8 +70,15 @@ impl OdsDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read an ODS under an explicit input, ZIP, XML and page budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
+        budget.check_zip(&mut archive)?;
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
         let media = read_parts(&mut archive, "Pictures/");
@@ -80,6 +88,7 @@ impl OdsDocument {
         // same part: read the whole part before any sheet is.
         let hidden = hidden_sheet_styles(&content)?;
         let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects)?;
+        budget.check_pages(sheets.len())?;
         Ok(Self {
             sheets,
             annotations,
@@ -89,9 +98,7 @@ impl OdsDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
-    Some(buffer)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 fn read_parts(
@@ -107,8 +114,7 @@ fn read_parts(
         if file.is_dir() || !name.starts_with(prefix) {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
             parts.insert(name, buffer);
         }
     }
@@ -130,8 +136,7 @@ fn read_chart_objects(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<S
         if !object.starts_with("Object ") {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
             objects.insert(object.to_string(), buffer);
         }
     }
@@ -1106,6 +1111,40 @@ mod tests {
  <office:body><office:spreadsheet>{body}</office:spreadsheet></office:body>
 </office:document-content>"#
         )
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&content(""));
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 2,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has three entries");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let body = r#"
+            <table:table table:name="One">
+              <table:table-row><table:table-cell><text:p>A</text:p></table:table-cell></table:table-row>
+            </table:table>
+            <table:table table:name="Two">
+              <table:table-row><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>
+            </table:table>"#;
+        let pkg = package(&content(body));
+        let budget = pdfextractor_limits::Limits {
+            max_pages: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the content has two sheets");
+        assert!(error.to_string().contains("2 pages"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
     }
 
     fn texts(sheet: &Sheet) -> Vec<String> {

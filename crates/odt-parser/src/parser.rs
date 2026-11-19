@@ -18,10 +18,11 @@
 //! counters), ODF comments and tracked changes, and formula objects.
 
 use anyhow::{Context, Result};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use pdfextractor_picture_formats::{format_for_extension, format_for_mime};
 
@@ -113,8 +114,15 @@ impl OdtDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read an ODT under an explicit input, ZIP and XML budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
+        budget.check_zip(&mut archive)?;
 
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
@@ -139,8 +147,7 @@ impl OdtDocument {
             if file.is_dir() || !name.starts_with("Pictures/") {
                 continue;
             }
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_ok() {
+            if let Ok(buf) = limits::read_zip_entry(&mut file) {
                 media.insert(name, buf);
             }
         }
@@ -172,9 +179,7 @@ impl OdtDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    Some(buf)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 /// The named styles of a package: what a paragraph's `text:style-name` means.
@@ -1205,6 +1210,19 @@ mod tests {
  <office:body><office:text>{body}</office:text></office:body>
 </office:document-content>"#
         )
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&content(""), STYLES, &[]);
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 2,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdtDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has three entries");
+        assert!(error.to_string().contains("entries"), "{error}");
     }
 
     fn texts(items: &[OdtItem]) -> Vec<(String, String, Option<i32>)> {

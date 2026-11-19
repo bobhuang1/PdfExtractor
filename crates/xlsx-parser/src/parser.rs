@@ -20,10 +20,11 @@
 
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, TimeDelta, Timelike};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 /// One worksheet: its name, whether it is hidden, and the tables it holds.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,12 +117,20 @@ pub struct XlsxDocument {
 impl XlsxDocument {
     /// Read a whole `.xlsx` package from memory.
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read an XLSX under an explicit input, ZIP, XML and page budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive =
             zip::ZipArchive::new(Cursor::new(data)).context("the XLSX is not a ZIP package")?;
+        budget.check_zip(&mut archive)?;
 
         let workbook = read_part(&mut archive, "xl/workbook.xml")
             .context("the package has no xl/workbook.xml")?;
         let book = read_workbook(&workbook)?;
+        budget.check_pages(book.sheets.len())?;
         let rels = read_part(&mut archive, "xl/_rels/workbook.xml.rels")
             .map(|bytes| read_relationships(&bytes))
             .transpose()?
@@ -192,9 +201,7 @@ impl XlsxDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
-    Some(buffer)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 /// One `<sheet>` of `xl/workbook.xml`.
@@ -1680,6 +1687,38 @@ mod tests {
 
     fn worksheet(body: &str) -> String {
         format!(r#"<worksheet {NS}><sheetData>{body}</sheetData></worksheet>"#)
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&[("xl/workbook.xml", workbook(""))]);
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 0,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = XlsxDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has one entry");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let pkg = package(&[(
+            "xl/workbook.xml",
+            workbook(
+                r#"<sheet name="One" sheetId="1" r:id="rId1"/><sheet name="Two" sheetId="2" r:id="rId2"/>"#,
+            ),
+        )]);
+        let budget = pdfextractor_limits::Limits {
+            max_pages: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = XlsxDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the workbook has two sheets");
+        assert!(error.to_string().contains("2 pages"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
     }
 
     /// A one-sheet package whose worksheet part holds `body`.

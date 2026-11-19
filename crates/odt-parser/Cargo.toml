@@ -14,6 +14,7 @@ pdfextractor-picture-formats = { path = "../picture-formats" }
 # A picture part with no `draw:mime-type` is named by its own bytes, which is
 # what the image reader already answers.
 pdfextractor-image-parser = { path = "../image-parser" }
+pdfextractor-limits = { path = "../limits" }
 zip.workspace = true
 quick-xml.workspace = true
 

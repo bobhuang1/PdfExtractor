@@ -14,10 +14,11 @@
 //! `r:embed` points at — not `ppt/media/image1.png` guessed from a name.
 
 use anyhow::{bail, Context, Result};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 // A shape the slide draws itself — an autoshape, a connector, a group, a text
 // box with a fill — has no image part behind it. The painter that draws a Word
 // shape draws it too: the markup is the same DrawingML under either prefix.
@@ -195,8 +196,15 @@ pub use pdfextractor_chart::{chart_cell_text, ChartKind, ChartSeries, ChartShape
 impl PptxDocument {
     /// Read a whole `.pptx` package from memory.
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read a PPTX under an explicit input, ZIP, XML and page budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
         let mut archive = zip::ZipArchive::new(Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("not a PPTX (ZIP) package: {e}"))?;
+        budget.check_zip(&mut archive)?;
 
         let presentation = read_part(&mut archive, "ppt/presentation.xml")
             .context("the package has no ppt/presentation.xml")?;
@@ -233,6 +241,7 @@ impl PptxDocument {
         if slide_parts.is_empty() {
             slide_parts = enumerate_slides(&mut archive);
         }
+        budget.check_pages(slide_parts.len())?;
 
         // Pictures and charts are read from the package once; a slide's
         // relationship says which part it shows. The comment authors are named
@@ -284,9 +293,7 @@ impl PptxDocument {
 
 fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
-    Some(buffer)
+    limits::read_zip_entry(&mut file).ok()
 }
 
 /// Every `ppt/slides/slideN.xml` in the package, in numeric order — the
@@ -327,8 +334,7 @@ fn read_parts(
         if !name.starts_with(prefix) {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
             parts.insert(name, buffer);
         }
     }
@@ -1775,6 +1781,47 @@ mod tests {
 
     fn relationships(entries: &str) -> String {
         format!(r#"<Relationships {RELS}>{entries}</Relationships>"#)
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&[("ppt/presentation.xml", presentation("", "9144000"))]);
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 0,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = PptxDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the package has one entry");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let pkg = package(&[
+            (
+                "ppt/presentation.xml",
+                presentation(
+                    r#"<p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/>"#,
+                    "9144000",
+                ),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                relationships(&format!(
+                    r#"<Relationship Id="rId1" Type="{LAYOUT}" Target="slides/slide1.xml"/><Relationship Id="rId2" Type="{LAYOUT}" Target="slides/slide2.xml"/>"#
+                )),
+            ),
+        ]);
+        let budget = pdfextractor_limits::Limits {
+            max_pages: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = PptxDocument::parse_bytes_with_limits(&pkg, budget)
+            .err()
+            .expect("the deck has two slides");
+        assert!(error.to_string().contains("2 pages"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
     }
 
     /// A one-slide deck whose slide part is `body`.

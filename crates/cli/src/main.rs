@@ -1287,6 +1287,19 @@ fn convert_one(
     Ok(primary)
 }
 
+/// Read an input only after its size is known to fit the budget.
+///
+/// The readers also check their slice, but the command line has to read the
+/// file first; checking the metadata here keeps a giant file from becoming an
+/// allocation before any reader sees it.
+fn read_input(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
+    pdfextractor_limits::Limits::default()
+        .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    std::fs::read(path).with_context(|| format!("read {}", path.display()))
+}
+
 /// Convert one input into a document, without writing it out.
 ///
 /// `output_path` is the primary output's path: extracted images and the
@@ -1304,6 +1317,10 @@ fn build_document(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
+    pdfextractor_limits::Limits::default()
+        .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     if !is_supported_extension(&ext) {
         // A picture the shared table carries but this reader cannot page is not
         // an unknown format, and the message says so rather than leaving the
@@ -1515,7 +1532,7 @@ fn relabel(
     original: &Path,
     mimetype: &str,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(original).with_context(|| format!("read {}", original.display()))?;
+    let data = read_input(original)?;
     let name = original
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1752,7 +1769,7 @@ fn convert_pdf(
     want_preview: bool,
     preview_dpi: u32,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = PdfDocument::parse(&data)?;
     // A ciphered file is refused here, by name, rather than read as though its
     // streams were plain: every string and stream in it is encrypted under a key
@@ -1771,7 +1788,7 @@ fn convert_pdf(
     // them is analysed: the furniture pass must see exactly the pages that were
     // kept, or a running head on the only page left would be judged against
     // neighbours that are not in the document any more.
-    let mut pages = parsed.extract();
+    let mut pages = parsed.extract_checked()?;
     if let Some(range) = reading.range {
         let total = pages.len();
         pages.retain(|page| range.contains(page.page_no));
@@ -2316,7 +2333,7 @@ fn convert_docx(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes(&data)?;
 
     let name = path
@@ -2378,7 +2395,7 @@ fn convert_odt(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes(&data)?;
 
     let name = path
@@ -2518,7 +2535,7 @@ fn convert_xlsx(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
     convert_workbook(
         &parsed.sheets,
@@ -2541,7 +2558,7 @@ fn convert_ods(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes(&data)?;
     convert_workbook(
         &parsed.sheets,
@@ -2924,7 +2941,7 @@ fn convert_pptx(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes(&data)?;
 
     let total = parsed.slides.len();
@@ -3172,7 +3189,7 @@ fn convert_odp(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes(&data)?;
 
     let name = path
@@ -3560,7 +3577,7 @@ fn comment_timestamp(date: &str) -> std::borrow::Cow<'_, str> {
 /// frames, the sheets need not share a grid: a page is measured from its own
 /// pixels at the resolution the file declares, and recognised on its own.
 fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let image = pdfextractor_image_parser::ImageDocument::parse_bytes(&data)?;
 
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("image");
@@ -3582,9 +3599,18 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // TIFF's directories are separate sheets that need not be the same size, so
     // each page is measured from its own grid. One frame is a still image, so
     // only a file that really holds several is read as several pages.
-    let gif_frames = pdfextractor_image_parser::gif_frames(&data);
-    let webp_frames = pdfextractor_image_parser::webp_frames(&data);
-    let tiff_pages = pdfextractor_image_parser::tiff_frames(&data);
+    let gif_frames = pdfextractor_image_parser::gif_frames_checked(
+        &data,
+        &pdfextractor_limits::Limits::default(),
+    )?;
+    let webp_frames = pdfextractor_image_parser::webp_frames_checked(
+        &data,
+        &pdfextractor_limits::Limits::default(),
+    )?;
+    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(
+        &data,
+        &pdfextractor_limits::Limits::default(),
+    )?;
     let animation: &[pdfextractor_image_parser::PngPicture] = if gif_frames.len() > 1 {
         &gif_frames
     } else if webp_frames.len() > 1 {
@@ -3879,7 +3905,7 @@ fn convert_doc(
     path: &Path,
     _output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes(&data)?;
 
     let name = path
@@ -3935,7 +3961,7 @@ fn convert_text(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let parsed = match ext {
         "rtf" => pdfextractor_text_parser::rtf::parse(&data),
         "html" | "htm" => pdfextractor_text_parser::html::parse(&data),
@@ -4198,7 +4224,7 @@ fn load_flow_picture(document: &Path, source: &str) -> Option<FlowPicture> {
         Some(carried) => carried,
         None => {
             let file = local_image_path(document, source)?;
-            let data = std::fs::read(&file).ok()?;
+            let data = read_input(&file).ok()?;
             (image_mimetype_for_path(&file), data)
         }
     };
@@ -4935,7 +4961,7 @@ fn picture_is_page(bbox: [f64; 4], page_width: f64, page_height: f64) -> bool {
 /// in which case Tesseract's own decoder gets the original bytes and its
 /// error policy applies.
 fn rotate_for_ocr(data: &[u8], degrees: i32) -> Option<(Vec<u8>, u32, u32)> {
-    let bitmap = image::load_from_memory(data).ok()?;
+    let bitmap = pdfextractor_image_parser::decode_checked(data)?;
     let turned = match degrees {
         90 => bitmap.rotate90(),
         180 => bitmap.rotate180(),
