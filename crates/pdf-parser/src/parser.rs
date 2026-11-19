@@ -7,8 +7,8 @@ use crate::images::{self, PageImage};
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::objects::{ObjId, PdfValue};
 use pdfextractor_limits::{Deadline, LimitError, Limits};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
 /// An image XObject together with where the content stream actually put it.
@@ -79,6 +79,12 @@ pub struct PdfDocument {
     deadline: Deadline,
     /// The first stream that exceeded its budget, returned by extraction.
     limit_hit: RefCell<Option<LimitError>>,
+    /// Every distinct stream this document has expanded, so a file of many
+    /// streams each inside its own ceiling cannot expand without bound.
+    document_bytes: Cell<u64>,
+    /// The streams already charged to it: read again, a stream is the same
+    /// bytes, not new ones.
+    charged_streams: RefCell<HashSet<usize>>,
 }
 
 impl PdfDocument {
@@ -101,6 +107,7 @@ impl PdfDocument {
             }
             .into());
         }
+        Self::check_nesting(&tokens, limits.max_pdf_nesting)?;
         deadline.check("tokenizing the PDF")?;
 
         let mut version = "1.4".to_string();
@@ -209,6 +216,8 @@ impl PdfDocument {
             limits,
             deadline,
             limit_hit: RefCell::new(None),
+            document_bytes: Cell::new(0),
+            charged_streams: RefCell::new(HashSet::new()),
         };
         doc.honour_stream_lengths(data);
         doc.deadline.check("honouring stream lengths")?;
@@ -328,6 +337,7 @@ impl PdfDocument {
                 }
                 .into());
             }
+            Self::check_nesting(&tokens, self.limits.max_pdf_nesting)?;
 
             // A stream cannot promise more objects than the document budget
             // has left; the capacity is allocated only after that check.
@@ -377,6 +387,32 @@ impl PdfDocument {
                     self.objects.entry((objnum, 0)).or_insert(value);
                 }
                 self.limits.check_pdf_objects(self.objects.len())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a token stream that nests arrays or dictionaries deeper than `max`.
+    ///
+    /// The budget has to be held here, at the tokens, rather than only where a
+    /// value is parsed: `parse_value` gives up on a value past the ceiling by
+    /// returning `None`, which drops it silently, so a document that nested too
+    /// deep would be read as a shorter one instead of being refused.
+    fn check_nesting(tokens: &[SpannedToken], max: usize) -> Result<(), LimitError> {
+        let mut depth = 0usize;
+        for token in tokens {
+            match token.token {
+                Token::LBracket | Token::LDoubleAngle => {
+                    depth += 1;
+                    if depth > max {
+                        return Err(LimitError::PdfTooDeep {
+                            actual: depth,
+                            limit: max,
+                        });
+                    }
+                }
+                Token::RBracket | Token::RDoubleAngle => depth = depth.saturating_sub(1),
+                _ => {}
             }
         }
         Ok(())
@@ -902,16 +938,42 @@ impl PdfDocument {
     /// here so a decoder that a caller ignored cannot keep the allocation.
     fn cap_stream(&self, data: &mut Vec<u8>) {
         let limit = self.limits.max_decoded_stream_bytes;
-        if data.len() as u64 <= limit {
+        if data.len() as u64 > limit {
+            if self.limit_hit.borrow().is_none() {
+                *self.limit_hit.borrow_mut() = Some(LimitError::DecodedStreamTooLarge {
+                    actual: data.len() as u64,
+                    limit,
+                });
+            }
+            data.truncate(limit.min(usize::MAX as u64) as usize);
+        }
+    }
+
+    /// Charge one decoded item to the whole-document total.
+    ///
+    /// Called once per stream handed to a caller, not at each filter step: a
+    /// Flate stream passes through [`Self::cap_stream`] three times as it is
+    /// inflated, and charging each pass would count one stream three times.
+    ///
+    /// `key` identifies the stream where the document holds it, so extraction
+    /// walking the same page's content streams again is one expansion charged
+    /// once — that repeated walk is what the total exists to bound. A stream
+    /// rebuilt for decoding (an object stream's payload, an image's filter
+    /// prefix) is a new value with a key of its own, and is the separate item it
+    /// is.
+    fn charge_document(&self, bytes: u64, key: usize) {
+        // A stream visited twice is one expansion charged once.
+        if !self.charged_streams.borrow_mut().insert(key) {
             return;
         }
-        if self.limit_hit.borrow().is_none() {
-            *self.limit_hit.borrow_mut() = Some(LimitError::DecodedStreamTooLarge {
-                actual: data.len() as u64,
-                limit,
+        let total = self.document_bytes.get().saturating_add(bytes);
+        self.document_bytes.set(total);
+        if total > self.limits.max_document_bytes && self.limit_hit.borrow().is_none() {
+            *self.limit_hit.borrow_mut() = Some(LimitError::DocumentTooLarge {
+                actual: total,
+                limit: self.limits.max_document_bytes,
             });
         }
-        data.truncate(limit.min(usize::MAX as u64) as usize);
     }
 
     /// The `/Filter` chain of a stream dictionary, as names.
@@ -1544,6 +1606,7 @@ impl PdfDocument {
         if terminal_index == 0 {
             let mut data = raw.clone();
             self.cap_stream(&mut data);
+            self.charge_document(data.len() as u64, value as *const PdfValue as usize);
             return data;
         }
 
@@ -1578,11 +1641,27 @@ impl PdfDocument {
             );
         }
         prefix.remove("DP");
-        self.decode_stream(&PdfValue::Stream(prefix, raw.clone()))
+        // Decoded through the prefix but charged to the stream it came from:
+        // the same image placed on a hundred pages is one expansion, which is
+        // why the key is `value` and not the temporary built here.
+        let data = self.decode_stream_uncapped(&PdfValue::Stream(prefix, raw.clone()));
+        self.charge_document(data.len() as u64, value as *const PdfValue as usize);
+        data
     }
 
     /// Return a stream's decoded bytes, applying `/Filter /FlateDecode`.
+    ///
+    /// The bytes are charged to the document total once, when the stream is
+    /// handed back: the filter chain caps each intermediate buffer but a single
+    /// stream is one item, however many passes it took.
     fn decode_stream(&self, value: &PdfValue) -> Vec<u8> {
+        let data = self.decode_stream_uncapped(value);
+        self.charge_document(data.len() as u64, value as *const PdfValue as usize);
+        data
+    }
+
+    /// [`Self::decode_stream`] without the whole-document charge.
+    fn decode_stream_uncapped(&self, value: &PdfValue) -> Vec<u8> {
         let (dict, raw) = match value {
             PdfValue::Stream(d, b) => (d, b),
             _ => return Vec::new(),
@@ -1867,7 +1946,25 @@ mod tests {
             limits: Limits::default(),
             deadline: Limits::default().deadline(),
             limit_hit: RefCell::new(None),
+            document_bytes: Cell::new(0),
+            charged_streams: RefCell::new(HashSet::new()),
         }
+    }
+
+    /// A stream read again is the same bytes: a page that visits another page's
+    /// content twice does not spend the document total twice.
+    #[test]
+    fn the_document_total_counts_a_stream_once_however_often_it_is_read() {
+        let mut doc = document();
+        doc.limits.max_document_bytes = 2_500;
+        let stream = PdfValue::Stream(HashMap::new(), vec![b'A'; 2_000]);
+        assert_eq!(doc.decode_stream(&stream).len(), 2_000);
+        assert_eq!(doc.decode_stream(&stream).len(), 2_000);
+        assert!(
+            doc.limit_hit.borrow().is_none(),
+            "a repeated read of one stream was charged twice: {:?}",
+            doc.limit_hit.borrow()
+        );
     }
 
     /// The lexer ends a payload at the first `endstream` it sees, so a payload

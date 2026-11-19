@@ -52,6 +52,17 @@ pub const MAX_IMAGE_DIMENSION: u32 = 100_000;
 pub const MAX_IMAGE_FRAMES: usize = 1_000;
 /// Maximum bytes one image decode may allocate.
 pub const MAX_IMAGE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
+/// Largest total size one document may expand to, across every PDF stream and
+/// image frame its reader decodes.
+///
+/// The per-item ceilings bound one stream or frame; a file of many items each
+/// just under its own ceiling would otherwise expand without bound. This is the
+/// running total those ceilings are charged to — eight streams at
+/// [`MAX_DECODED_STREAM_BYTES`], so a document may hold several streams at the
+/// single-stream ceiling but not an unbounded number of them. Packages are not
+/// charged to it: [`ZipBudget`] already bounds a whole package's expansion, at
+/// `max_zip_total_bytes`.
+pub const MAX_DOCUMENT_BYTES: u64 = 8 * MAX_DECODED_STREAM_BYTES;
 /// Most blocks a flow reader (text, Markdown, CSV, RTF, HTML, DOCX and legacy
 /// `.doc`) may produce.
 ///
@@ -96,6 +107,7 @@ pub struct Limits {
     pub max_image_frames: usize,
     pub max_image_alloc_bytes: u64,
     pub max_flow_blocks: usize,
+    pub max_document_bytes: u64,
     pub max_bridge_output_bytes: u64,
     pub bridge_timeout: Duration,
     pub timeout: Duration,
@@ -122,6 +134,7 @@ impl Default for Limits {
             max_image_frames: MAX_IMAGE_FRAMES,
             max_image_alloc_bytes: MAX_IMAGE_ALLOC_BYTES,
             max_flow_blocks: MAX_FLOW_BLOCKS,
+            max_document_bytes: MAX_DOCUMENT_BYTES,
             max_bridge_output_bytes: MAX_BRIDGE_OUTPUT_BYTES,
             bridge_timeout: BRIDGE_TIMEOUT,
             timeout: PARSE_TIMEOUT,
@@ -255,6 +268,11 @@ impl Limits {
             });
         }
         Ok(())
+    }
+
+    /// A whole-document total to charge expansions to, starting at zero.
+    pub fn document_budget(&self) -> DocumentBudget<'_> {
+        DocumentBudget::new(self)
     }
 
     /// A deadline measured from now, for one parser run.
@@ -621,6 +639,47 @@ impl<'a> ZipBudget<'a> {
     }
 }
 
+/// The bytes one document has expanded to so far, and the budget they are
+/// charged to.
+///
+/// The per-item ceilings bound a single stream or frame. A file of many items
+/// each just inside its own ceiling would still expand past what the caller
+/// allowed, so every stream and frame a reader decodes is charged here as well:
+/// this is the whole-document total, the same idea as [`ZipBudget`]'s package
+/// total but across formats rather than one archive.
+#[derive(Debug)]
+pub struct DocumentBudget<'a> {
+    limits: &'a Limits,
+    expanded: u64,
+}
+
+impl<'a> DocumentBudget<'a> {
+    /// Charge expansions to `limits`.
+    pub fn new(limits: &'a Limits) -> Self {
+        Self {
+            limits,
+            expanded: 0,
+        }
+    }
+
+    /// The bytes expanded so far.
+    pub fn expanded_bytes(&self) -> u64 {
+        self.expanded
+    }
+
+    /// Charge `bytes` to the document's total, refusing the item that passes it.
+    pub fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.expanded = self.expanded.saturating_add(bytes);
+        if self.expanded > self.limits.max_document_bytes {
+            return Err(LimitError::DocumentTooLarge {
+                actual: self.expanded,
+                limit: self.limits.max_document_bytes,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Read one ZIP entry under the caller's budget, charged to `budget`.
 ///
 /// The cap is the read itself, so an entry that lies about its declared size
@@ -761,6 +820,8 @@ pub enum LimitError {
     TooManyImageFrames { actual: usize, limit: usize },
     #[error("the document produced {actual} blocks; the limit is {limit}")]
     TooManyFlowBlocks { actual: usize, limit: usize },
+    #[error("the document expanded to {actual} bytes; the whole-document limit is {limit} bytes")]
+    DocumentTooLarge { actual: u64, limit: u64 },
     #[error("LibreOffice wrote {actual} bytes for one document; the limit is {limit} bytes")]
     BridgeOutputTooLarge { actual: u64, limit: u64 },
     #[error("parsing timed out after {elapsed:?} during {stage}; the limit is {limit:?}")]
@@ -784,6 +845,29 @@ mod tests {
         assert!(limits.check_input(1024).is_ok());
         assert!(limits.check_pages(10).is_ok());
         assert!(limits.check_image(2_000, 3_000).is_ok());
+    }
+
+    /// The whole-document total charges every item, so a file of many items
+    /// each inside its own ceiling cannot add up past what the caller allowed.
+    #[test]
+    fn a_document_total_refuses_the_item_that_passes_it() {
+        let limits = Limits {
+            max_document_bytes: 100,
+            ..Limits::default()
+        };
+        let mut budget = limits.document_budget();
+        budget.charge(60).expect("under the total");
+        budget.charge(40).expect("exactly the total");
+        assert_eq!(budget.expanded_bytes(), 100);
+        let error = budget.charge(1).unwrap_err();
+        assert!(matches!(
+            error,
+            LimitError::DocumentTooLarge {
+                actual: 101,
+                limit: 100
+            }
+        ));
+        assert!(error.to_string().contains("whole-document"));
     }
 
     #[test]

@@ -195,7 +195,19 @@ pub fn upright_png(data: &[u8], orientation: Orientation) -> Option<Vec<u8>> {
 /// callers that care about the EXIF tag (a Word or PowerPoint package) apply
 /// [`turn_upright`] first, and one that has no tag has nothing to turn.
 pub fn transcode_to_png(data: &[u8]) -> Option<PngPicture> {
-    let bitmap = decode_image(data, &Limits::default())?;
+    transcode_to_png_with_limits(data, &Limits::default())
+}
+
+/// [`transcode_to_png`] under the caller's image budgets.
+///
+/// A grid past `max_image_dimension` or `max_image_pixels`, or a decode whose
+/// working set passes `max_image_alloc_bytes`, is refused like a file that does
+/// not decode: the caller keeps the payload it had rather than pixels it did not
+/// budget for. A fuzz run takes its limits from the environment, so a lowered
+/// `FUZZ_MAX_IMAGE_PIXELS` reaches this decode instead of being spent at the
+/// defaults.
+pub fn transcode_to_png_with_limits(data: &[u8], limits: &Limits) -> Option<PngPicture> {
+    let bitmap = decode_image(data, limits)?;
     let (width, height) = (bitmap.width(), bitmap.height());
     Some(PngPicture {
         data: encode_png(&bitmap)?,
@@ -274,15 +286,26 @@ pub fn gif_frames(data: &[u8]) -> Vec<PngPicture> {
     gif_frames_checked(data, &Limits::default()).unwrap_or_default()
 }
 
+/// The refusal `error` carries, or an [`LimitError::ImageDecode`] naming it.
+///
+/// A budget's own refusal is passed through rather than wrapped in a sentence:
+/// a caller that has to say which flag would raise it needs the typed error, and
+/// the wrapping turned every `ImageTooManyPixels` or `TooManyImageFrames` into
+/// prose about a picture that could not be read.
+fn refusal(error: anyhow::Error) -> LimitError {
+    let typed = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>().cloned());
+    typed.unwrap_or_else(|| LimitError::ImageDecode {
+        detail: format!("{error:#}"),
+    })
+}
+
 /// [`gif_frames`] with an explicit frame and pixel budget.
 pub fn gif_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture>, LimitError> {
     use image::AnimationDecoder;
 
-    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(|error| {
-        LimitError::ImageDecode {
-            detail: error.to_string(),
-        }
-    })?;
+    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(refusal)?;
     if document.mimetype != "image/gif" {
         return Ok(Vec::new());
     }
@@ -295,7 +318,10 @@ pub fn gif_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture
     // A frame stack is a page per frame, and each frame is decoded and encoded
     // on its own: the deadline is checked between them, so a stack that is
     // inside the frame budget but too slow to read is refused rather than run.
+    // Each frame's pixels are charged to the document total as well, because a
+    // stack of frames each inside the per-frame ceiling is not bounded by it.
     let deadline = limits.deadline();
+    let mut budget = limits.document_budget();
     let mut pictures = Vec::new();
     for frame in frames {
         deadline.check("decoding a GIF frame")?;
@@ -304,6 +330,7 @@ pub fn gif_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture
         };
         let (width, height) = frame.buffer().dimensions();
         limits.check_image(width, height)?;
+        budget.charge(u64::from(width) * u64::from(height) * 4)?;
         if let Some(picture) = picture_of_frame(frame) {
             pictures.push(picture);
         }
@@ -347,11 +374,7 @@ pub fn webp_frames(data: &[u8]) -> Vec<PngPicture> {
 pub fn webp_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture>, LimitError> {
     use image::AnimationDecoder;
 
-    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(|error| {
-        LimitError::ImageDecode {
-            detail: error.to_string(),
-        }
-    })?;
+    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(refusal)?;
     if document.mimetype != "image/webp" {
         return Ok(Vec::new());
     }
@@ -364,8 +387,10 @@ pub fn webp_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPictur
     let frames = decoder
         .into_frames()
         .take(limits.max_image_frames.saturating_add(1));
-    // The deadline is checked between frames, as it is for a GIF.
+    // The deadline is checked between frames, as it is for a GIF, and each
+    // frame's pixels are charged to the document total for the same reason.
     let deadline = limits.deadline();
+    let mut budget = limits.document_budget();
     let mut pictures = Vec::new();
     for frame in frames {
         deadline.check("decoding a WebP frame")?;
@@ -374,6 +399,7 @@ pub fn webp_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPictur
         };
         let (width, height) = frame.buffer().dimensions();
         limits.check_image(width, height)?;
+        budget.charge(u64::from(width) * u64::from(height) * 4)?;
         if let Some(picture) = picture_of_frame(frame) {
             pictures.push(picture);
         }
@@ -435,11 +461,7 @@ pub fn tiff_frames(data: &[u8]) -> Vec<PngPicture> {
 
 /// [`tiff_frames`] with an explicit frame and pixel budget.
 pub fn tiff_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture>, LimitError> {
-    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(|error| {
-        LimitError::ImageDecode {
-            detail: error.to_string(),
-        }
-    })?;
+    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(refusal)?;
     if document.mimetype != "image/tiff" {
         return Ok(Vec::new());
     }
@@ -450,10 +472,12 @@ pub fn tiff_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPictur
     // that is inside the frame budget but too slow to read is refused between
     // pages rather than allowed to run on.
     let deadline = limits.deadline();
+    let mut budget = limits.document_budget();
     let mut pages = Vec::new();
     loop {
         deadline.check("decoding a TIFF page")?;
         if let Some((width, height, rgba)) = tiff_page(&mut decoder, limits)? {
+            budget.charge(u64::from(width) * u64::from(height) * 4)?;
             if pages.len() >= limits.max_image_frames {
                 return Err(LimitError::TooManyImageFrames {
                     actual: pages.len() + 1,
@@ -1580,6 +1604,22 @@ mod tests {
         out
     }
 
+    /// The transcode takes the caller's budgets: a lowered pixel ceiling refuses
+    /// the grid the defaults decode.
+    #[test]
+    fn transcode_to_png_with_limits_refuses_a_grid_the_defaults_decode() {
+        let data = decodable_png(64);
+        assert!(transcode_to_png(&data).is_some(), "the defaults decode it");
+        let tight = Limits {
+            max_image_pixels: 1,
+            ..Limits::default()
+        };
+        assert!(
+            transcode_to_png_with_limits(&data, &tight).is_none(),
+            "a 64-pixel picture must be refused by a one-pixel budget"
+        );
+    }
+
     #[test]
     fn decode_checked_refuses_an_over_budget_grid() {
         let widest = Limits::default().max_image_dimension;
@@ -2087,6 +2127,74 @@ mod tests {
         assert_eq!(gif_frames(&single).len(), 1);
         assert!(gif_frames(&gif_header(8, 6)).is_empty());
         assert!(gif_frames(b"not a picture at all").is_empty());
+    }
+
+    /// A frame budget of two refuses the third frame of a GIF and of a TIFF,
+    /// by name, on small inputs built here.
+    ///
+    /// The image fuzzer reached this only by mutation: the seed corpus has no
+    /// three-frame picture, so a refusal that depends on the third frame being
+    /// read and counted was one mutation away from untested. Both readers are
+    /// held here — the GIF counts the frame it has just pushed, the TIFF counts
+    /// a directory before it reads it — so the two paths agree on the refusal
+    /// they report for the same ceiling.
+    #[test]
+    fn a_third_frame_is_refused_by_a_two_frame_budget() {
+        fn frame(colour: [u8; 4]) -> image::Frame {
+            image::Frame::from_parts(
+                image::RgbaImage::from_pixel(8, 6, image::Rgba(colour)),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(100, 1),
+            )
+        }
+        let mut gif = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut gif);
+            encoder
+                .encode_frames([
+                    frame([255, 0, 0, 255]),
+                    frame([0, 255, 0, 255]),
+                    frame([0, 0, 255, 255]),
+                ])
+                .expect("encode the animation");
+        }
+        let tiff = multipage_tiff(&[(4, 2), (3, 1), (2, 2)]);
+
+        // The defaults read all three frames of both, so the refusal below is
+        // the budget's and not the input's.
+        assert_eq!(
+            gif_frames_checked(&gif, &Limits::default())
+                .expect("the defaults read the GIF")
+                .len(),
+            3
+        );
+        assert_eq!(
+            tiff_frames_checked(&tiff, &Limits::default())
+                .expect("the defaults read the TIFF")
+                .len(),
+            3
+        );
+
+        let limits = Limits {
+            max_image_frames: 2,
+            ..Limits::default()
+        };
+        for error in [
+            gif_frames_checked(&gif, &limits).unwrap_err(),
+            tiff_frames_checked(&tiff, &limits).unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    error,
+                    LimitError::TooManyImageFrames {
+                        actual: 3,
+                        limit: 2
+                    }
+                ),
+                "unexpected refusal: {error}"
+            );
+        }
     }
 
     /// A JP2: the signature box, a file-type box, the header superbox with its
