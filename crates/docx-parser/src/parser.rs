@@ -333,8 +333,10 @@ impl DocxDocument {
         // can still expand into a document of very many blocks, so the
         // block budget every other flow reader applies is applied here. The
         // count is only known after the walk, exactly as it is for the flow
-        // readers, and it keeps the two routes to a legacy `.doc` — the
-        // built-in reader and the bridge — refusing the same file.
+        // readers. The built-in `.doc` reader applies the same ceiling but
+        // counts one unit per flow item: it has no table model, so a table
+        // reaches it as tabbed text. The per-cell count below is therefore the
+        // stricter of the two routes to a legacy `.doc`, not an equal one.
         guard.check_flow_blocks(flow_blocks(&doc))?;
 
         Ok(doc)
@@ -348,11 +350,12 @@ impl DocxDocument {
 /// counted on top rather than folded into it — which is the rule the flow
 /// readers apply to their own tables.
 fn flow_blocks(document: &DocxDocument) -> usize {
-    item_units(&document.items) + item_units(&document.furniture)
-}
-
-fn item_units(items: &[DocxItem]) -> usize {
-    items.iter().map(item_unit).sum()
+    document
+        .items
+        .iter()
+        .chain(&document.furniture)
+        .map(item_unit)
+        .sum()
 }
 
 fn item_unit(item: &DocxItem) -> usize {
@@ -3134,8 +3137,7 @@ mod tests {
 
     /// The blocks a DOCX expands into are held to the same budget the flow
     /// readers apply: a package of two paragraphs and a four-cell table is six
-    /// blocks, and a bridged `.doc` read through this parser is refused by the
-    /// same count its built-in reader would refuse.
+    /// blocks.
     #[test]
     fn a_custom_block_budget_is_enforced() {
         let pkg = package(

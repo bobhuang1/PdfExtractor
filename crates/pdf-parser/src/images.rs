@@ -29,12 +29,12 @@ impl PageImage {
 
 /// Encode 8-bit grayscale samples as PNG.
 ///
-/// The buffer is cut to the grid it describes: a PDF stream is not required to
-/// hold exactly `/Width` × `/Height` samples — a scan padded to a row boundary
-/// is common — and the PNG encoder asserts the exact length rather than
-/// returning an error, so an over-long buffer would abort the process instead of
-/// being read. A buffer shorter than the grid has no last rows to encode, so it
-/// is refused.
+/// The buffer is cut to the grid it describes. The PNG encoder asserts an exact
+/// length rather than returning an error, so an over-long buffer would abort the
+/// process; the extra bytes lie past the declared `/Width` × `/Height` grid,
+/// which is all a renderer shows, so cutting keeps the picture where refusing
+/// would lose it. A buffer shorter than the grid has no last rows to encode, so
+/// it is refused.
 pub fn encode_gray(width: u32, height: u32, samples: &[u8]) -> Option<Vec<u8>> {
     let len = grid_len(width, height, 1)?;
     let img = image::GrayImage::from_raw(width, height, samples.get(..len)?.to_vec())?;
@@ -59,13 +59,16 @@ fn grid_len(width: u32, height: u32, channels: usize) -> Option<usize> {
 }
 
 /// Encode 8-bit CMYK samples as PNG, converting to RGB.
+///
+/// Cut to the grid and refused when short, for the reason [`encode_gray`] gives.
+/// Both lengths come from [`grid_len`] as well, so a direct caller handing in an
+/// enormous `/Width` × `/Height` pair is refused rather than overflowing the
+/// four bytes a pixel needs or the three the conversion writes.
 pub fn encode_cmyk(width: u32, height: u32, samples: &[u8]) -> Option<Vec<u8>> {
-    let pixel_count = (width as usize).checked_mul(height as usize)?;
-    if samples.len() < pixel_count * 4 {
-        return None;
-    }
-    let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in samples.as_chunks::<4>().0.iter().take(pixel_count) {
+    let len = grid_len(width, height, 4)?;
+    let samples = samples.get(..len)?;
+    let mut rgb = Vec::with_capacity(grid_len(width, height, 3)?);
+    for chunk in samples.as_chunks::<4>().0 {
         let (c, m, y, k) = (chunk[0], chunk[1], chunk[2], chunk[3]);
         // Naive CMYK -> RGB; PDF CMYK is device-dependent, so exactness is impossible.
         rgb.push(((255 - c) as u16 * (255 - k) as u16 / 255) as u8);
@@ -573,6 +576,8 @@ mod tests {
         assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
         let png = encode_rgb(2, 2, &[7; 12]).expect("exactly the grid encodes");
         assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+        let png = encode_cmyk(2, 2, &[7; 17]).expect("the first sixteen samples encode");
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
     }
 
     #[test]
@@ -580,5 +585,10 @@ mod tests {
         assert!(encode_gray(2, 2, &[7; 3]).is_none());
         assert!(encode_rgb(2, 2, &[7; 11]).is_none());
         assert!(encode_rgb(u32::MAX, u32::MAX, &[7; 12]).is_none());
+        assert!(encode_cmyk(2, 2, &[7; 15]).is_none());
+        // The four bytes a CMYK pixel needs are computed from the grid, so the
+        // dimensions a multiplication would overflow are refused here.
+        assert!(encode_cmyk(u32::MAX, u32::MAX, &[7; 24]).is_none());
+        assert!(encode_cmyk(1 << 31, 1 << 31, &[7; 24]).is_none());
     }
 }
