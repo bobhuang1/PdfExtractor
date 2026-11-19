@@ -34,6 +34,52 @@ $DOCLING_PY -c 'from importlib.metadata import version;print(version("docling-co
 # 2.101.1 2.138.0
 ```
 
+### The Python behind `DOCLING_PY`
+
+Nothing in the repository creates the environment. `~/.venvs/pdfextractor-docling` is
+where the commands here expect it, and **docling-core 2.101.1** is what the committed
+schema and references were generated with, so pin it rather than take the latest: the
+schema's own version test fails when the two drift, and a reference converted with
+another version is noise in the comparison.
+
+```bash
+python3 -m venv ~/.venvs/pdfextractor-docling
+~/.venvs/pdfextractor-docling/bin/pip install 'docling-core==2.101.1'
+~/.venvs/pdfextractor-docling/bin/python -c 'import docling_core'   # must be silent
+```
+
+That first line needs `python3-venv`, which Debian and Ubuntu ship separately from the
+interpreter because it carries pip's bootstrap (`ensurepip`). Where it is missing the
+command stops with *"ensurepip is not available"* and names the package to install
+(`python3.12-venv` on this machine); installing it needs administrator access. Where
+that is unavailable and there is no `uv`, `pipx` or `virtualenv` either, `venv` itself
+still works — only pip's bootstrap is missing — so make the environment without pip and
+run pip's own installer into it. This is how the environment on this machine was made
+(its `pyvenv.cfg` records `command = /usr/bin/python3 -m venv --without-pip …`). The
+four lines below were run here against a scratch copy, and the validator beside them
+accepted all 58 committed references:
+
+```bash
+# 1. the environment — `--without-pip` because `ensurepip` is absent here
+python3 -m venv --without-pip ~/.venvs/pdfextractor-docling
+# 2. pip itself, from pip's own bootstrap script (fetched, not committed)
+curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+# 3. install it into that environment
+~/.venvs/pdfextractor-docling/bin/python /tmp/get-pip.py
+# 4. the pinned library
+~/.venvs/pdfextractor-docling/bin/pip install 'docling-core==2.101.1'
+
+# what this environment is for, checked without converting anything:
+~/.venvs/pdfextractor-docling/bin/python test-data/golden/validate_with_docling.py \
+  test-data/golden/docling
+# … 58/58 document(s) accepted by docling-core
+```
+
+`regenerate.py` is the one thing here that needs more than docling-core: it calls the
+full `docling` package, which pulls its own models and pins its own `docling-core`, so
+its references depend on the version installed. This suite imports `docling_core`
+alone.
+
 The schema's `version` default (`1.10.0`) is what the exporter writes, and a test asserts
 the two are equal — so bumping docling-core makes that test fail instead of letting the
 two drift.
@@ -46,10 +92,15 @@ The Rust suite is `crates/cli/tests/docling_golden_test.rs`. It runs in two laye
   resolve, and a hierarchy whose children agree with their parents' `$ref`.
   This is what found bugs 44 and 45.
 * **With `DOCLING_PY`**, from the real library, which is the authority on the
-  format and not a reimplementation of it.
+  format and not a reimplementation of it. This layer is not silently optional:
+  with no `DOCLING_PY`, `docling_core_accepts_our_documents` **fails**, because
+  a run that never loaded the corpus must not report it as loader-validated. A
+  run that wants the schema layer alone says so — `DOCLING_SKIP_ORACLE=1` — and
+  its log then records that the loader did not run.
 
 ```bash
-# the schema layer, always; the library layer when a Python with docling-core is pointed at
+# the schema layer, always; the library layer when a Python with docling-core is
+# pointed at — unset, the run fails unless it opts out with DOCLING_SKIP_ORACLE=1
 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python \
   cargo test -p pdfextractor-cli --test docling_golden_test
 ```

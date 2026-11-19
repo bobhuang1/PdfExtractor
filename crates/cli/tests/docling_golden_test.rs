@@ -1918,18 +1918,38 @@ fn our_output_agrees_with_real_docling_conversions() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
-/// The `docling-core` model itself, when a Python with it installed is pointed
-/// at. This is the authoritative check — it is the library that defines the
+/// The `docling-core` model itself, loaded with the Python `DOCLING_PY` names.
+/// This is the authoritative check — it is the library that defines the
 /// format — but it is not required to build the project.
+///
+/// It is not silently optional either: with no Python the loader never runs,
+/// so passing here would report the corpus as loader-validated by a run that
+/// validated nothing. Unset `DOCLING_PY` therefore fails the test, and the only
+/// way past it is the deliberate `DOCLING_SKIP_ORACLE=1`, which prints that the
+/// layer did not run.
 #[test]
 fn docling_core_accepts_our_documents() {
-    let Ok(python) = std::env::var("DOCLING_PY") else {
-        println!(
-            "skipped: set DOCLING_PY to a python with docling-core installed, e.g.\n  \
-             DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p pdfextractor-cli \
-             --test docling_golden_test"
-        );
-        return;
+    let python = match std::env::var("DOCLING_PY") {
+        Ok(python) if !python.trim().is_empty() => python,
+        _ => {
+            let opt_out = std::env::var("DOCLING_SKIP_ORACLE").unwrap_or_default();
+            if matches!(opt_out.trim(), "1" | "true" | "yes") {
+                println!(
+                    "skipped on purpose (DOCLING_SKIP_ORACLE={opt_out}): docling-core did not \
+                     load the corpus, so this run does not say the loader accepts it"
+                );
+                return;
+            }
+            panic!(
+                "DOCLING_PY is unset (or empty), so docling-core cannot load the corpus — and a \
+                 run that does not load it must not report it as accepted.\n  \
+                 Point DOCLING_PY at a python with docling-core installed:\n  \
+                 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p pdfextractor-cli \
+                 --test docling_golden_test\n  \
+                 or opt out in so many words, for a run that checks the schema alone:\n  \
+                 DOCLING_SKIP_ORACLE=1 cargo test -p pdfextractor-cli --test docling_golden_test"
+            );
+        }
     };
 
     let script = golden_dir().join("validate_with_docling.py");

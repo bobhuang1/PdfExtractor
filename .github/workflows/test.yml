@@ -6,10 +6,11 @@
 # `--locked` so the gate also proves the committed lockfile is the one the
 # workspace builds from: a failing test and a stale lock are then the same red
 # build. Nothing is filtered — the unit tests, the corpus report, the golden
-# suite and the command line's own integration tests all run. The `test` job
-# leaves the Docling suite's `docling-core` layer skipped, because it has no
-# Python with the package; the `docling` job installs that Python, points
-# `DOCLING_PY` at it and runs the same suite with the oracle live.
+# suite and the command line's own integration tests all run. The `test` job has
+# no Python with docling-core, and `docling_core_accepts_our_documents` fails
+# rather than passing when nothing can load the corpus, so this job opts out in
+# so many words (`DOCLING_SKIP_ORACLE=1`); the `docling` job installs that
+# Python, points `DOCLING_PY` at it and runs the same suite with the oracle live.
 #
 # The suite compiles the desktop shell as well as the CLI, and OCR is a required
 # capability, so both jobs install what they need on Linux: the Tesseract and
@@ -127,6 +128,10 @@ jobs:
           key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
 
       - name: The workspace suite
+        env:
+          # No Python with docling-core here. The test fails rather than passing
+          # unvalidated, so this run says the loader layer did not run.
+          DOCLING_SKIP_ORACLE: 1
         run: cargo test --workspace --locked
 
   docling:
@@ -172,9 +177,10 @@ jobs:
             target
           key: ${{ runner.os }}-docling-${{ hashFiles('**/Cargo.lock') }}
 
-      # `DOCLING_PY` makes `docling_core_accepts_our_documents` run instead of
-      # skipping, so this is the full suite with Docling's own model as the
-      # authority on every document it writes.
+      # `DOCLING_PY` is the Python `docling_core_accepts_our_documents` loads
+      # the corpus with — unset, that test fails rather than passing unvalidated
+      # — so this is the full suite with Docling's own model as the authority on
+      # every document it writes.
       - name: The workspace suite with the Docling oracle
         env:
           DOCLING_PY: ${{ runner.temp }}/docling-venv/bin/python

@@ -117,13 +117,17 @@ on it.
 
 ```bash
 cargo build --workspace      # 0 warnings
-cargo test  --workspace      # the whole suite
+cargo test  --workspace      # the whole suite (`DOCLING_PY` or `DOCLING_SKIP_ORACLE=1`)
 cargo clippy --workspace --all-targets -- -D warnings   # no warnings
 cargo fmt --all --check      # formatted as rustfmt reads it
 
 # The compatibility suite, held to real Docling. The schema layer always runs;
 # pointing DOCLING_PY at a Python with docling-core installed adds the layer that
-# loads every document with Docling's own model.
+# loads every document with Docling's own model. Without it that layer fails
+# rather than passing unvalidated, so a run that only wants the schema layer
+# opts out in so many words: DOCLING_SKIP_ORACLE=1. test-data/golden/README.md
+# says how to build that Python, the venv below included, on a machine whose
+# python3 has no python3-venv.
 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python \
   cargo test -p pdfextractor-cli --test docling_golden_test
 ```
