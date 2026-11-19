@@ -2,7 +2,7 @@
 
 **Project**: PDF & Office Document Extractor (Docling-compatible)
 **Started**: October 11, 2026
-**Last Updated**: November 10, 2026
+**Last Updated**: November 19, 2026
 **Language**: Rust (toolchain verified: cargo 1.99.0, rustc 1.99.0)
 **Approach**: Hybrid — reuse open-source infrastructure where it is commodity (DEFLATE, ZIP/XML, image codecs, Tesseract); implement the domain logic (PDF object model, content-stream interpretation, image decoding, layout, export) ourselves.
 
@@ -11,9 +11,10 @@
 ## Verified status (authoritative section)
 
 Every row below was actually executed; exit statuses were captured with `pipefail`/`PIPESTATUS`.
-The counts were last brought up to date on 2026-10-29 — the workspace figure and the suite sizes
-quoted here are from a full `cargo test --workspace` run on this machine at `98c1543`, with
-`cargo clippy --workspace --all-targets` (and `--no-default-features`) re-run beside it.
+The counts were last brought up to date on 2026-11-19 — the workspace figure, the `Tests` row and
+`cargo clippy --workspace --all-targets -- -D warnings` are from a full run on this machine with
+`DOCLING_SKIP_ORACLE=1`, because the `docling-core` oracle needs `DOCLING_PY` and the test refuses
+to pass without one.
 A row whose numbers count one feature's own tests, or quote a corpus-wide measurement (row
 counts, agreement shares, item counts), is the snapshot of the run it names, not a claim about
 today.
@@ -21,9 +22,10 @@ today.
 | Check | Command | Result |
 |---|---|---|
 | Build | `cargo build --workspace` | ✅ clean, **0 warnings** |
-| Lint | `cargo clippy --workspace --all-targets` | ✅ clean, **0 warnings** |
+| Lint | `cargo clippy --workspace --all-targets -- -D warnings` | ✅ clean, **0 warnings** — re-run 2026-11-19; the two `needless_range_loop` warnings `crates/ui/src/diff.rs` had grown are gone |
 | Lint (OCR off) | `cargo clippy --workspace --all-targets --no-default-features` | ✅ clean |
-| Tests | `cargo test --workspace` | ✅ **984 passed, 0 failed** (70 suites) |
+| Tests | `cargo test --workspace` | ✅ **1,261 passed, 0 failed** (92 suites) — `DOCLING_SKIP_ORACLE=1`, because a machine without `DOCLING_PY` cannot load `docling-core` and that test fails rather than passing silently |
+| Decoded-stream reuse (PDF) | `/usr/bin/time -f "%e s %M KB" ./target/debug/pdfextractor-cli -i test-data/real/math_gan.pdf -o target/out.json --to json --ocr never` | ✅ **184.36 s → 68.37 s** on a debug build (peak RSS 632,720 → 621,672 KB) — `math_gan.pdf` holds **57** distinct streams and inflated them **151,936** times, because TeX writes each formula as its own form XObject and every form's resource dictionary names the same font programs and CMaps. `PdfDocument` keeps a stream's decoded bytes by its payload's address and hands them back, capped at 1 MiB a stream and 64 MiB a document, and the whole-document budget counts that stream once (a stream rebuilt for one decode is charged every time). The output is equal apart from the image URIs named after the output stem; `a_stream_decoded_again_is_served_from_reuse` holds two reads to one inflate, and `two_streams_are_charged_apart` holds the budget to the second stream |
 | CLI end-to-end | `cargo test -p pdfextractor-cli --test cli_test` | ✅ **128 passed** — the real binary run as a child process, including **a metafile drawing and an embedded object's preview coming out as named PNGs**, and `basicapi.pdf`'s three `page N / 3` lines coming out as the **furniture layer** while staying in the body order |
 | PPTX charts | `cargo test -p pdfextractor-pptx-parser` + `cargo test -p pdfextractor-cli --test cli_test` + `--test docling_golden_test` + `cargo test -p pdfextractor-ui --test corpus_report_test` | ✅ **35 + 128 + 30 + 11** — a chart's `graphicFrame` names its part through the slide's relationship; the part's title becomes a `caption` item and the picture's caption, its first plot names the family (`bar_chart`/`line_chart`/`pie_chart`/`scatter_chart`/`other_chart`), its series are ordered by `c:order` (a hand-written part written back to front proves it — the first implementation read an attribute that is really a child element), and the plotted numbers become the picture's `tabular_chart.chart_data`: series across the header row, categories down the first column, trailing empty rows trimmed, an interior point the chart omits left as a **gap** rather than a zero, integer floats without `.0`, and the whole grid capped at 100,000 cells like Docling's backend. The regenerated fixture (`q3_review.pptx`, now with a two-series column chart with one omitted point) and its real Docling reference agree item for item — caption, `charspan`, classification, full grid, `captions` reference, no image — and `docling-core` accepts the output. The reference also surfaced a comparison bug: a zero-area box (a speaker note is nowhere on its slide) was read as a *place*, so two identical empty boxes were reported "not in the same place"; `place_of` now answers no place for a box with no area, `q3_review` went from 3 differing rows to 1, and the corpus ratchet passes with no baseline update. The workspace as it stood when that landed: **536 passed, 0 failed**, clippy and fmt clean |
 | Photographed OCR quality | `cargo test -p pdfextractor-cli --test ocr_quality_test -- --nocapture` | ✅ **5 passed** — five synthetic photographs of pages (0–4°, uneven light, vignette/shadow, blur, smaller body text, JPEG) written deterministically with their ground truth by `test-data/make_photo_corpus.py`, converted through the real binary and scored by character and word edit distance. The four sharp pages read **100.0% / 100.0%**; the softest photograph holds **95.6%** of the characters and **87.0%** of the words; the corpus aggregate is **99.1% / 97.5%**. Floors per page (98/98, 98/97, 92/82) and over the corpus (96/92) fail with the read text beside the reference, and each page is checked to be one page with an `image/*` origin. The metric has its own countable unit test; regeneration is byte-for-byte identical |

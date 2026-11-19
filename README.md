@@ -359,6 +359,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--chunks-overlap-tokens <N>` | tokens of the previous hybrid chunk repeated at the start of the next, so a passage that straddles a boundary is retrievable from either side (default 0; must be smaller than the budget) |
 | `--chunks-tokenizer <FILE>` | count hybrid chunk budgets with a real Hugging Face `tokenizer.json`, SentencePiece `.model`, or tiktoken `.tiktoken` vocabulary instead of the built-in approximation; the file is loaded and validated before conversion, and the model's tokens (without special tokens) are the budget. A `.tiktoken` file carries ranks but no split pattern, so its name chooses cl100k_base by default, o200k_base for an `o200k` name, and p50k_base/r50k_base for a `p50k`, `r50k` or `gpt2` name; `--chunks-tokenizer-encoding` states the family when the name says none. Omit it for the reproducible approximation |
 | `--chunks-tokenizer-encoding <FAMILY>` | the tiktoken encoding family a `--chunks-tokenizer` `.tiktoken` vocabulary belongs to, for a filename that names none: `cl100k_base`, `o200k_base`, `p50k_base` or `r50k_base` (the short forms `cl100k`, `o200k`, `p50k` and `r50k` are accepted). An explicit family overrides a hint in the filename; it is refused without `--chunks-tokenizer` and for a `tokenizer.json` or SentencePiece `.model` |
+| `--max-*`, `--timeout`, `--ocr-timeout` | per-run overrides for the shared resource budgets, one flag per budget — `--max-input-bytes`, `--max-pages`, the image, ZIP, XML, flow-block and document-total ceilings, the parser's clock and the OCR clock. The full list, with each default, is "Resource flags" below |
 | `--image-export-mode <MODE>` | how the `md` and `html` outputs treat a picture: `referenced` (the default) points at the image files written beside the document, `embedded` carries each picture's bytes in the page as a base64 `data:` URI (under the image's own media type), and `placeholder` writes `<!-- image -->` where each picture stood — the same three names Docling's flag uses. A picture with no file behind it — a chart, vector art, an unnameable media type — has nothing to point at, so `referenced` writes nothing at all for it rather than an image link to nothing, and `embedded` marks the spot, having no bytes to carry; `placeholder` marks it like any other. An `embedded` page reads back as the picture it carried: the URI is decoded with no network access, so the bytes survive a second pass instead of becoming the literal link. A `placeholder` page reads back too — the mark is the picture, an item the model holds with no image behind it, exactly what the page said — so a page written that way re-renders with its pictures in place instead of turning them into the words `<!-- image -->`, and read in the mode it was written in it is its own bytes. `chart_deck.pptx` is the fixture whose only picture is such a drawing, and it is in the goldens so the writers' behaviour for one is pinned. JSON and YAML always keep the extract's own image references, and the image files are written beside the document either way, because the extraction is shared with those formats |
 | `--preview` | also write `<output>.preview.html`, a page overlay of every extracted box |
 | `--preview-dpi <N>` | resolution of the preview's page backdrop (default 110) |
@@ -1131,8 +1132,8 @@ the page drew them. All of them exit 0 if the stack is healthy.
 
 Every reader treats its input as hostile. The budgets are defined once in
 [`crates/limits`](crates/limits/src/lib.rs) and applied by the PDF, ZIP/office,
-XML and image readers, so a malformed or deliberately expensive file is refused
-with a named limit rather than allowed to exhaust memory, stack or time.
+XML, image and flow readers, so a malformed or deliberately expensive file is
+refused with a named limit rather than allowed to exhaust memory, stack or time.
 
 | Budget | Default |
 |---|---|
@@ -1146,12 +1147,42 @@ with a named limit rather than allowed to exhaust memory, stack or time.
 | ZIP expansion ratio above 1 MiB | 200:1 |
 | XML part / nesting | 64 MiB / 256 levels; `DOCTYPE` declarations are refused |
 | Image grid | 100,000 per side, 100,000,000 pixels; 512 MiB decode allocation |
-| Parser wall clock | 30 seconds, checked between objects, pages, entries and XML events |
+| Flow-format blocks | 1,000,000, a table counting one per cell (text, Markdown, CSV, RTF, HTML, DOCX, `.doc`) |
+| One document's decoded total | 1 GiB across every PDF stream and image frame its reader decodes; a stream read again is the same bytes, not new ones |
+| LibreOffice bridge | 512 MiB of output, 120 seconds |
+| Parser wall clock / OCR | 30 seconds, checked between objects, pages, entries and XML events; OCR pages get 600 seconds of their own, recognition being seconds a page |
 
-The command line uses the defaults; embedders can construct a tighter
-`pdfextractor_limits::Limits`. A PDF's page count is enforced before any page is
-analysed, and extraction has a checked path (`extract_checked`) that reports the
-refusal instead of returning a shortened document.
+Each budget has a flag, so a run can raise one without a rebuild, and a refusal
+names the flag that would (`--max-image-pixels`, say) — see "Resource flags"
+below. A PDF's page count is enforced before any page is analysed, and
+extraction has a checked path (`extract_checked`) that reports the refusal
+instead of returning a shortened document.
+
+### Resource flags
+
+| Flag | Budget |
+|---|---|
+| `--max-input-bytes <N>` | the largest input a run will read (256 MiB) |
+| `--max-pages <N>` | pages, sheets, slides or frames one document may have (10,000) |
+| `--max-image-pixels <N>` | pixels in one image grid (100,000,000) |
+| `--max-image-dimension <N>` | the widest side of an image grid (100,000) |
+| `--max-image-alloc-bytes <N>` | what one image decode may allocate (512 MiB) |
+| `--max-image-frames <N>` | frames read from a TIFF, GIF or animated WebP (1,000) |
+| `--max-flow-blocks <N>` | blocks a flow reader may produce (1,000,000) |
+| `--max-decoded-stream-bytes <N>` | what one decoded PDF stream may produce (128 MiB) |
+| `--max-zip-entries <N>` | entries in a ZIP package (10,000) |
+| `--max-zip-entry-bytes <N>` | uncompressed size of one entry (64 MiB) |
+| `--max-zip-total-bytes <N>` | uncompressed size of the whole package (512 MiB) |
+| `--max-zip-ratio <N>` | expansion ratio an entry above 1 MiB may declare (200) |
+| `--max-xml-bytes <N>` | one XML part (64 MiB) |
+| `--max-xml-depth <N>` | XML nesting (256) |
+| `--max-document-bytes <N>` | one document's decoded total (1 GiB) |
+| `--timeout <SECONDS>` | one document's reading (30) |
+| `--ocr-timeout <SECONDS>` | one document's OCR pages (600) |
+
+The PDF object, token and nesting budgets and the LibreOffice bridge's output
+ceiling and clock have no flag yet; they are reachable through the library's
+`pdfextractor_limits::Limits`, which an embedder constructs directly.
 
 Fuzz targets live outside the product workspace in [`fuzz/`](fuzz/README.md):
 `pdf`, `zip`, `xml` and `image`. They compile against the shared limits and are
