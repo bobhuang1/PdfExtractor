@@ -7,7 +7,7 @@
 //!
 //! The rest of the chain — that the picture transcode refuses a grid past
 //! `max_image_pixels` — is held by
-//! `transcode_to_png_with_limits_refuses_a_grid_the_defaults_decode` in
+//! `transcode_to_png_checked_refuses_a_grid_the_defaults_decode` in
 //! `image-parser`, where the budget is built directly; this test does not
 //! re-prove it, and could not see whether the image target passes its budget,
 //! since the target's body only runs under libFuzzer.

@@ -220,7 +220,7 @@ struct Args {
     max_input_bytes: Option<u64>,
 
     /// The most pages, sheets, slides or frames one document may have (default
-    /// 2000). A document over it is refused by the shared budgets.
+    /// 10000). A document over it is refused by the shared budgets.
     #[arg(long, value_name = "N")]
     max_pages: Option<usize>,
 
@@ -3907,7 +3907,8 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     let decoded = if animated {
         Some(animation[0].data.clone())
     } else if matches!(image.mimetype, "image/jp2" | "image/gif") {
-        let decoded = pdfextractor_image_parser::transcode_to_png_with_limits(&data, &budgets())
+        let decoded = pdfextractor_image_parser::transcode_to_png_checked(&data, &budgets())
+            .ok()
             .map(|picture| picture.data);
         if decoded.is_none() {
             tracing::warn!(
@@ -4964,7 +4965,7 @@ fn docling_media_with_limits(
     if pdfextractor_core::is_representable_media_type(mime) {
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png_with_limits(&data, limits) {
+    match pdfextractor_image_parser::transcode_to_png_checked(&data, limits).ok() {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -5031,7 +5032,7 @@ fn office_media_with_limits(
         }
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png_with_limits(&data, limits) {
+    match pdfextractor_image_parser::transcode_to_png_checked(&data, limits).ok() {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -5257,7 +5258,7 @@ fn picture_is_page(bbox: [f64; 4], page_width: f64, page_height: f64) -> bool {
 /// in which case Tesseract's own decoder gets the original bytes and its
 /// error policy applies.
 fn rotate_for_ocr(data: &[u8], degrees: i32) -> Option<(Vec<u8>, u32, u32)> {
-    let bitmap = pdfextractor_image_parser::decode_checked(data)?;
+    let bitmap = pdfextractor_image_parser::decode(data)?;
     let turned = match degrees {
         90 => bitmap.rotate90(),
         180 => bitmap.rotate180(),

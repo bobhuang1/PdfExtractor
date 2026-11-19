@@ -275,7 +275,7 @@ impl DocxDocument {
         let numbering = read_numbering(&mut archive);
 
         let mut doc = DocxDocument::default();
-        let mut extractor = Extractor::new(&rels, &media, &charts, &theme, &numbering);
+        let mut extractor = Extractor::new(&rels, &media, &charts, &theme, &numbering, &budget);
         extractor.run(&main, &guard)?;
         doc.page_width = extractor.page_width;
         doc.page_height = extractor.page_height;
@@ -300,7 +300,7 @@ impl DocxDocument {
                 &mut archive,
                 &format!("word/_rels/{}.rels", name.trim_start_matches("word/")),
             )?;
-            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering);
+            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering, &budget);
             sub.run(&bytes, &guard)?;
             extra.extend(sub.items);
         }
@@ -318,7 +318,7 @@ impl DocxDocument {
                 &mut archive,
                 &format!("word/_rels/{}.rels", part.trim_start_matches("word/")),
             )?;
-            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering);
+            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering, &budget);
             sub.run(&bytes, &guard)?;
             for mut item in sub.items {
                 if let DocxItem::Text { label, .. } = &mut item {
@@ -992,6 +992,8 @@ struct Extractor<'a> {
     /// The package's theme, where a DrawingML shape's colours come from.
     theme: &'a Theme,
     rels: &'a HashMap<String, String>,
+    /// The image budgets a picture painted into a shape is decoded under.
+    limits: limits::Limits,
 
     items: Vec<DocxItem>,
 
@@ -1154,12 +1156,14 @@ impl<'a> Extractor<'a> {
         charts: &'a HashMap<String, Vec<u8>>,
         theme: &'a Theme,
         numbering: &'a Numbering,
+        budget: &limits::Limits,
     ) -> Self {
         Self {
             media,
             charts,
             theme,
             rels,
+            limits: budget.clone(),
             items: Vec::new(),
             in_paragraph: false,
             para_text: String::new(),
@@ -2245,6 +2249,7 @@ impl<'a> Extractor<'a> {
                 let media = DocxMedia {
                     rels: self.rels,
                     media: self.media,
+                    limits: self.limits.clone(),
                 };
                 if let Some(painted) = render_drawing_with(markup, self.theme, &media) {
                     return Some(DocxItem::Picture {
@@ -2299,6 +2304,7 @@ impl<'a> Extractor<'a> {
 struct DocxMedia<'a> {
     rels: &'a HashMap<String, String>,
     media: &'a HashMap<String, Vec<u8>>,
+    limits: limits::Limits,
 }
 
 impl Media for DocxMedia<'_> {
@@ -2307,6 +2313,10 @@ impl Media for DocxMedia<'_> {
         let mime = mime_for_part(target)?;
         let data = self.media.get(target)?;
         Some((mime.to_string(), data.clone()))
+    }
+
+    fn limits(&self) -> limits::Limits {
+        self.limits.clone()
     }
 }
 

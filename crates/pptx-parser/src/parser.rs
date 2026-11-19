@@ -267,6 +267,7 @@ impl PptxDocument {
                 rels: &slide_rels,
                 media: &media,
                 charts: &charts,
+                limits: budget.clone(),
             };
             let background = slide_background(&slide, &context, width, height);
             let mut shapes = Vec::new();
@@ -819,6 +820,8 @@ struct ShapeContext<'a> {
     rels: &'a HashMap<String, Relationship>,
     media: &'a HashMap<String, Vec<u8>>,
     charts: &'a HashMap<String, Vec<u8>>,
+    /// The image budgets a picture fill is decoded under.
+    limits: limits::Limits,
 }
 
 /// Walk a shape tree, in the order a reader meets its shapes.
@@ -999,6 +1002,7 @@ fn painted_shape(shape: &Node, context: &ShapeContext) -> Option<PictureShape> {
     let media = FillMedia {
         rels: context.rels,
         media: context.media,
+        limits: context.limits.clone(),
     };
     let PaintedPicture { png, .. } =
         render_node_with(&drawing_node(shape), &context.style.theme, &media)?;
@@ -1021,6 +1025,7 @@ fn painted_shape(shape: &Node, context: &ShapeContext) -> Option<PictureShape> {
 struct FillMedia<'a> {
     rels: &'a HashMap<String, Relationship>,
     media: &'a HashMap<String, Vec<u8>>,
+    limits: limits::Limits,
 }
 
 impl Media for FillMedia<'_> {
@@ -1032,6 +1037,10 @@ impl Media for FillMedia<'_> {
         let mime = mime_for(&relationship.target)?;
         let data = self.media.get(&relationship.target)?;
         Some((mime.to_string(), data.clone()))
+    }
+
+    fn limits(&self) -> limits::Limits {
+        self.limits.clone()
     }
 }
 

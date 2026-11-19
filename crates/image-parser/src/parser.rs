@@ -143,7 +143,7 @@ pub struct PngPicture {
 pub fn turn_upright(data: &[u8]) -> Option<UprightPicture> {
     let document = ImageDocument::parse_bytes(data).ok()?;
     let turn = document.orientation.turn()?;
-    let mut bitmap = decode_image(data, &Limits::default())?;
+    let mut bitmap = decode(data)?;
     bitmap.apply_orientation(turn);
     let (mimetype, encoded) = if document.mimetype == "image/jpeg" {
         let mut encoded = Vec::new();
@@ -167,7 +167,7 @@ pub fn turn_upright(data: &[u8]) -> Option<UprightPicture> {
 /// this is the form a sideways picture has to reach it in. `None` when the
 /// orientation is already upright or the pixels cannot be decoded.
 pub fn upright_png(data: &[u8], orientation: Orientation) -> Option<Vec<u8>> {
-    let mut bitmap = decode_image(data, &Limits::default())?;
+    let mut bitmap = decode(data)?;
     bitmap.apply_orientation(orientation.turn()?);
     encode_png(&bitmap)
 }
@@ -195,22 +195,28 @@ pub fn upright_png(data: &[u8], orientation: Orientation) -> Option<Vec<u8>> {
 /// callers that care about the EXIF tag (a Word or PowerPoint package) apply
 /// [`turn_upright`] first, and one that has no tag has nothing to turn.
 pub fn transcode_to_png(data: &[u8]) -> Option<PngPicture> {
-    transcode_to_png_with_limits(data, &Limits::default())
+    transcode_to_png_checked(data, &Limits::default()).ok()
 }
 
-/// [`transcode_to_png`] under the caller's image budgets.
+/// [`transcode_to_png`] with an explicit pixel and allocation budget, and the
+/// refusal that stopped it.
 ///
 /// A grid past `max_image_dimension` or `max_image_pixels`, or a decode whose
-/// working set passes `max_image_alloc_bytes`, is refused like a file that does
-/// not decode: the caller keeps the payload it had rather than pixels it did not
-/// budget for. A fuzz run takes its limits from the environment, so a lowered
-/// `FUZZ_MAX_IMAGE_PIXELS` reaches this decode instead of being spent at the
-/// defaults.
-pub fn transcode_to_png_with_limits(data: &[u8], limits: &Limits) -> Option<PngPicture> {
-    let bitmap = decode_image(data, limits)?;
+/// working set passes `max_image_alloc_bytes`, is refused with the budget's own
+/// [`LimitError`]; bytes that will not decode are an
+/// [`LimitError::ImageDecode`]. The `Option` form says only that no pixels came
+/// back, which is all a caller replacing a picture's payload needs. A fuzz run
+/// has to say *why* — a lowered budget is the budget working, not a picture that
+/// will not decode — and this is the form that says it, so `FUZZ_MAX_IMAGE_PIXELS`
+/// comes back as an [`LimitError::ImageTooManyPixels`] the target can report.
+pub fn transcode_to_png_checked(data: &[u8], limits: &Limits) -> Result<PngPicture, LimitError> {
+    let bitmap = decode_checked(data, limits)?;
     let (width, height) = (bitmap.width(), bitmap.height());
-    Some(PngPicture {
-        data: encode_png(&bitmap)?,
+    let data = encode_png(&bitmap).ok_or_else(|| LimitError::ImageDecode {
+        detail: "the picture could not be written as PNG".to_string(),
+    })?;
+    Ok(PngPicture {
+        data,
         width,
         height,
     })
@@ -221,25 +227,36 @@ pub fn transcode_to_png_with_limits(data: &[u8], limits: &Limits) -> Option<PngP
 /// This is the guarded decoder for callers that need pixels rather than only
 /// the header facts [`ImageDocument`] reports. `None` when the bytes do not
 /// decode or their grid/allocation exceeds the budget.
-pub fn decode_checked(data: &[u8]) -> Option<image::DynamicImage> {
-    decode_image(data, &Limits::default())
+pub fn decode(data: &[u8]) -> Option<image::DynamicImage> {
+    decode_checked(data, &Limits::default()).ok()
 }
 
-/// Decode an image under the shared pixel and allocation budgets.
+/// [`decode`] with an explicit pixel and allocation budget, and the refusal that
+/// stopped it.
+///
+/// This is the decode a caller that has its own policy reaches: a package reader
+/// painting a picture into a shape, and [`transcode_to_png_checked`] above. A
+/// file that will not decode is an
+/// [`LimitError::ImageDecode`]; a grid past the caller's ceiling is the budget's
+/// own refusal, which the decoder only learns after it has read the header.
 ///
 /// `image::Limits` is the decoder's own guard: it rejects a grid before the
-/// decoder allocates it, and caps what the decoder may hold while it works.
-/// The grid is checked again after decoding because some decoders report the
-/// dimensions only once they have read a frame header.
-fn decode_image(data: &[u8], limits: &Limits) -> Option<image::DynamicImage> {
+/// decoder allocates it, and caps what the decoder may hold while it works. The
+/// grid is checked again afterwards because some decoders report its dimensions
+/// only once they have read a frame header.
+pub fn decode_checked(data: &[u8], limits: &Limits) -> Result<image::DynamicImage, LimitError> {
     register_jpeg2000();
     let mut reader = image::ImageReader::new(Cursor::new(data))
         .with_guessed_format()
-        .ok()?;
+        .map_err(|error| LimitError::ImageDecode {
+            detail: error.to_string(),
+        })?;
     reader.limits(image_limits(limits));
-    let bitmap = reader.decode().ok()?;
-    limits.check_image(bitmap.width(), bitmap.height()).ok()?;
-    Some(bitmap)
+    let bitmap = reader.decode().map_err(|error| LimitError::ImageDecode {
+        detail: error.to_string(),
+    })?;
+    limits.check_image(bitmap.width(), bitmap.height())?;
+    Ok(bitmap)
 }
 
 fn image_limits(limits: &Limits) -> image::Limits {
@@ -1607,7 +1624,7 @@ mod tests {
     /// The transcode takes the caller's budgets: a lowered pixel ceiling refuses
     /// the grid the defaults decode.
     #[test]
-    fn transcode_to_png_with_limits_refuses_a_grid_the_defaults_decode() {
+    fn transcode_to_png_checked_refuses_a_grid_the_defaults_decode() {
         let data = decodable_png(64);
         assert!(transcode_to_png(&data).is_some(), "the defaults decode it");
         let tight = Limits {
@@ -1615,20 +1632,29 @@ mod tests {
             ..Limits::default()
         };
         assert!(
-            transcode_to_png_with_limits(&data, &tight).is_none(),
+            transcode_to_png_checked(&data, &tight).is_err(),
             "a 64-pixel picture must be refused by a one-pixel budget"
+        );
+        // The refusal is typed, so a fuzz run can report the budget rather than
+        // the picture: `None` alone said only that no pixels came back.
+        assert!(
+            matches!(
+                transcode_to_png_checked(&data, &tight),
+                Err(LimitError::ImageTooManyPixels { .. })
+            ),
+            "the refusal must be the budget's own error"
         );
     }
 
     #[test]
-    fn decode_checked_refuses_an_over_budget_grid() {
+    fn decode_refuses_an_over_budget_grid() {
         let widest = Limits::default().max_image_dimension;
         assert!(
-            decode_checked(&decodable_png(widest)).is_some(),
+            decode(&decodable_png(widest)).is_some(),
             "the widest grid the budget allows must still decode"
         );
         assert!(
-            decode_checked(&decodable_png(widest + 1)).is_none(),
+            decode(&decodable_png(widest + 1)).is_none(),
             "one pixel past the dimension budget must be refused"
         );
     }

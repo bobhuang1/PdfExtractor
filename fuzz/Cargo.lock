@@ -1118,6 +1118,7 @@ version = "0.2.0"
 dependencies = [
  "image",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-svg",
  "quick-xml",

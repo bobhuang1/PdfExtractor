@@ -59,6 +59,14 @@ pub struct ExtractedPage {
     pub links: Vec<PageLink>,
 }
 
+/// The largest decoded stream kept for reuse. Content streams, font programs and
+/// CMaps are all far smaller; a page image is decoded once anyway.
+const DECODED_CACHE_STREAM_BYTES: usize = 1 << 20;
+
+/// The most the reused decodes may hold in total. A document whose streams do
+/// not fit is only slower, never wrong.
+const DECODED_CACHE_BYTES: usize = 64 << 20;
+
 #[derive(Debug)]
 pub struct PdfDocument {
     pub version: String,
@@ -85,6 +93,21 @@ pub struct PdfDocument {
     /// The streams already charged to it: read again, a stream is the same
     /// bytes, not new ones.
     charged_streams: RefCell<HashSet<usize>>,
+    /// The streams already decoded for this document, by payload address.
+    ///
+    /// Extraction asks for the same stream over and over: `math_gan.pdf` holds
+    /// 57 distinct streams and inflated them 151,936 times, because TeX writes
+    /// each formula as its own form XObject and every form's resource dictionary
+    /// names the same font programs and CMaps. The payload buffer is the
+    /// stream's identity for the document's life — the same key the whole
+    /// document total uses — so a stream is inflated once and handed back.
+    /// Capped per stream and in total, so reuse cannot become a memory bill.
+    decoded: RefCell<HashMap<usize, Vec<u8>>>,
+    decoded_bytes: Cell<usize>,
+    /// How many streams this document actually inflated, so a test can hold the
+    /// reuse to its promise.
+    #[cfg(test)]
+    decodes: Cell<usize>,
 }
 
 impl PdfDocument {
@@ -218,6 +241,10 @@ impl PdfDocument {
             limit_hit: RefCell::new(None),
             document_bytes: Cell::new(0),
             charged_streams: RefCell::new(HashSet::new()),
+            decoded: RefCell::new(HashMap::new()),
+            decoded_bytes: Cell::new(0),
+            #[cfg(test)]
+            decodes: Cell::new(0),
         };
         doc.honour_stream_lengths(data);
         doc.deadline.check("honouring stream lengths")?;
@@ -327,7 +354,11 @@ impl PdfDocument {
                 continue;
             }
 
-            let decoded = self.decode_stream(&PdfValue::Stream(dict, raw));
+            // Built here rather than borrowed from the store, so it is charged as
+            // the work it is and never deduped against an address a later stream
+            // could inherit.
+            let decoded = self.decode_stream_uncapped(&PdfValue::Stream(dict, raw));
+            self.charge_document(decoded.len() as u64, None);
             let (tokens, truncated) =
                 Lexer::new(&decoded).tokenize_spanned_limited(self.limits.max_pdf_tokens);
             if truncated {
@@ -955,16 +986,17 @@ impl PdfDocument {
     /// Flate stream passes through [`Self::cap_stream`] three times as it is
     /// inflated, and charging each pass would count one stream three times.
     ///
-    /// `key` identifies the stream where the document holds it, so extraction
-    /// walking the same page's content streams again is one expansion charged
-    /// once — that repeated walk is what the total exists to bound. A stream
-    /// rebuilt for decoding (an object stream's payload, an image's filter
-    /// prefix) is a new value with a key of its own, and is the separate item it
-    /// is.
-    fn charge_document(&self, bytes: u64, key: usize) {
-        // A stream visited twice is one expansion charged once.
-        if !self.charged_streams.borrow_mut().insert(key) {
-            return;
+    /// `key` names the stream the bytes belong to, so extraction walking the
+    /// same page's content streams again is one expansion charged once — that
+    /// repeated walk is what the total exists to bound. `None` charges the
+    /// bytes and remembers nothing: it is for work that is rebuilt for a single
+    /// decode, which is not the same stream read twice and must not be free the
+    /// next time an address comes round.
+    fn charge_document(&self, bytes: u64, key: Option<usize>) {
+        if let Some(key) = key {
+            if !self.charged_streams.borrow_mut().insert(key) {
+                return;
+            }
         }
         let total = self.document_bytes.get().saturating_add(bytes);
         self.document_bytes.set(total);
@@ -1536,7 +1568,7 @@ impl PdfDocument {
             // leaves as a PNG. The stream may be either of the two things a
             // `.jp2` file is made of, the container with its boxes or the bare
             // codestream, and the image reader takes both.
-            match pdfextractor_image_parser::transcode_to_png_with_limits(raw, &self.limits) {
+            match pdfextractor_image_parser::transcode_to_png_checked(raw, &self.limits).ok() {
                 Some(picture) => {
                     return Some(PageImage {
                         width: picture.width,
@@ -1606,7 +1638,7 @@ impl PdfDocument {
         if terminal_index == 0 {
             let mut data = raw.clone();
             self.cap_stream(&mut data);
-            self.charge_document(data.len() as u64, value as *const PdfValue as usize);
+            self.charge_document(data.len() as u64, Self::stream_key(value));
             return data;
         }
 
@@ -1645,7 +1677,7 @@ impl PdfDocument {
         // the same image placed on a hundred pages is one expansion, which is
         // why the key is `value` and not the temporary built here.
         let data = self.decode_stream_uncapped(&PdfValue::Stream(prefix, raw.clone()));
-        self.charge_document(data.len() as u64, value as *const PdfValue as usize);
+        self.charge_document(data.len() as u64, Self::stream_key(value));
         data
     }
 
@@ -1653,11 +1685,50 @@ impl PdfDocument {
     ///
     /// The bytes are charged to the document total once, when the stream is
     /// handed back: the filter chain caps each intermediate buffer but a single
-    /// stream is one item, however many passes it took.
+    /// stream is one item, however many passes it took. A stream decoded before
+    /// is served from the reuse cache, which is why walking a page of forms that
+    /// all name the same fonts does not inflate them again.
     fn decode_stream(&self, value: &PdfValue) -> Vec<u8> {
+        let key = Self::stream_key(value);
+        if let Some(cached) = key.and_then(|key| self.decoded.borrow().get(&key).cloned()) {
+            return cached;
+        }
         let data = self.decode_stream_uncapped(value);
-        self.charge_document(data.len() as u64, value as *const PdfValue as usize);
+        #[cfg(test)]
+        self.decodes.set(self.decodes.get() + 1);
+        self.charge_document(data.len() as u64, key);
+        if let Some(key) = key {
+            let held = self.decoded_bytes.get();
+            if data.len() <= DECODED_CACHE_STREAM_BYTES && held + data.len() <= DECODED_CACHE_BYTES
+            {
+                let mut decoded = self.decoded.borrow_mut();
+                if let std::collections::hash_map::Entry::Vacant(entry) = decoded.entry(key) {
+                    entry.insert(data.clone());
+                    self.decoded_bytes.set(held + data.len());
+                }
+            }
+        }
         data
+    }
+
+    /// The name the whole-document total knows `value` by, when it is a stream
+    /// the document holds.
+    ///
+    /// The payload buffer belongs to the stored `PdfValue`, so it is stable for
+    /// the document's life: a `HashMap` rehash moves the value but not the heap
+    /// buffer it carries, and no other stream can share that buffer. Keying on
+    /// the value's own address would do neither — the rehash would charge one
+    /// stream twice, and the address a dropped temporary leaves behind can be
+    /// handed to a different stream, which would then look already paid for.
+    ///
+    /// A stream rebuilt for one decode has its own buffer, so this returns a key
+    /// that no other decode shares; callers decoding such a stream pass `None`
+    /// instead, because the rebuild is new work rather than a second read.
+    fn stream_key(value: &PdfValue) -> Option<usize> {
+        match value {
+            PdfValue::Stream(_, raw) => Some(raw.as_ptr() as usize),
+            _ => None,
+        }
     }
 
     /// [`Self::decode_stream`] without the whole-document charge.
@@ -1948,6 +2019,10 @@ mod tests {
             limit_hit: RefCell::new(None),
             document_bytes: Cell::new(0),
             charged_streams: RefCell::new(HashSet::new()),
+            decoded: RefCell::new(HashMap::new()),
+            decoded_bytes: Cell::new(0),
+            #[cfg(test)]
+            decodes: Cell::new(0),
         }
     }
 
@@ -1963,6 +2038,42 @@ mod tests {
         assert!(
             doc.limit_hit.borrow().is_none(),
             "a repeated read of one stream was charged twice: {:?}",
+            doc.limit_hit.borrow()
+        );
+    }
+
+    /// A stream asked for twice inflates once. Reuse is what keeps a page of
+    /// forms that all name the same fonts from decoding them again — the shape
+    /// `math_gan.pdf` takes, where TeX writes every formula as its own form.
+    #[test]
+    fn a_stream_decoded_again_is_served_from_reuse() {
+        let doc = document();
+        let stream = PdfValue::Stream(HashMap::new(), vec![b'A'; 64]);
+        assert_eq!(doc.decode_stream(&stream).len(), 64);
+        assert_eq!(doc.decode_stream(&stream).len(), 64);
+        assert_eq!(doc.decodes.get(), 1, "the second read inflated again");
+    }
+
+    /// Two streams are two expansions: the free re-read is for the same stream
+    /// only, and each is known by the payload the document holds rather than by
+    /// where its value happens to sit.
+    #[test]
+    fn two_streams_are_charged_apart() {
+        let mut doc = document();
+        doc.limits.max_document_bytes = 2_500;
+        let first = PdfValue::Stream(HashMap::new(), vec![b'A'; 2_000]);
+        let second = PdfValue::Stream(HashMap::new(), vec![b'B'; 2_000]);
+        assert_eq!(doc.decode_stream(&first).len(), 2_000);
+        assert_eq!(doc.decode_stream(&second).len(), 2_000);
+        assert!(
+            matches!(
+                doc.limit_hit.borrow().as_ref(),
+                Some(LimitError::DocumentTooLarge {
+                    actual: 4_000,
+                    limit: 2_500
+                })
+            ),
+            "the second stream was not charged: {:?}",
             doc.limit_hit.borrow()
         );
     }

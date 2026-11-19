@@ -79,6 +79,11 @@ is a corpus pass: the seed corpus holds multi-part packages, XML parts and
 multi-frame stacks, so a ceiling low enough to sit under them is hit on a seed
 and the fuzzer then mutates around the refusal.
 
+Run them from the repository root, which is where `cargo fuzz` finds `fuzz/` and
+where the corpus paths below resolve. From inside `fuzz/` the same path names
+`fuzz/fuzz/corpus/xml`, and the target stops with `ERROR: The required directory
+"fuzz/corpus/xml" does not exist`.
+
 | Pass | Environment | Comes back as |
 |---|---|---|
 | 16-entry ZIP | `FUZZ_MAX_ZIP_ENTRIES=16` | `TooManyZipEntries`, walking the package |
