@@ -18,6 +18,26 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+/// A frame stack is decoded frame by frame, and each frame is checked against
+/// the deadline: a stack that is inside the frame budget but too slow to read
+/// is refused between pages rather than allowed to run on.
+#[test]
+fn a_frame_stack_over_its_time_budget_is_refused() {
+    let data =
+        std::fs::read("../../test-data/images/pages.tiff").expect("the multi-page TIFF fixture");
+    let limits = Limits {
+        timeout: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    let error = pdfextractor_image_parser::tiff_frames_checked(&data, &limits)
+        .expect_err("the deadline is spent");
+    assert!(
+        matches!(error, LimitError::Timeout { .. }),
+        "unexpected refusal: {error}"
+    );
+    assert!(error.to_string().contains("TIFF page"), "{error}");
+}
+
 #[test]
 fn a_header_that_claims_a_gigantic_grid_is_refused_before_decoding() {
     let data = png(50_000, 50_000);

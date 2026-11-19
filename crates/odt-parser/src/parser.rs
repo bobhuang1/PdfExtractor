@@ -120,9 +120,11 @@ impl OdtDocument {
     /// Read an ODT under an explicit input, ZIP and XML budget.
     pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
         budget.check_input(data.len())?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
-        budget.check_zip(&mut archive)?;
+        budget.check_zip(archive.archive_mut())?;
 
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
@@ -139,15 +141,14 @@ impl OdtDocument {
 
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
         for i in 0..archive.len() {
-            let mut file = match archive.by_index(i) {
-                Ok(f) => f,
+            let (name, is_dir) = match archive.by_index(i) {
+                Ok(file) => (file.name().to_string(), file.is_dir()),
                 Err(_) => continue,
             };
-            let name = file.name().to_string();
-            if file.is_dir() || !name.starts_with("Pictures/") {
+            if is_dir || !name.starts_with("Pictures/") {
                 continue;
             }
-            if let Ok(buf) = limits::read_zip_entry(&mut file) {
+            if let Some(buf) = archive.read_name(&name) {
                 media.insert(name, buf);
             }
         }
@@ -159,7 +160,7 @@ impl OdtDocument {
             items: Vec::new(),
             notes: Vec::new(),
         };
-        walker.walk()?;
+        walker.walk(&guard)?;
 
         let mut items = walker.items;
         // A footnote's text is body content: Docling reports notes at the end of
@@ -177,9 +178,8 @@ impl OdtDocument {
     }
 }
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    limits::read_zip_entry(&mut file).ok()
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
 /// The named styles of a package: what a paragraph's `text:style-name` means.
@@ -456,8 +456,15 @@ struct Walker<'a> {
 }
 
 impl Walker<'_> {
-    fn walk(&mut self) -> Result<()> {
+    fn walk(&mut self, guard: &limits::Guard<'_>) -> Result<()> {
+        // The walk is the reading, so the deadline is checked inside it: one
+        // document's content part is the unit that can be large.
+        let mut tokens = 0u64;
         loop {
+            tokens = tokens.wrapping_add(1);
+            if tokens.is_multiple_of(4096) {
+                guard.check("reading an ODT part")?;
+            }
             match self.pull.next()? {
                 Tok::Start { name, attrs } => match name.as_str() {
                     "p" => self.paragraph(false, &attrs, None)?,
@@ -1212,6 +1219,19 @@ mod tests {
         )
     }
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&content(""), STYLES, &[]);
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            OdtDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
     #[test]
     fn a_custom_zip_budget_is_enforced() {
         let pkg = package(&content(""), STYLES, &[]);
@@ -1220,8 +1240,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = OdtDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the package has three entries");
+            .expect_err("the package has three entries");
         assert!(error.to_string().contains("entries"), "{error}");
     }
 

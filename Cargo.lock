@@ -3497,6 +3497,7 @@ name = "pdfextractor-doc-parser"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "pdfextractor-limits",
 ]
 
 [[package]]
@@ -3535,6 +3536,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
 ]
 
@@ -3707,6 +3709,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-picture-formats",
  "serde_yaml",

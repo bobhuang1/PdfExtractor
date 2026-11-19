@@ -76,9 +76,11 @@ impl OdsDocument {
     /// Read an ODS under an explicit input, ZIP, XML and page budget.
     pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
         budget.check_input(data.len())?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
-        budget.check_zip(&mut archive)?;
+        budget.check_zip(archive.archive_mut())?;
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
         let media = read_parts(&mut archive, "Pictures/");
@@ -87,7 +89,7 @@ impl OdsDocument {
         // A hidden sheet is named by its style, and the style is stated in the
         // same part: read the whole part before any sheet is.
         let hidden = hidden_sheet_styles(&content)?;
-        let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects)?;
+        let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects, &guard)?;
         budget.check_pages(sheets.len())?;
         Ok(Self {
             sheets,
@@ -96,25 +98,21 @@ impl OdsDocument {
     }
 }
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    limits::read_zip_entry(&mut file).ok()
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
-fn read_parts(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    prefix: &str,
-) -> HashMap<String, Vec<u8>> {
+fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let (name, is_dir) = match archive.by_index(index) {
+            Ok(file) => (file.name().to_string(), file.is_dir()),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
-        if file.is_dir() || !name.starts_with(prefix) {
+        if is_dir || !name.starts_with(prefix) {
             continue;
         }
-        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
+        if let Some(buffer) = archive.read_name(&name) {
             parts.insert(name, buffer);
         }
     }
@@ -123,21 +121,22 @@ fn read_parts(
 
 /// The embedded chart objects a package holds, keyed by the directory a
 /// `draw:object` names (`Object 1`). Each is the chart's `content.xml`.
-fn read_chart_objects(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, Vec<u8>> {
+fn read_chart_objects(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u8>> {
     let mut objects = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let name = match archive.by_index(index) {
+            Ok(file) => file.name().to_string(),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
         let Some(object) = name.strip_suffix("/content.xml") else {
             continue;
         };
+        let object = object.to_string();
         if !object.starts_with("Object ") {
             continue;
         }
-        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
-            objects.insert(object.to_string(), buffer);
+        if let Some(buffer) = archive.read_name(&name) {
+            objects.insert(object, buffer);
         }
     }
     objects
@@ -181,17 +180,19 @@ fn read_sheets(
     hidden_styles: &HashSet<String>,
     media: &HashMap<String, Vec<u8>>,
     objects: &HashMap<String, Vec<u8>>,
+    guard: &limits::Guard<'_>,
 ) -> Result<(Vec<Sheet>, Vec<SheetAnnotation>)> {
     let mut pull = Pull::new(xml);
     let mut sheets = Vec::new();
     let mut frames = Vec::new();
     let mut annotations = Vec::new();
     loop {
+        guard.check("reading an ODS sheet")?;
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table" => {
                 let index = sheets.len() + 1;
                 let (sheet, sheet_frames, sheet_annotations) =
-                    read_sheet(&mut pull, &attrs, index, hidden_styles)?;
+                    read_sheet(&mut pull, &attrs, index, hidden_styles, guard)?;
                 sheets.push(sheet);
                 frames.push(sheet_frames);
                 annotations.extend(sheet_annotations);
@@ -222,6 +223,7 @@ fn read_sheet(
     attrs: &[(String, String)],
     index: usize,
     hidden_styles: &HashSet<String>,
+    guard: &limits::Guard<'_>,
 ) -> Result<(Sheet, Vec<Frame>, Vec<SheetAnnotation>)> {
     let name = field(attrs, "name")
         .filter(|name| !name.is_empty())
@@ -237,8 +239,15 @@ fn read_sheet(
     let mut row = 0usize;
     let mut frames = Vec::new();
     let mut annotations = Vec::new();
+    // A single sheet can hold a whole workbook's cells, so the deadline is
+    // checked as its rows are read, not only between sheets.
+    let mut rows = 0u64;
 
     loop {
+        rows = rows.wrapping_add(1);
+        if rows.is_multiple_of(1024) {
+            guard.check("reading an ODS sheet")?;
+        }
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table-row" => {
                 let declared = count(&attrs, "number-rows-repeated");
@@ -1113,6 +1122,19 @@ mod tests {
         )
     }
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&content(""));
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            OdsDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
     #[test]
     fn a_custom_zip_budget_is_enforced() {
         let pkg = package(&content(""));
@@ -1121,8 +1143,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the package has three entries");
+            .expect_err("the package has three entries");
         assert!(error.to_string().contains("entries"), "{error}");
     }
 
@@ -1141,8 +1162,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the content has two sheets");
+            .expect_err("the content has two sheets");
         assert!(error.to_string().contains("2 pages"), "{error}");
         assert!(error.to_string().contains("limit is 1"), "{error}");
     }

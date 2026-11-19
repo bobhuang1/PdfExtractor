@@ -21,7 +21,7 @@ layout analysis, Docling export — is implemented here.
 | Area | State |
 |---|---|
 | PDF text extraction | ✅ works — Flate/ASCII85/LZW/RunLength/ASCIIHex, object streams, linearized files, font encodings (cp1252, `/Differences`, `/ToUnicode`, Identity-H, **and the encoding an embedded Type 1 program carries itself**, which is where a TeX symbol font keeps `∗`/`†`/`‡`), **real glyph advances from `/Widths`**. An **encrypted** PDF is refused by name — the trailer's (or a 1.5 cross-reference stream's) `/Encrypt` is recognised — with a message saying so and naming the way out (`qpdf --decrypt`), rather than read as a document of noise; decrypting behind `--pdf-password` is not implemented yet |
-| PDF pictures | ✅ raster images extracted with their true placement box; **vector-only figures** detected for papers that contain no image at all |
+| PDF pictures | ✅ raster images extracted with their true placement box — Flate, DCT/JPEG, JPEG 2000, **CCITT Group 3/G4 fax** and **JBIG2** image XObjects, the last two decoded to grayscale PNGs for OCR (including a `/JBIG2Globals` dictionary and filters wrapped around either codec); **vector-only figures** detected for papers that contain no image at all |
 | **OCR for scanned pages** | ✅ works (Tesseract, wired into the pipeline) — languages chosen with `--ocr-lang`, page segmentation with `--psm`, and a page's own **`/Rotate` honoured**: the bitmap is turned with the page before recognition, so a scan captured sideways comes back upright, with its boxes in the displayed page's space. A scan with **nothing saying which way up it is** — no `/Rotate`, no EXIF tag, merely pixels on their side — is **found and turned upright before recognition**: Tesseract reads the page in its stored, half and (when the stored reading is weak) quarter turns, and the page is turned only when the other reading is clearly better |
 | **Plain images** | ✅ works — one image is one page, in PNG, JPEG, TIFF, BMP, WebP, GIF or JPEG 2000. The page is the upright pixel grid at the resolution the file declares (PNG `pHYs`, JPEG JFIF/EXIF, TIFF `XResolution`, BMP pixels per metre; 72 dpi — one pixel per point — when it declares none, which is what a WebP gets, having no resolution field at all, and what a GIF gets, its descriptor stating a pixel aspect ratio rather than a density; a JP2 states its own in a capture-resolution box (`resc`, in samples per metre), and one that states none gets the same default; a bare JPEG 2000 codestream (`.j2c`, `.j2k`, `.jpc`, `.jpf`) has no container to hold one, so its page is the grid its `SIZ` marker states at that same 72 dpi default — and which spelling a JPEG 2000 is comes from its first bytes, a signature box or the codestream's start marker, so a `.jpf` holding a container is placed by the container's boxes), and `origin.mimetype` is the image's own type rather than a PDF's. A **GIF** or an **animated WebP** is a page per frame: the logical screen its descriptor states, or the `ANIM` canvas a WebP states, is the page's size, and every frame of an animation is a page a reader turns — a hundred-frame animation is a hundred pages, each frame decoded by this reader (composited on the screen the way a player shows it, and laid on white where it leaves the screen untouched) and recognised on its own. A **TIFF** is a page per image file directory, which is how a scanner writes a batch: a three-sheet scan is three pages, each measured from its own grid at the file's declared resolution — the sheets need not be the same size — turned upright by its own directory's orientation tag, so one sideways sheet does not turn the batch with it, and recognised on its own pixels. A camera's **EXIF orientation** is honoured: the page is the grid the tag describes and the pixels are turned before recognition, so a phone held sideways is read upright. A file with **no tag at all** is read to find its own orientation: a sideways or upside-down page is detected from the pixels and turned upright before recognition, and the page size and every line box are measured on the upright grid. An image has no text layer, so the page goes straight into OCR: Tesseract's lines are mapped from pixels into points and grouped by the same layout pass a scanned PDF uses. **A photographed-page corpus scores the reading** — eight synthetic photos (skew, uneven light, softness, one tagged sideways, one sideways and one upside down with no tag) with ground truth, scored by character and word accuracy and held to floors: see [OCR quality](#ocr-quality-on-photographed-pages) |
 | **DOCX** | ✅ works — paragraphs, headings, lists with their real bullet/number and level (`numbering.xml`, incl. `w:lvlOverride` restarts and relabels), table grids, embedded images (incl. headers/footers, and a picture inside a table cell, which the cell holds: the cell becomes a Docling `RichTableCell` referencing a group under the table, and the group's picture is the cell's rather than an item standing beside the table, and a table written inside a cell, which is that cell's content the same way — read inside the outer cell instead of as a table of the body beside it) — a PNG or a JPEG arriving as itself, and every other raster encoding a package can carry (BMP, TIFF, GIF, WebP, JPEG 2000) decoded and written out as PNG, which is the one type Docling's own Word reader ever leaves a picture in, an SVG **drawn into a PNG** at the frame the picture is placed in, because a drawing is not an encoding anyone downstream can show — fitted by the drawing's own `preserveAspectRatio` (by default `xMidYMid meet`, so a frame of other proportions keeps the drawing's shape with transparent margins rather than squashing it; `none` stretches, `slice` covers and crops, and every alignment is honoured) — and a picture Word states as an SVG beside a PNG fallback is taken from its `asvg:svgBlip` drawing, not the raster — a shape whose fill is a picture is that picture too, the drawing when its fill states one — **picture bullets** (`w:numPicBullet` named by `w:lvlPicBulletId`) are pictures of their own, ahead of the item they open and at the frame the list draws them in, the drawing played when the bullet states an SVG, and the item's words carry no glyph — with their **EXIF orientation** applied, **Office Math equations** (one item per equation), **chart titles as captions**, footnotes and endnotes, tabs, **vector EMF/WMF drawings played into PNGs** (Word's own metafiles and the previews of embedded objects), and **shapes painted into PNGs** — an autoshape, a group of them, a WordArt or a `wps:wsp` becomes a picture at the size the file gives it, whether the file states it in VML (`w:pict`) or in DrawingML (`w:drawing`), where the drawing has no image part behind it; a shape's colours come from the package's theme where it names a theme slot, its gradient fill is ramped across it (VML's `v:fill type="gradient"` or DrawingML's `a:gradFill`), its shadow lands under it, and a line's arrowheads are drawn at its ends |
@@ -50,6 +50,7 @@ layout analysis, Docling export — is implemented here.
 | Images beyond the page | ⚠️ an image's text is OCR — `--ocr never` writes the pages with no text on them. `--preview` is not produced for an image, and a later GIF frame or TIFF sheet whose colour type this reader cannot convert is left out rather than guessed at |
 | XLSX beyond cells | ⚠️ cells, merges, dates, **pictures**, **charts** (read as the data they plot) and **cell comments** in the classic comments part (on the notes layer; threaded comments are not read) — a vector metafile picture (EMF/WMF) is placed with its box and no image, and a merged label row above a header is kept in the table instead of split out as a text item (Docling splits it) |
 | PPTX beyond slides | ⚠️ slides, text bodies, tables, pictures, **charts** (their plotted data, family and title) and **the shapes a slide paints itself** (an autoshape, a connector or a group of them, drawn into a PNG at the shape's own box with the fill — including a **picture fill**, painted through the shape's outline — line, **gradient**, **soft shadow** and **arrowhead** the slide states and its theme colour — patterns, 3-D and a shape's *text* are not drawn, and a text box with no fill and no line puts no ink down and is no picture), plus **speaker notes and comments on the notes layer** — the rest is not read: **SmartArt and equations**, a comment's *anchor* (the position PowerPoint stores, which names no shape and has nowhere to go in the document model), a linked (not embedded) picture has no bytes to show, and a vector metafile (EMF/WMF) picture is placed with its box and no image; PNG, JPEG, GIF, BMP, TIFF, WebP and SVG are extracted (every picture that is not a PNG or a JPEG is written out as PNG, and an SVG is drawn into one at the frame the picture is placed in, fitted by the drawing's own `preserveAspectRatio` — letterboxed by default when that frame's proportions differ, and stretched, cropped or cornered when the drawing asks for it). Legacy `.ppt` has no reader here: it needs LibreOffice, and the deck it hands back is only as faithful as Impress' own conversion — a text box Impress re-lays out is the re-laid-out box |
+| **Redline mode** (`--redline`, PDF/DOCX) | ✅ works — `--input new.pdf --redline old.pdf` converts both versions and compares them through the same block alignment as Compare, then writes one self-contained HTML report: rows are grouped by the page each side published (a moved row is headed `Page 3 → 5`; a removed or added page is named as such), pages with no changes are kept as context, and a changed row shows the old and new words side by side with removals in `<del>` and additions in `<ins>`. PDF pages also carry before/after SVG placement previews, so a moved or resized block or picture is visible without a PDF renderer, and picture rows get their own compact before/after box pair. Changed, added, removed, placed, unchanged and character-agreement counts head the report, structural notes from the comparison follow, and the unchanged rows on each page are folded into a `<details>` block so a long document stays readable. DOCX is flow-based and publishes no fixed pagination, so it is reported as one **Document flow** section rather than an invented page. Only two versions of the same family are accepted; a PDF against a DOCX is refused before conversion, and the report may not overwrite either input |
 | **Compare mode** (UI) | ✅ works — a reference (a file, or a folder of them — `test-data/golden/docling/`) puts every converted document beside Docling's reading of the same one: what agrees, what differs by label or wording, what only one side has, equations marked as notation, **what the reference cut finer than we did** (a reference item wholly inside one of our blocks — by its words, or, for an item with no letters in it at all, by lying among the words of a line we hold — drawn as the run it is, with the items a broken run leaves behind taken onto the row of the block that holds them, leaders and all), and the share of the reference's characters we also hold. An item with no letters in it that nothing of ours answers is **placed** — named, one line of a form per row, and **drawn page by page**: each page that carries places is drawn once above the rows with all of its items at once, so a form's leader pattern is one picture rather than one thumbnail per row. Rows content cannot pair are joined by **page and box**, so a drawing the two readings ordered differently is one row rather than one a side — where the producers publish boxes (PDFs), with the overlap that joined the row on the row itself |
 | **UI** (`crates/ui`) | ✅ works — Tauri window with a file/folder picker and a settings panel. A conversion runs in the background and is **streamed**: the window lists every document as it finishes, shows a progress bar and the CLI's own log, and can **stop** the run at any time. Cross-platform, no JavaScript toolchain needed. |
 
@@ -125,6 +126,78 @@ cargo fmt --all --check      # formatted as rustfmt reads it
 # loads every document with Docling's own model.
 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python \
   cargo test -p pdfextractor-cli --test docling_golden_test
+```
+
+**Local runs select; the full suite remains the gate.** `scripts/test.sh` maps
+files changed against `HEAD` (or `merge-base(REV, HEAD)` for `--since REV`, so
+upstream-only changes are not selected) to the crates that can observe
+them — including reverse path-dependency closure — and runs those crates' unit,
+binary, integration and doc tests. A changed top-level integration-test file
+selects just that target, `README.md`/`plan.md`/`docs/` select the documentation
+test. Fixtures select only the targets that read them, from
+`scripts/fixture-owners.tsv`; an owner names a declared test target's source
+path (custom test targets are resolved through cargo metadata) or
+`crates/<crate>#lib`. A fixture with no ownership row, and broad inputs
+(root manifest, `Cargo.lock`, or an unknown path), fall back to the full suite.
+A change under `scripts/` selects the runner's focused self-tests instead.
+`--package NAME` selects one crate without dependents; `--changed`
+is the dependency-aware form. Use `--path FILE` from an editor and `--list` to
+inspect a run without executing it. `--explain` adds the changed paths and
+selection notes. `--json` with either mode prints a single JSON object without
+running tests: it carries `mode`, `base`, `changed_paths`, and a `targets` array
+whose records name the selected `package`, target `kind` and `name`,
+`source_path`, `reason`, and `command`. `--jobs N` runs independent selected
+targets concurrently with buffered, selection-ordered logs; it returns the
+first failure's status after the selected targets finish. A failed selected
+run records its target specs in `target/test-runner-failed.tsv`; later normal
+or rerun execution removes only targets that actually ran and passed, keeps
+failures for targets that did not run, and records new failures.
+`--rerun-failed` runs only the recorded targets and clears the file when none
+remain.
+Run the runner's own focused tests with `./scripts/test.sh --self-test`.
+
+```bash
+./scripts/test.sh                         # changed crates only
+./scripts/test.sh --since origin/main    # changes on this branch, not upstream
+./scripts/test.sh --path crates/limits/src/lib.rs
+./scripts/test.sh --path test-data/brief.docx
+./scripts/test.sh --package pdfextractor-limits
+
+# Pass focused cargo test options through the runner. --no-run builds without
+# running (doc targets are skipped because Cargo cannot combine --doc with
+# --no-run); --filter names a test; arguments after -- reach libtest unchanged.
+./scripts/test.sh --package pdfextractor-cli --features some-feature --no-run
+./scripts/test.sh --package pdfextractor-cli --filter redline -- --nocapture
+
+# Opt into batching: selected targets for a package share one cargo process
+# (except doctests, which Cargo requires in their own invocation).
+./scripts/test.sh --package pdfextractor-cli --batch
+
+# Split selected targets across terminals. Shards balance by the runtimes
+# recorded in target/test-runner-timings.tsv with sub-second precision. A
+# target with no recording is estimated from the median recorded runtime;
+# target count is used only when none of the selected targets has a recording.
+# Each target is its own cargo invocation, so feature unification can differ
+# from the unsharded --full gate.
+./scripts/test.sh --shard 1/4
+./scripts/test.sh --full --shard 1/4      # one shard of the full target list
+
+# Run selected targets concurrently instead of opening separate terminals.
+# Each target's output is buffered and printed in selection order; all selected
+# targets run, and the first failing target's status is returned. This does not
+# change the exact --full command without --shard.
+./scripts/test.sh --jobs 4
+
+# Inspect the selected targets and their reasons as machine-readable JSON.
+./scripts/test.sh --list --json --path crates/limits/src/lib.rs
+./scripts/test.sh --explain --json --path test-data/brief.docx
+
+# Retry only the targets that failed on the previous selected run.
+./scripts/test.sh --rerun-failed
+
+# The explicit release check: the full workspace suite, unchanged.
+./scripts/test.sh --full
+# equivalently: cargo test --workspace --locked
 ```
 
 Every push runs that clippy command in CI (`.github/workflows/clippy.yml`) with
@@ -287,6 +360,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--preview-dpi <N>` | resolution of the preview's page backdrop (default 110) |
 | `--progress` | stream one JSON record per finished document to stdout (see below) |
 | `--compare <PATH>` | compare every finished document with a Docling reference (a file, or a folder of them) and exit non-zero if any falls below the floor its memory remembers (see "Compare mode") |
+| `--redline <OLD>` | compare two versions of the same PDF or DOCX: `--input` is the newer version, this is the older one, and `--output` names the page-aware HTML report (default `<new>.redline.html`). The comparison reuses the Compare engine's block alignment; changed words are marked `<del>`/`<ins>`, and PDF pages and picture rows carry before/after placement previews. Cannot be combined with `--compare`, `--preview`, `--progress` or `--to` |
 | `--list-input-formats` | print the input formats this build accepts as JSON — `{"input_formats": [".pdf", …], "families": [{"name": "PDF", "input_formats": [".pdf"]}, …]}` — and exit, needing no input path. The list is the one the gate itself reads, which `--help` (grouped by family) and the empty-folder refusal also print, so a window or a script reads it instead of parsing help text. `families` is the same set under the headings `--help` uses, one family per heading in the help's order and every name in exactly one of them, so a UI can build a grouped picker without knowing what a group is called — which is what the desktop window does, grouping its formats line under those headings and offering one **File…** filter per family after **All documents** |
 
 Log records go to **stderr**; stdout is left for the output of the run itself, so
@@ -905,6 +979,55 @@ bridge gate above is where those documents are held, with LibreOffice installed.
 is only converting, with no `--compare`, still stops on the missing bridge and names the
 re-save route.
 
+### Redline mode
+
+`--redline` is the two-document use of the same comparison engine. Give it an
+older version and a newer version of one PDF or DOCX; both are converted through
+the normal readers, aligned by the Compare engine, and written as one standalone
+HTML report:
+
+```bash
+cargo run -p pdfextractor-cli -- \
+  -i contract-v2.pdf --redline contract-v1.pdf \
+  -o contract-redline.html --ocr never
+#   redline: contract-v2.pdf against contract-v1.pdf -> contract-redline.html
+```
+
+The report is **page-aware** where the format publishes pages. A PDF's items
+carry provenance, so changes are grouped under `Page 1`, `Page 2`, and so on; a
+change that moved between pages is headed `Page 3 → 5`, a page only the old
+version has is `Page 4 (removed)`, and a page only the new one has is `Page 6
+(added)`. Pages with nothing but unchanged blocks still get a section, so the
+redline shows where in the document it is, and their rows sit folded in a
+`<details>` element. Each PDF page also gets a before/after placement preview:
+the page's own point-sized outline with every block's box drawn on it, coloured
+by the row verdict, and picture boxes outlined separately in violet. Picture
+rows carry a tighter preview of their own boxes, so a picture that moved or
+resized is visible without opening the PDF in a renderer. These previews use
+the placement geometry the comparison already relies on and add no external
+rendering step; a DOCX publishes no such boxes, so its flow report has none. A
+DOCX is flow-based by design (Word repaginates as the text is edited), so it is
+reported as one labelled **Document flow** section; no page numbers are
+invented.
+
+The rows come from `pdfextractor_ui::diff::compare_documents`, the same
+alignment the window's Compare panel and the `--compare` gate use. A changed row
+is then cut into words for display only: the old side keeps the unchanged words
+with the removed ones in `<del>`, and the new side keeps the unchanged words with
+the added ones in `<ins>`. A structured table keeps the document's grid: a
+cell merged across columns or rows is rendered once with its `colspan` or
+`rowspan`, and the slots the merge covers are left out rather than padded with
+empty cells, so a merged header such as `brief.docx`'s Revenue row stays merged.
+Table rows are aligned by their values as well as their order, so inserting or
+removing a row does not shift a later row's changed-cell markers onto its
+neighbour.
+Counts at the top say how many rows changed, were
+added, were removed, were placed, or stayed the same, alongside the share of the
+new version's characters the old version also held. `--redline` refuses a
+cross-family comparison (PDF against DOCX), a directory, an unsupported family,
+or a report path that would overwrite either input, and it refuses to be combined
+with the conversion/output flags that would make its single report ambiguous.
+
 ### Smoke-testing the whole stack without a human
 
 `--selftest [INPUT]` opens the window, proves the webview and IPC round-trip,
@@ -1000,6 +1123,38 @@ page's placed items on them, how many rows it drew (0 on a document it refused),
 documents fell through the floor their memory remembers, and what that floor said — all as
 the page drew them. All of them exit 0 if the stack is healthy.
 
+## Resource limits for untrusted inputs
+
+Every reader treats its input as hostile. The budgets are defined once in
+[`crates/limits`](crates/limits/src/lib.rs) and applied by the PDF, ZIP/office,
+XML and image readers, so a malformed or deliberately expensive file is refused
+with a named limit rather than allowed to exhaust memory, stack or time.
+
+| Budget | Default |
+|---|---|
+| Input bytes | 256 MiB |
+| Pages / sheets / slides / image frames | 10,000 (frames: 1,000) |
+| PDF indirect objects / lexical tokens | 250,000 / 4,000,000 |
+| PDF array/dictionary/page-tree nesting | 64 levels |
+| One decoded PDF stream | 128 MiB (Flate reads are capped while expanding) |
+| ZIP entries | 10,000 |
+| One ZIP entry / whole package | 64 MiB / 512 MiB |
+| ZIP expansion ratio above 1 MiB | 200:1 |
+| XML part / nesting | 64 MiB / 256 levels; `DOCTYPE` declarations are refused |
+| Image grid | 100,000 per side, 100,000,000 pixels; 512 MiB decode allocation |
+| Parser wall clock | 30 seconds, checked between objects, pages, entries and XML events |
+
+The command line uses the defaults; embedders can construct a tighter
+`pdfextractor_limits::Limits`. A PDF's page count is enforced before any page is
+analysed, and extraction has a checked path (`extract_checked`) that reports the
+refusal instead of returning a shortened document.
+
+Fuzz targets live outside the product workspace in [`fuzz/`](fuzz/README.md):
+`pdf`, `zip`, `xml` and `image`. They compile against the shared limits and are
+run with `cargo +nightly fuzz run <target> -- -max_total_time=60`; the
+deterministic tests build a ZIP bomb, deeply nested XML, a giant image header, an
+over-budget PDF page tree, an over-size Flate stream and a zero-deadline parser.
+
 ## Test documents
 
 The extractor is regression-tested against real documents produced by other tools
@@ -1077,6 +1232,7 @@ crates/
 └── ui/            # Tauri window (static frontend in ui/dist) over the CLI
 test-data/
 ├── hello.pdf, compressed.pdf, scanned.pdf   # hand-made fixtures
+├── hello_added_picture.pdf                  # hello.pdf plus a page with a picture
 ├── inventory.xlsx                           # workbook fixture (make_inventory_xlsx.py)
 ├── worksheet_pictures.xlsx                  # workbook that draws pictures (make_pictures_xlsx.py)
 ├── shape_deck.pptx                          # shapes PowerPoint paints itself (make_shape_deck.py)
@@ -1121,6 +1277,10 @@ test-data/
 ├── picture_bullets.docx, .pptx              # list items whose bullets are pictures,
 │                                            #   one of them an SVG (make_picture_bullets.py)
 ├── invoice_scan.png                         # image fixture (make_scan_images.py)
+├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4
+│                                            #   and G3 two-dimensional
+├── jbig2_scan.pdf                           # the same scan in JBIG2
+│                                            #   (make_scan_codec_pdfs.py)
 ├── nested_table.docx                        # a table inside a table's cell
 │                                            #   (make_nested_table_docx.py)
 ├── images/        # the same scan as JPEG, TIFF, BMP, WebP, GIF and JPEG 2000,

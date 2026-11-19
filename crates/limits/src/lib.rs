@@ -13,7 +13,8 @@
 //! [`LimitError`] naming the budget and the amount, so a caller can say why a
 //! file was refused rather than reporting a generic parse failure.
 
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek};
+use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
 use quick_xml::events::Event;
@@ -51,8 +52,25 @@ pub const MAX_IMAGE_DIMENSION: u32 = 100_000;
 pub const MAX_IMAGE_FRAMES: usize = 1_000;
 /// Maximum bytes one image decode may allocate.
 pub const MAX_IMAGE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
+/// Most blocks a flow reader (text, Markdown, CSV, RTF, HTML, DOCX and legacy
+/// `.doc`) may produce.
+///
+/// A table counts one block per cell: what a grid costs is what it holds, not
+/// the one item it becomes.
+pub const MAX_FLOW_BLOCKS: usize = 1_000_000;
+/// Largest file one LibreOffice bridge conversion may hand back.
+pub const MAX_BRIDGE_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
+/// Wall-clock budget for one LibreOffice bridge conversion.
+pub const BRIDGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Wall-clock budget for one parser, from entry to return.
 pub const PARSE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Wall-clock budget for one document's OCR pages.
+///
+/// Recognition is seconds to a minute a page where parsing is milliseconds, so
+/// it gets its own, larger budget rather than the parser's. The deadline is
+/// checked between pages, which is the only place a blocking recognition call
+/// can be interrupted without killing the engine.
+pub const OCR_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// A budget for one untrusted input.
 ///
@@ -77,7 +95,11 @@ pub struct Limits {
     pub max_image_dimension: u32,
     pub max_image_frames: usize,
     pub max_image_alloc_bytes: u64,
+    pub max_flow_blocks: usize,
+    pub max_bridge_output_bytes: u64,
+    pub bridge_timeout: Duration,
     pub timeout: Duration,
+    pub ocr_timeout: Duration,
 }
 
 impl Default for Limits {
@@ -99,7 +121,11 @@ impl Default for Limits {
             max_image_dimension: MAX_IMAGE_DIMENSION,
             max_image_frames: MAX_IMAGE_FRAMES,
             max_image_alloc_bytes: MAX_IMAGE_ALLOC_BYTES,
+            max_flow_blocks: MAX_FLOW_BLOCKS,
+            max_bridge_output_bytes: MAX_BRIDGE_OUTPUT_BYTES,
+            bridge_timeout: BRIDGE_TIMEOUT,
             timeout: PARSE_TIMEOUT,
+            ocr_timeout: OCR_TIMEOUT,
         }
     }
 }
@@ -206,12 +232,58 @@ impl Limits {
         Ok(())
     }
 
+    /// Reject a flow document that expanded into more blocks than the budget
+    /// allows. A table counts one block per cell.
+    pub fn check_flow_blocks(&self, count: usize) -> Result<()> {
+        if count > self.max_flow_blocks {
+            return Err(LimitError::TooManyFlowBlocks {
+                actual: count,
+                limit: self.max_flow_blocks,
+            });
+        }
+        Ok(())
+    }
+
+    /// Reject a file one LibreOffice conversion wrote that is larger than the
+    /// budget allows: the bridge reads a small file and can be handed a huge one
+    /// back, which no input-size check on the original would catch.
+    pub fn check_bridge_output(&self, len: u64) -> Result<()> {
+        if len > self.max_bridge_output_bytes {
+            return Err(LimitError::BridgeOutputTooLarge {
+                actual: len,
+                limit: self.max_bridge_output_bytes,
+            });
+        }
+        Ok(())
+    }
+
     /// A deadline measured from now, for one parser run.
     pub fn deadline(&self) -> Deadline {
         Deadline {
             start: Instant::now(),
             limit: self.timeout,
         }
+    }
+
+    /// A deadline measured from now, for one document's OCR pages.
+    pub fn ocr_deadline(&self) -> Deadline {
+        Deadline {
+            start: Instant::now(),
+            limit: self.ocr_timeout,
+        }
+    }
+
+    /// A deadline measured from now, for one LibreOffice conversion.
+    pub fn bridge_deadline(&self) -> Deadline {
+        Deadline {
+            start: Instant::now(),
+            limit: self.bridge_timeout,
+        }
+    }
+
+    /// The budgets a reader carries through its walk.
+    pub fn guard(&self) -> Guard<'_> {
+        Guard::new(self)
     }
 
     /// Check a ZIP package before a reader parses it.
@@ -425,27 +497,208 @@ impl Deadline {
     }
 }
 
-/// Read one ZIP entry with the package-entry ceiling applied.
+/// The budgets one reader applies while it walks its input.
 ///
-/// A central directory is a claim, not a proof: a crafted entry can declare a
-/// small uncompressed size and expand past it. This caps the read itself, so a
-/// lying entry cannot allocate without bound even after preflight.
-pub fn read_zip_entry<R: Read>(file: &mut R) -> std::io::Result<Vec<u8>> {
-    read_zip_entry_with_limit(file, MAX_ZIP_ENTRY_BYTES)
+/// A guard pairs the time budget — checked as the walk proceeds, because a
+/// deadline cannot be enforced after the fact — with the size budgets the
+/// reader checks once it has something to measure. [`Guard::unbudgeted`] is the
+/// no-op form, so a reader whose convenience entry point has always been
+/// infallible keeps that signature for bytes the caller has already bounded.
+#[derive(Debug, Clone)]
+pub struct Guard<'a> {
+    limits: Option<&'a Limits>,
+    deadline: Option<Deadline>,
 }
 
-/// [`read_zip_entry`] with an explicit ceiling, for a caller with a tighter
-/// budget.
-pub fn read_zip_entry_with_limit<R: Read>(file: &mut R, limit: u64) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("the ZIP entry expands beyond the {limit}-byte limit"),
-        ));
+impl<'a> Guard<'a> {
+    /// Carry `limits` through one reading.
+    pub fn new(limits: &'a Limits) -> Self {
+        Self {
+            limits: Some(limits),
+            deadline: Some(limits.deadline()),
+        }
     }
-    Ok(bytes)
+
+    /// A guard that refuses nothing.
+    pub fn unbudgeted() -> Self {
+        Self {
+            limits: None,
+            deadline: None,
+        }
+    }
+
+    /// Whether this guard enforces anything.
+    pub fn is_budgeted(&self) -> bool {
+        self.limits.is_some()
+    }
+
+    /// Reject the input before the reader touches it.
+    pub fn check_input(&self, len: usize) -> Result<()> {
+        match self.limits {
+            Some(limits) => limits.check_input(len),
+            None => Ok(()),
+        }
+    }
+
+    /// Reject a document that grew past the block budget.
+    pub fn check_flow_blocks(&self, count: usize) -> Result<()> {
+        match self.limits {
+            Some(limits) => limits.check_flow_blocks(count),
+            None => Ok(()),
+        }
+    }
+
+    /// Check the time budget, naming the stage the walk is in.
+    pub fn check(&self, stage: &str) -> Result<()> {
+        match &self.deadline {
+            Some(deadline) => deadline.check(stage),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The bytes one package's reads have decoded so far, and the budget they are
+/// charged to.
+///
+/// A central directory is a claim, not a proof: a crafted entry can declare a
+/// small uncompressed size and expand past it, and a package of many such
+/// entries can expand past the package ceiling even when every entry is under
+/// its own. Charging each read to one running total is what keeps the *actual*
+/// expansion inside the budget the caller asked for, rather than trusting the
+/// sizes the archive states.
+#[derive(Debug)]
+pub struct ZipBudget<'a> {
+    limits: &'a Limits,
+    decoded: u64,
+}
+
+impl<'a> ZipBudget<'a> {
+    /// Charge reads to `limits`.
+    pub fn new(limits: &'a Limits) -> Self {
+        Self { limits, decoded: 0 }
+    }
+
+    /// The bytes decoded so far.
+    pub fn decoded_bytes(&self) -> u64 {
+        self.decoded
+    }
+
+    /// The most the next entry may produce: its own ceiling, or what is left
+    /// of the package's.
+    pub fn entry_ceiling(&self) -> u64 {
+        self.limits
+            .max_zip_entry_bytes
+            .min(self.limits.max_zip_total_bytes.saturating_sub(self.decoded))
+    }
+
+    /// Read one entry, charged to this package's running total.
+    ///
+    /// A refusal names the budget that ran out: the entry's own ceiling, or the
+    /// package total every entry shares.
+    pub fn read_entry<R: Read>(&mut self, name: &str, file: &mut R) -> Result<Vec<u8>> {
+        let ceiling = self.entry_ceiling();
+        let mut bytes = Vec::new();
+        file.take(ceiling.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| LimitError::Zip {
+                detail: error.to_string(),
+            })?;
+        if bytes.len() as u64 > ceiling {
+            if ceiling == self.limits.max_zip_entry_bytes {
+                return Err(LimitError::ZipEntryTooLarge {
+                    name: name.to_string(),
+                    actual: bytes.len() as u64,
+                    limit: self.limits.max_zip_entry_bytes,
+                });
+            }
+            return Err(LimitError::ZipTotalTooLarge {
+                actual: self.decoded.saturating_add(bytes.len() as u64),
+                limit: self.limits.max_zip_total_bytes,
+            });
+        }
+        self.decoded = self.decoded.saturating_add(bytes.len() as u64);
+        Ok(bytes)
+    }
+}
+
+/// Read one ZIP entry under the caller's budget, charged to `budget`.
+///
+/// The cap is the read itself, so an entry that lies about its declared size
+/// cannot allocate past it, and the running total in `budget` bounds what the
+/// package as a whole expands into.
+pub fn read_zip_entry<R: Read>(
+    file: &mut R,
+    name: &str,
+    budget: &mut ZipBudget<'_>,
+) -> Result<Vec<u8>> {
+    budget.read_entry(name, file)
+}
+
+/// A ZIP package whose entry reads are charged to one budget.
+///
+/// The archive and the running total travel together, so a reader that walks a
+/// package cannot read a part outside its budget even by accident: every read
+/// goes through [`Package::read_name`]. It dereferences to the underlying
+/// [`zip::ZipArchive`], so listing and naming entries is unchanged.
+pub struct Package<'a> {
+    archive: zip::ZipArchive<Cursor<&'a [u8]>>,
+    budget: ZipBudget<'a>,
+}
+
+impl<'a> Package<'a> {
+    /// Open `data` as a ZIP whose reads are charged to `limits`.
+    pub fn new(
+        data: &'a [u8],
+        limits: &'a Limits,
+    ) -> std::result::Result<Self, zip::result::ZipError> {
+        Ok(Self {
+            archive: zip::ZipArchive::new(Cursor::new(data))?,
+            budget: ZipBudget::new(limits),
+        })
+    }
+
+    /// The archive itself, for the package gate (`Limits::check_zip`).
+    ///
+    /// The gate reads the package once before a reader does; those reads are
+    /// the gate's own, not content the reader keeps, so they are not charged.
+    pub fn archive_mut(&mut self) -> &mut zip::ZipArchive<Cursor<&'a [u8]>> {
+        &mut self.archive
+    }
+
+    /// Read the entry called `name`, charged to the package's budget.
+    ///
+    /// `None` when the entry is absent or the budget refuses it — the same
+    /// reading a reader has always had for a part it cannot use.
+    pub fn read_name(&mut self, name: &str) -> Option<Vec<u8>> {
+        let mut file = self.archive.by_name(name).ok()?;
+        read_zip_entry(&mut file, name, &mut self.budget).ok()
+    }
+
+    /// Read the entry at `index`, with the name it was stored under.
+    pub fn read_index(&mut self, index: usize) -> Option<(String, Vec<u8>)> {
+        let name = self.archive.by_index(index).ok()?.name().to_string();
+        let bytes = self.read_name(&name)?;
+        Some((name, bytes))
+    }
+
+    /// The bytes this package's reads have decoded so far.
+    pub fn decoded_bytes(&self) -> u64 {
+        self.budget.decoded_bytes()
+    }
+}
+
+impl<'a> Deref for Package<'a> {
+    type Target = zip::ZipArchive<Cursor<&'a [u8]>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.archive
+    }
+}
+
+impl<'a> DerefMut for Package<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.archive
+    }
 }
 
 /// Why an input was refused.
@@ -506,6 +759,10 @@ pub enum LimitError {
     ImageAllocTooLarge { actual: u64, limit: u64 },
     #[error("the image has {actual} frames; the limit is {limit}")]
     TooManyImageFrames { actual: usize, limit: usize },
+    #[error("the document produced {actual} blocks; the limit is {limit}")]
+    TooManyFlowBlocks { actual: usize, limit: usize },
+    #[error("LibreOffice wrote {actual} bytes for one document; the limit is {limit} bytes")]
+    BridgeOutputTooLarge { actual: u64, limit: u64 },
     #[error("parsing timed out after {elapsed:?} during {stage}; the limit is {limit:?}")]
     Timeout {
         stage: String,
@@ -569,6 +826,126 @@ mod tests {
                 limit: 1024
             }
         ));
+    }
+
+    #[test]
+    fn a_flow_document_over_its_block_budget_is_refused_by_name() {
+        let limits = Limits {
+            max_flow_blocks: 2,
+            ..Limits::default()
+        };
+        assert!(limits.check_flow_blocks(2).is_ok());
+        let error = limits.check_flow_blocks(3).unwrap_err();
+        assert!(matches!(
+            error,
+            LimitError::TooManyFlowBlocks {
+                actual: 3,
+                limit: 2
+            }
+        ));
+        assert!(error.to_string().contains("3 blocks"), "{error}");
+    }
+
+    #[test]
+    fn a_bridged_file_over_its_output_budget_is_refused_by_name() {
+        let limits = Limits {
+            max_bridge_output_bytes: 1024,
+            ..Limits::default()
+        };
+        assert!(limits.check_bridge_output(1024).is_ok());
+        let error = limits.check_bridge_output(1025).unwrap_err();
+        assert!(matches!(
+            error,
+            LimitError::BridgeOutputTooLarge {
+                actual: 1025,
+                limit: 1024
+            }
+        ));
+        assert!(error.to_string().contains("1025"), "{error}");
+    }
+
+    #[test]
+    fn an_ocr_deadline_is_measured_against_its_own_budget() {
+        let limits = Limits {
+            ocr_timeout: Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = limits
+            .ocr_deadline()
+            .check("recognising a page")
+            .unwrap_err();
+        assert!(matches!(error, LimitError::Timeout { .. }));
+        assert!(error.to_string().contains("recognising a page"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_entry_budget_governs_a_zip_read() {
+        let limits = Limits {
+            max_zip_entry_bytes: 8,
+            ..Limits::default()
+        };
+        let mut budget = ZipBudget::new(&limits);
+        let error = read_zip_entry(&mut Cursor::new(vec![b'x'; 16]), "a.xml", &mut budget)
+            .expect_err("the entry is twice the ceiling");
+        assert!(
+            matches!(error, LimitError::ZipEntryTooLarge { limit: 8, .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("a.xml"), "{error}");
+        assert_eq!(budget.decoded_bytes(), 0, "a refused read is not counted");
+    }
+
+    #[test]
+    fn a_package_total_governs_the_reads_that_follow() {
+        let limits = Limits {
+            max_zip_entry_bytes: 64,
+            max_zip_total_bytes: 100,
+            ..Limits::default()
+        };
+        let mut budget = ZipBudget::new(&limits);
+        let first = read_zip_entry(&mut Cursor::new(vec![b'x'; 60]), "a.xml", &mut budget)
+            .expect("under both budgets");
+        assert_eq!(first.len(), 60);
+        assert_eq!(budget.decoded_bytes(), 60);
+        assert_eq!(budget.entry_ceiling(), 40, "what is left of the package");
+
+        let error = read_zip_entry(&mut Cursor::new(vec![b'x'; 60]), "b.xml", &mut budget)
+            .expect_err("the second entry would pass the package total");
+        assert!(
+            matches!(error, LimitError::ZipTotalTooLarge { limit: 100, .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("limit is 100 bytes"), "{error}");
+        assert_eq!(budget.decoded_bytes(), 60);
+    }
+
+    #[test]
+    fn a_guard_enforces_what_its_budget_says_and_an_unbudgeted_one_refuses_nothing() {
+        let limits = Limits {
+            max_input_bytes: 4,
+            max_flow_blocks: 1,
+            timeout: Duration::ZERO,
+            ..Limits::default()
+        };
+        let guard = limits.guard();
+        assert!(matches!(
+            guard.check_input(5),
+            Err(LimitError::InputTooLarge { actual: 5, .. })
+        ));
+        assert!(matches!(
+            guard.check_flow_blocks(2),
+            Err(LimitError::TooManyFlowBlocks { actual: 2, .. })
+        ));
+        assert!(matches!(
+            guard.check("reading a block"),
+            Err(LimitError::Timeout { .. })
+        ));
+
+        let guard = Guard::unbudgeted();
+        assert!(!guard.is_budgeted());
+        assert!(guard.check_input(usize::MAX).is_ok());
+        assert!(guard.check_flow_blocks(usize::MAX).is_ok());
+        assert!(guard.check("reading a block").is_ok());
     }
 
     #[test]

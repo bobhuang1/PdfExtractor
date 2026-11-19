@@ -61,19 +61,32 @@
 //! the next candidate, so an embedded picture survives its own syntax.
 
 use crate::{decode, Block, TableCell, TableGrid, TextDocument};
+use pdfextractor_limits::{Guard, Limits, Result};
 
 /// Parse an HTML document into blocks.
 pub fn parse(bytes: &[u8]) -> TextDocument {
+    parse_with_guard(bytes, &Guard::unbudgeted()).expect("a guard with no budget refuses nothing")
+}
+
+/// Parse an HTML document under `budget`.
+pub fn parse_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_with_guard(bytes, &budget.guard())
+}
+
+fn parse_with_guard(bytes: &[u8], guard: &Guard<'_>) -> Result<TextDocument> {
+    guard.check_input(bytes.len())?;
     let chars: Vec<char> = decode(bytes).chars().collect();
     let mut state = State::default();
-    state.run(&chars);
-    TextDocument {
+    state.run(&chars, guard)?;
+    let doc = TextDocument {
         items: state.items,
         description: state.description,
         canonical: state.canonical,
         social: state.social,
         ..Default::default()
-    }
+    };
+    guard.check_flow_blocks(crate::flow_units(&doc.items))?;
+    Ok(doc)
 }
 
 struct State {
@@ -200,9 +213,12 @@ impl Default for State {
 }
 
 impl State {
-    fn run(&mut self, chars: &[char]) {
+    fn run(&mut self, chars: &[char], guard: &Guard<'_>) -> Result<()> {
         let mut i = 0usize;
         while i < chars.len() {
+            if i.is_multiple_of(65536) {
+                guard.check("reading HTML")?;
+            }
             if chars[i] == '<' {
                 // Comment. The writers mark group boundaries with one, and
                 // those come back as the groups they stood for; every other
@@ -275,6 +291,7 @@ impl State {
             }
         }
         self.finish_head_title();
+        Ok(())
     }
 
     /// Put the head's title on the document when the body never stated one.
@@ -1530,6 +1547,45 @@ fn resolve_entity(entity: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A caller-supplied block budget is enforced while the markup is walked,
+    /// so a page that expands past it is refused rather than returned in part.
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let budget = Limits {
+            max_flow_blocks: 1,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"<p>one</p><p>two</p>", &budget)
+            .expect_err("the page has two paragraphs");
+        assert!(error.to_string().contains("2 blocks"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
+    }
+
+    /// The size is checked before the markup is walked, so a page over the
+    /// input budget is refused by name rather than parsed.
+    #[test]
+    fn a_custom_input_budget_is_enforced() {
+        let budget = Limits {
+            max_input_bytes: 4,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"<p>one</p>", &budget)
+            .expect_err("the page is longer than four bytes");
+        assert!(error.to_string().contains("limit is 4 bytes"), "{error}");
+    }
+
+    /// The markup walk checks the clock as it goes, so a spent deadline
+    /// refuses a page however small it is.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let budget = Limits {
+            timeout: std::time::Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"<p>one</p>", &budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
 
     fn texts(doc: &TextDocument) -> Vec<String> {
         doc.items

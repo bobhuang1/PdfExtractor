@@ -1,6 +1,6 @@
 use std::io::{Cursor, Write};
 
-use pdfextractor_limits::{LimitError, Limits};
+use pdfextractor_limits::{LimitError, Limits, Package};
 use zip::write::SimpleFileOptions;
 
 fn package(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
@@ -20,6 +20,43 @@ fn package(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
         writer.write_all(bytes).expect("write a ZIP entry");
     }
     writer.finish().expect("finish the ZIP").into_inner()
+}
+
+/// The caller's entry ceiling governs the read itself, not only the preflight:
+/// a part over it is not decoded at all, and nothing is charged for it.
+#[test]
+fn a_custom_entry_budget_governs_the_actual_read() {
+    let data = package(&[("word/document.xml", b"<document/>", false)]);
+    let limits = Limits {
+        max_zip_entry_bytes: 4,
+        ..Limits::default()
+    };
+    let mut archive = Package::new(&data, &limits).expect("a ZIP");
+    assert!(
+        archive.read_name("word/document.xml").is_none(),
+        "a part over the caller's ceiling is not read"
+    );
+    assert_eq!(archive.decoded_bytes(), 0);
+}
+
+/// The package total is charged as parts are read, so a package of many parts
+/// cannot expand past it even when every part is under its own ceiling.
+#[test]
+fn a_package_total_stops_the_reads_after_it_is_spent() {
+    let data = package(&[("a.xml", b"<a/>", false), ("b.xml", b"<b/>", false)]);
+    let limits = Limits {
+        max_zip_total_bytes: 4,
+        ..Limits::default()
+    };
+    let mut archive = Package::new(&data, &limits).expect("a ZIP");
+    let first = archive.read_name("a.xml").expect("the first part fits");
+    assert_eq!(first.len(), 4);
+    assert_eq!(archive.decoded_bytes(), 4);
+    assert!(
+        archive.read_name("b.xml").is_none(),
+        "the package total is already spent"
+    );
+    assert_eq!(archive.decoded_bytes(), 4, "a refused read is not counted");
 }
 
 #[test]

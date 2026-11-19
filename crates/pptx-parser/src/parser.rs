@@ -18,7 +18,6 @@ use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::Cursor;
 // A shape the slide draws itself — an autoshape, a connector, a group, a text
 // box with a fill — has no image part behind it. The painter that draws a Word
 // shape draws it too: the markup is the same DrawingML under either prefix.
@@ -202,9 +201,11 @@ impl PptxDocument {
     /// Read a PPTX under an explicit input, ZIP, XML and page budget.
     pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
         budget.check_input(data.len())?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not a PPTX (ZIP) package: {e}"))?;
-        budget.check_zip(&mut archive)?;
+        budget.check_zip(archive.archive_mut())?;
 
         let presentation = read_part(&mut archive, "ppt/presentation.xml")
             .context("the package has no ppt/presentation.xml")?;
@@ -252,6 +253,7 @@ impl PptxDocument {
 
         let mut slides = Vec::with_capacity(slide_parts.len());
         for (index, part) in slide_parts.iter().enumerate() {
+            guard.check("reading a PPTX slide")?;
             let bytes = read_part(&mut archive, part)
                 .with_context(|| format!("slide {} has no part at {part}", index + 1))?;
             let slide = Node::parse(&bytes).with_context(|| format!("malformed {part}"))?;
@@ -291,14 +293,13 @@ impl PptxDocument {
 
 // --- the package ----------------------------------------------------------
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    limits::read_zip_entry(&mut file).ok()
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
 /// Every `ppt/slides/slideN.xml` in the package, in numeric order — the
 /// fallback for a package whose presentation part names no slides.
-fn enumerate_slides(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> {
+fn enumerate_slides(archive: &mut limits::Package<'_>) -> Vec<String> {
     let mut parts: Vec<(u32, String)> = Vec::new();
     for index in 0..archive.len() {
         let Ok(file) = archive.by_index(index) else {
@@ -321,20 +322,17 @@ fn enumerate_slides(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String>
 
 /// Snapshot every part under `prefix`, so walking a slide does not need the
 /// archive open behind it: the media a slide shows and the charts it draws.
-fn read_parts(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    prefix: &str,
-) -> HashMap<String, Vec<u8>> {
+fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let name = match archive.by_index(index) {
+            Ok(file) => file.name().to_string(),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
         if !name.starts_with(prefix) {
             continue;
         }
-        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
+        if let Some(buffer) = archive.read_name(&name) {
             parts.insert(name, buffer);
         }
     }
@@ -361,7 +359,7 @@ impl Relationship {
 }
 
 fn read_relationships(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     part: &str,
 ) -> Result<HashMap<String, Relationship>> {
     let path = rels_path(part);
@@ -429,7 +427,7 @@ fn resolve_target(part: &str, target: &str) -> String {
 /// The authors part is reached through the presentation's own relationships,
 /// like every other part, and a deck with no such part simply has no names.
 fn read_comment_authors(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     presentation_rels: &HashMap<String, Relationship>,
 ) -> HashMap<String, (Option<String>, Option<String>)> {
     let Some(part) = presentation_rels
@@ -470,7 +468,7 @@ fn read_comment_authors(
 /// and the whole thing trimmed. Docling's own PPTX backend records exactly that
 /// string, so this is what the two readings can be held to.
 fn read_notes(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     slide_rels: &HashMap<String, Relationship>,
 ) -> Option<String> {
     let part = slide_rels
@@ -524,7 +522,7 @@ fn paragraph_text(paragraph: &Node) -> String {
 /// which is the slide's 0-based index — Docling's own fallback, kept so the two
 /// readings name a comment's group the same way.
 fn read_comments(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     slide_rels: &HashMap<String, Relationship>,
     authors: &HashMap<String, (Option<String>, Option<String>)>,
     slide_index: usize,
@@ -620,7 +618,7 @@ struct MasterStyle {
 impl SlideStyle {
     /// Load the layout and master behind one slide part.
     fn load(
-        archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+        archive: &mut limits::Package<'_>,
         rels: &HashMap<String, Relationship>,
         media: &HashMap<String, Vec<u8>>,
         width: f64,
@@ -1722,6 +1720,7 @@ fn truthy_attr(node: &Node, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::io::Write;
 
     const P: &str = r#"xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
@@ -1783,6 +1782,19 @@ mod tests {
         format!(r#"<Relationships {RELS}>{entries}</Relationships>"#)
     }
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&[("ppt/presentation.xml", presentation("", "9144000"))]);
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            PptxDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
     #[test]
     fn a_custom_zip_budget_is_enforced() {
         let pkg = package(&[("ppt/presentation.xml", presentation("", "9144000"))]);
@@ -1791,8 +1803,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = PptxDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the package has one entry");
+            .expect_err("the package has one entry");
         assert!(error.to_string().contains("entries"), "{error}");
     }
 
@@ -1818,8 +1829,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = PptxDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the deck has two slides");
+            .expect_err("the deck has two slides");
         assert!(error.to_string().contains("2 pages"), "{error}");
         assert!(error.to_string().contains("limit is 1"), "{error}");
     }

@@ -123,9 +123,11 @@ impl XlsxDocument {
     /// Read an XLSX under an explicit input, ZIP, XML and page budget.
     pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
         budget.check_input(data.len())?;
+        let guard = budget.guard();
+        guard.check("reading a package")?;
         let mut archive =
-            zip::ZipArchive::new(Cursor::new(data)).context("the XLSX is not a ZIP package")?;
-        budget.check_zip(&mut archive)?;
+            limits::Package::new(data, &budget).context("the XLSX is not a ZIP package")?;
+        budget.check_zip(archive.archive_mut())?;
 
         let workbook = read_part(&mut archive, "xl/workbook.xml")
             .context("the package has no xl/workbook.xml")?;
@@ -163,7 +165,7 @@ impl XlsxDocument {
             let bytes = read_part(&mut archive, &part)
                 .with_context(|| format!("worksheet {:?} has no part at {part}", sheet.name))?;
             let reader = SheetReader::new(&strings, &styles, book.date1904);
-            raw_sheets.push(reader.read(&bytes)?);
+            raw_sheets.push(reader.read(&bytes, &guard)?);
             parts.push((sheet.name.clone(), part, bytes));
         }
 
@@ -199,9 +201,8 @@ impl XlsxDocument {
 
 // --- the package ----------------------------------------------------------
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    limits::read_zip_entry(&mut file).ok()
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
 /// One `<sheet>` of `xl/workbook.xml`.
@@ -317,7 +318,7 @@ fn read_relationships_in(
 /// or unreadable contributes no comments, rather than losing the worksheet's
 /// cells with it.
 fn read_sheet_comments(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     sheet_part: &str,
     sheet: usize,
 ) -> Result<Vec<SheetAnnotation>> {
@@ -512,7 +513,7 @@ struct SheetDrawing {
 /// picture reaches the document with an image behind it, the chart as a picture
 /// with none: what it said is the data, not a picture of it.
 fn read_sheet_drawing(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     sheet_part: &str,
     sheet: &[u8],
     resolve: &dyn Fn(&str) -> Vec<String>,
@@ -694,11 +695,7 @@ fn worksheet_drawing(sheet: &[u8]) -> Option<String> {
 /// The part a relationship id names, read out of `part`'s own relationship
 /// part — the reference a sheet's `<drawing>` is, and the ones a drawing's
 /// anchors are.
-fn relationship_part(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    part: &str,
-    id: &str,
-) -> Option<String> {
+fn relationship_part(archive: &mut limits::Package<'_>, part: &str, id: &str) -> Option<String> {
     let bytes = read_part(archive, &rels_part(part))?;
     let relationships = read_relationships_in(&bytes, part_dir(part), None).ok()?;
     relationships.get(id).map(|(_, target)| target.to_string())
@@ -1335,10 +1332,17 @@ impl<'a> SheetReader<'a> {
         }
     }
 
-    fn read(mut self, bytes: &[u8]) -> Result<RawSheet> {
+    fn read(mut self, bytes: &[u8], guard: &limits::Guard<'_>) -> Result<RawSheet> {
         let mut reader = Reader::from_reader(Cursor::new(bytes));
         let mut buffer = Vec::new();
+        // A worksheet is the largest part a workbook has; its deadline is
+        // checked as it is walked rather than only between sheets.
+        let mut events = 0u64;
         loop {
+            events = events.wrapping_add(1);
+            if events.is_multiple_of(4096) {
+                guard.check("reading an XLSX worksheet")?;
+            }
             match reader.read_event_into(&mut buffer) {
                 Ok(Event::Start(e)) => {
                     let name = local_name(e.name().as_ref()).to_vec();
@@ -1689,6 +1693,19 @@ mod tests {
         format!(r#"<worksheet {NS}><sheetData>{body}</sheetData></worksheet>"#)
     }
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&[("xl/workbook.xml", workbook(""))]);
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            XlsxDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
     #[test]
     fn a_custom_zip_budget_is_enforced() {
         let pkg = package(&[("xl/workbook.xml", workbook(""))]);
@@ -1697,8 +1714,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = XlsxDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the package has one entry");
+            .expect_err("the package has one entry");
         assert!(error.to_string().contains("entries"), "{error}");
     }
 
@@ -1715,8 +1731,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = XlsxDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the workbook has two sheets");
+            .expect_err("the workbook has two sheets");
         assert!(error.to_string().contains("2 pages"), "{error}");
         assert!(error.to_string().contains("limit is 1"), "{error}");
     }

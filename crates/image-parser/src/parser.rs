@@ -292,8 +292,13 @@ pub fn gif_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPicture
     let frames = decoder
         .into_frames()
         .take(limits.max_image_frames.saturating_add(1));
+    // A frame stack is a page per frame, and each frame is decoded and encoded
+    // on its own: the deadline is checked between them, so a stack that is
+    // inside the frame budget but too slow to read is refused rather than run.
+    let deadline = limits.deadline();
     let mut pictures = Vec::new();
     for frame in frames {
+        deadline.check("decoding a GIF frame")?;
         let Ok(frame) = frame else {
             return Ok(Vec::new());
         };
@@ -359,8 +364,11 @@ pub fn webp_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPictur
     let frames = decoder
         .into_frames()
         .take(limits.max_image_frames.saturating_add(1));
+    // The deadline is checked between frames, as it is for a GIF.
+    let deadline = limits.deadline();
     let mut pictures = Vec::new();
     for frame in frames {
+        deadline.check("decoding a WebP frame")?;
         let Ok(frame) = frame else {
             return Ok(Vec::new());
         };
@@ -438,8 +446,13 @@ pub fn tiff_frames_checked(data: &[u8], limits: &Limits) -> Result<Vec<PngPictur
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
         return Ok(Vec::new());
     };
+    // One directory is one page, decoded and encoded alone: a batch of sheets
+    // that is inside the frame budget but too slow to read is refused between
+    // pages rather than allowed to run on.
+    let deadline = limits.deadline();
     let mut pages = Vec::new();
     loop {
+        deadline.check("decoding a TIFF page")?;
         if let Some((width, height, rgba)) = tiff_page(&mut decoder, limits)? {
             if pages.len() >= limits.max_image_frames {
                 return Err(LimitError::TooManyImageFrames {

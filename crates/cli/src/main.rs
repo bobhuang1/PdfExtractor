@@ -18,7 +18,7 @@ use clap::{Parser, ValueEnum, ValueHint};
 use pdfextractor_core::{
     DocumentBuilder, GridCell, GridTable, Origin, PictureData, Ref, TextLabel,
 };
-use pdfextractor_formats::{bridge, detect, is_bridged, BridgeTarget, Format};
+use pdfextractor_formats::{bridge_with_limits, detect, is_bridged, BridgeTarget, Format};
 use pdfextractor_json_exporter::export_to_file;
 use pdfextractor_layout::Span as LayoutSpan;
 use pdfextractor_ocr_engine::QuarterTurn;
@@ -214,6 +214,25 @@ struct Args {
     )]
     text_dehyphenate: bool,
 
+    /// The largest input a run will read, in bytes (default 268435456). A file
+    /// over it is refused by the shared budgets, not read.
+    #[arg(long, value_name = "N")]
+    max_input_bytes: Option<u64>,
+
+    /// The most pages, sheets, slides or frames one document may have (default
+    /// 2000). A document over it is refused by the shared budgets.
+    #[arg(long, value_name = "N")]
+    max_pages: Option<usize>,
+
+    /// The largest image grid a picture may have, in pixels (default 100000000)
+    #[arg(long, value_name = "N")]
+    max_image_pixels: Option<u64>,
+
+    /// The wall-clock budget for one document's reading, in seconds (default
+    /// 30). A read that outlives it is refused rather than finished
+    #[arg(long, value_name = "SECONDS")]
+    timeout: Option<f64>,
+
     /// Include the notes layer — a deck's speaker notes and comments — in the
     /// Markdown, HTML and text outputs. Off, those three are a reading of the
     /// slides; JSON and YAML always carry the whole document
@@ -325,7 +344,63 @@ struct Args {
 
 const MAX_PARALLEL: usize = 256;
 
+/// Exit code for a document the shared budgets refused, as opposed to one that
+/// could not be read: a caller that retries with a larger budget needs to tell
+/// the two apart without parsing the message.
+const EXIT_LIMIT_REFUSED: i32 = 3;
+
+/// The budgets this run is held to, set once from the command line.
+static BUDGETS: std::sync::OnceLock<pdfextractor_limits::Limits> = std::sync::OnceLock::new();
+
+/// The shared budgets this run was asked for.
+fn budgets() -> pdfextractor_limits::Limits {
+    BUDGETS.get().cloned().unwrap_or_default()
+}
+
+/// Apply `--max-input-bytes`, `--max-pages`, `--max-image-pixels` and
+/// `--timeout` to the shared defaults before anything is read, so the PDF
+/// reader, the packages, the flow formats, `.doc` and the LibreOffice bridge
+/// are all held to one value.
+fn install_budgets(args: &Args) {
+    let mut limits = budgets();
+    if let Some(bytes) = args.max_input_bytes {
+        limits.max_input_bytes = bytes;
+    }
+    if let Some(pages) = args.max_pages {
+        limits.max_pages = pages;
+    }
+    if let Some(pixels) = args.max_image_pixels {
+        limits.max_image_pixels = pixels;
+    }
+    if let Some(seconds) = args.timeout {
+        limits.timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
+    }
+    let _ = BUDGETS.set(limits);
+}
+
+/// Whether `error` is a budget refusal, at any depth of its context.
+fn is_limit_refusal(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<pdfextractor_limits::LimitError>()
+            .is_some()
+    })
+}
+
 fn main() -> anyhow::Result<()> {
+    match run() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if is_limit_refusal(&error) {
+                eprintln!("error: {error:#}");
+                std::process::exit(EXIT_LIMIT_REFUSED);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // Log records go to stderr, not the default stdout: stdout carries the
     // `--progress` records, where a stray line of prose would be read as a
     // malformed record by whatever is streaming the run.
@@ -335,6 +410,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    install_budgets(&args);
 
     // A consumer asking what this build can take should not have to hold an
     // input path, run a conversion, or parse help text or a refusal message:
@@ -557,6 +633,20 @@ fn main() -> anyhow::Result<()> {
     };
 
     if failures > 0 {
+        // A refusal is the budgets saying no, not a file that cannot be read:
+        // when that is the only thing that went wrong, the run says so in its
+        // exit code as well as in the message.
+        let all_refused = results
+            .iter()
+            .filter_map(|(_, result)| result.as_ref().err())
+            .all(is_limit_refusal);
+        if all_refused {
+            eprintln!(
+                "{failures} of {} document(s) were refused by the shared budgets",
+                results.len()
+            );
+            std::process::exit(EXIT_LIMIT_REFUSED);
+        }
         anyhow::bail!("{failures} of {} document(s) failed", results.len());
     }
     if !refused.is_empty() {
@@ -609,8 +699,7 @@ fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
         }
         let metadata = std::fs::metadata(path)
             .with_context(|| format!("read the size of {}", path.display()))?;
-        pdfextractor_limits::Limits::default()
-            .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+        budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     }
 
     let family = match (detect(old)?, detect(new)?) {
@@ -768,6 +857,7 @@ fn announce(
                         "total": total,
                         "input": input.display().to_string(),
                         "ok": false,
+                        "error_kind": if is_limit_refusal(&err) { "limit" } else { "error" },
                         "error": format!("{err:#}"),
                     })
                 );
@@ -1295,8 +1385,7 @@ fn convert_one(
 fn read_input(path: &Path) -> anyhow::Result<Vec<u8>> {
     let metadata =
         std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
-    pdfextractor_limits::Limits::default()
-        .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     std::fs::read(path).with_context(|| format!("read {}", path.display()))
 }
 
@@ -1319,8 +1408,7 @@ fn build_document(
         .unwrap_or_default();
     let metadata =
         std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
-    pdfextractor_limits::Limits::default()
-        .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     if !is_supported_extension(&ext) {
         // A picture the shared table carries but this reader cannot page is not
         // an unknown format, and the message says so rather than leaving the
@@ -1448,7 +1536,12 @@ fn build_document(
         // of the file the user handed over.
         Format::Doc => {
             note_flow_format(args.preview, path);
-            match bridge(path, BridgeTarget::Docx, "a legacy Word document") {
+            match bridge_with_limits(
+                path,
+                BridgeTarget::Docx,
+                "a legacy Word document",
+                &budgets(),
+            ) {
                 Ok(bridged) => {
                     tracing::info!(
                         "{}: a legacy Word document, read through LibreOffice as docx",
@@ -1498,7 +1591,7 @@ fn build_document(
                 }
                 _ => note_flow_format(args.preview, path),
             }
-            let bridged = bridge(path, target, label)?;
+            let bridged = bridge_with_limits(path, target, label, &budgets())?;
             tracing::info!(
                 "{}: {label}, read through LibreOffice as {}",
                 path.display(),
@@ -1770,7 +1863,11 @@ fn convert_pdf(
     preview_dpi: u32,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = PdfDocument::parse(&data)?;
+    // Recognition runs after parsing and takes seconds a page where parsing
+    // takes milliseconds, so it is measured against its own budget. The
+    // deadline is checked before each picture is recognised.
+    let ocr_deadline = budgets().ocr_deadline();
+    let parsed = PdfDocument::parse_with_limits(&data, budgets())?;
     // A ciphered file is refused here, by name, rather than read as though its
     // streams were plain: every string and stream in it is encrypted under a key
     // derived from the password, so what came out unread would be noise in a
@@ -1932,6 +2029,7 @@ fn convert_pdf(
             let detect_sideways = page.rotation == 0 && page.spans.is_empty();
 
             for (data, width, height, box_) in images {
+                ocr_deadline.check("recognising a page")?;
                 let turn = if detect_sideways && picture_is_page(box_, page.width, page.height) {
                     match engine.detect_upright(data) {
                         Ok(QuarterTurn::AsStored) => QuarterTurn::AsStored,
@@ -2334,7 +2432,7 @@ fn convert_docx(
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -2396,7 +2494,7 @@ fn convert_odt(
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -2536,7 +2634,7 @@ fn convert_xlsx(
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes_with_limits(&data, budgets())?;
     convert_workbook(
         &parsed.sheets,
         &parsed.annotations,
@@ -2559,7 +2657,7 @@ fn convert_ods(
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes_with_limits(&data, budgets())?;
     convert_workbook(
         &parsed.sheets,
         &parsed.annotations,
@@ -2942,7 +3040,7 @@ fn convert_pptx(
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let total = parsed.slides.len();
     let slides: Vec<_> = parsed
@@ -3190,7 +3288,7 @@ fn convert_odp(
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -3599,18 +3697,9 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // TIFF's directories are separate sheets that need not be the same size, so
     // each page is measured from its own grid. One frame is a still image, so
     // only a file that really holds several is read as several pages.
-    let gif_frames = pdfextractor_image_parser::gif_frames_checked(
-        &data,
-        &pdfextractor_limits::Limits::default(),
-    )?;
-    let webp_frames = pdfextractor_image_parser::webp_frames_checked(
-        &data,
-        &pdfextractor_limits::Limits::default(),
-    )?;
-    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(
-        &data,
-        &pdfextractor_limits::Limits::default(),
-    )?;
+    let gif_frames = pdfextractor_image_parser::gif_frames_checked(&data, &budgets())?;
+    let webp_frames = pdfextractor_image_parser::webp_frames_checked(&data, &budgets())?;
+    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(&data, &budgets())?;
     let animation: &[pdfextractor_image_parser::PngPicture] = if gif_frames.len() > 1 {
         &gif_frames
     } else if webp_frames.len() > 1 {
@@ -3824,7 +3913,11 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // the same estimate the PDF path uses for an OCR line. Each page is scaled
     // against its own grid: a GIF's frames share its logical screen, a TIFF's
     // sheets are each their own size.
+    // Frames are recognised one at a time; the deadline is checked before each,
+    // so a stack of them cannot run past the OCR budget.
+    let ocr_deadline = budgets().ocr_deadline();
     for (page_no, pixels, pixel_width, pixel_height, width, height) in &page_pixels {
+        ocr_deadline.check("recognising a page")?;
         let page = *page_no;
         let (pixel_width, pixel_height) = (*pixel_width, *pixel_height);
         let (width, height) = (*width, *height);
@@ -3906,7 +3999,7 @@ fn convert_doc(
     _output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
-    let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes(&data)?;
+    let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -3962,13 +4055,18 @@ fn convert_text(
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
+    // A flow file is untrusted input like any other: the shared budgets bound
+    // the blocks it may expand into and the time the walk through it may take.
+    let budget = budgets();
     let parsed = match ext {
-        "rtf" => pdfextractor_text_parser::rtf::parse(&data),
-        "html" | "htm" => pdfextractor_text_parser::html::parse(&data),
-        "md" | "markdown" => pdfextractor_text_parser::text::parse_markdown(&data),
-        "csv" => pdfextractor_text_parser::csv::parse_csv(&data),
-        "tsv" => pdfextractor_text_parser::csv::parse_tsv(&data),
-        _ => pdfextractor_text_parser::text::parse_plain(&data),
+        "rtf" => pdfextractor_text_parser::rtf::parse_with_limits(&data, &budget)?,
+        "html" | "htm" => pdfextractor_text_parser::html::parse_with_limits(&data, &budget)?,
+        "md" | "markdown" => {
+            pdfextractor_text_parser::text::parse_markdown_with_limits(&data, &budget)?
+        }
+        "csv" => pdfextractor_text_parser::csv::parse_csv_with_limits(&data, &budget)?,
+        "tsv" => pdfextractor_text_parser::csv::parse_tsv_with_limits(&data, &budget)?,
+        _ => pdfextractor_text_parser::text::parse_plain_with_limits(&data, &budget)?,
     };
 
     let name = path

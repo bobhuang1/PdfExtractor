@@ -29,9 +29,15 @@
 //! or hold one the gate leaves out, on nothing but the name it was saved under.
 
 use anyhow::{bail, Context, Result};
+use pdfextractor_limits::{LimitError, Limits};
+use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+/// How often a running conversion is measured, while it runs.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// The MIME type a Works document is published under; WordPerfect's and the
 /// legacy Excel one are here for the same reason.
@@ -495,6 +501,22 @@ impl Bridged {
 /// `label` names the format in the failure, because "LibreOffice is not
 /// installed" is not useful without saying what needed it.
 pub fn bridge(input: &Path, target: BridgeTarget, label: &str) -> Result<Bridged> {
+    bridge_with_limits(input, target, label, &Limits::default())
+}
+
+/// Convert `input` with LibreOffice under `budget`.
+///
+/// The conversion is a program this tool did not write, running on a file it
+/// did not write, so it is held to the shared budgets: a wall-clock ceiling and
+/// a ceiling on the file it hands back, both checked while it runs (a
+/// conversion that outlives its budget is killed rather than waited on) and
+/// once it has finished.
+pub fn bridge_with_limits(
+    input: &Path,
+    target: BridgeTarget,
+    label: &str,
+    budget: &Limits,
+) -> Result<Bridged> {
     let Some(soffice) = libreoffice() else {
         bail!(
             "this is {label}; reading it needs LibreOffice (`soffice`), which is not on PATH — \
@@ -503,6 +525,13 @@ pub fn bridge(input: &Path, target: BridgeTarget, label: &str) -> Result<Bridged
         );
     };
 
+    // The input is read by another program, so its size is checked here: the
+    // reader that would have done it downstream only sees what came back.
+    let input_bytes = std::fs::metadata(input)
+        .with_context(|| format!("read the size of {}", input.display()))?
+        .len();
+    budget.check_input(usize::try_from(input_bytes).unwrap_or(usize::MAX))?;
+
     let scratch = Scratch::new("bridge")?;
     let out = scratch.path.join("out");
     std::fs::create_dir_all(&out)?;
@@ -510,7 +539,18 @@ pub fn bridge(input: &Path, target: BridgeTarget, label: &str) -> Result<Bridged
     // default one locked, and a locked profile makes `--headless` exit without
     // converting anything.
     let profile = scratch.path.join("profile");
-    let output = Command::new(&soffice)
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    let produced = out.join(format!("{stem}.{}", target.extension()));
+
+    // LibreOffice's diagnostics go to a file rather than a pipe: a program
+    // that talks a lot must not block on a pipe nobody is draining while the
+    // budget is being watched.
+    let log_path = scratch.path.join("libreoffice.log");
+    let log = File::create(&log_path)?;
+    let mut child = Command::new(&soffice)
         .arg("--headless")
         .arg("--norestore")
         .arg(format!(
@@ -522,31 +562,66 @@ pub fn bridge(input: &Path, target: BridgeTarget, label: &str) -> Result<Bridged
         .arg("--outdir")
         .arg(&out)
         .arg(input)
-        .output()
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
+        .spawn()
         .with_context(|| format!("run {}", soffice.display()))?;
-
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("document");
-    let produced = out.join(format!("{stem}.{}", target.extension()));
-    if !output.status.success() || !produced.is_file() {
-        // LibreOffice's last stderr line is the one that names the problem.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr
+    let status = wait_for_bridge(&mut child, &produced, budget)
+        .with_context(|| format!("run {}", soffice.display()))?;
+    if !status.success() || !produced.is_file() {
+        // LibreOffice's last log line is the one that names the problem.
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let detail = log
             .lines()
             .rev()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("no diagnostic");
-        bail!(
-            "LibreOffice could not read {label} ({}): {detail}",
-            output.status
-        );
+        bail!("LibreOffice could not read {label} ({status}): {detail}");
     }
+    let size = std::fs::metadata(&produced)
+        .with_context(|| format!("measure {}", produced.display()))?
+        .len();
+    budget.check_bridge_output(size)?;
     Ok(Bridged {
         path: produced,
         _scratch: scratch,
     })
+}
+
+/// Wait for a bridge conversion to finish, killing it when it outlives the
+/// time budget or writes more than the output budget allows.
+///
+/// `produced` is the file LibreOffice is expected to write. It is measured
+/// while the child runs, so a conversion that expands a small input without
+/// bound is stopped rather than discovered afterwards.
+fn wait_for_bridge(child: &mut Child, produced: &Path, budget: &Limits) -> Result<ExitStatus> {
+    let deadline = budget.bridge_deadline();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if let Ok(metadata) = std::fs::metadata(produced) {
+            if metadata.len() > budget.max_bridge_output_bytes {
+                stop_bridge(child);
+                return Err(LimitError::BridgeOutputTooLarge {
+                    actual: metadata.len(),
+                    limit: budget.max_bridge_output_bytes,
+                }
+                .into());
+            }
+        }
+        if let Err(error) = deadline.check("the LibreOffice bridge") {
+            stop_bridge(child);
+            return Err(error.into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Kill a bridge conversion and reap it, so nothing is left running.
+fn stop_bridge(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// A directory under the system's temporary area, removed on drop.
@@ -574,6 +649,101 @@ impl Drop for Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A conversion that outlives its budget is killed rather than waited on.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridge_conversion_over_its_time_budget_is_killed() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a sleeping child");
+        let budget = Limits {
+            bridge_timeout: Duration::ZERO,
+            ..Limits::default()
+        };
+        let started = std::time::Instant::now();
+        let error = wait_for_bridge(
+            &mut child,
+            Path::new("/nonexistent/bridge/out.docx"),
+            &budget,
+        )
+        .expect_err("a spent budget kills the conversion");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "waited {:?} for a killed child",
+            started.elapsed()
+        );
+        assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(
+            child.try_wait().expect("reap the child").is_some(),
+            "the conversion was left running"
+        );
+    }
+
+    /// A conversion that writes more than the output budget is stopped while it
+    /// runs, not measured after it has finished.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridge_output_over_its_budget_is_refused_while_it_runs() {
+        let dir = std::env::temp_dir().join(format!("pdfe-bridge-budget-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("make the scratch directory");
+        let produced = dir.join("out.docx");
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "printf 'far too big' > '{}'; sleep 30",
+                produced.display()
+            ))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a writing child");
+        let budget = Limits {
+            max_bridge_output_bytes: 4,
+            bridge_timeout: Duration::from_secs(20),
+            ..Limits::default()
+        };
+        let error = wait_for_bridge(&mut child, &produced, &budget)
+            .expect_err("eleven bytes are over a four-byte budget");
+        assert!(error.to_string().contains("limit is 4 bytes"), "{error}");
+        assert!(
+            child.try_wait().expect("reap the child").is_some(),
+            "the conversion was left running"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bridge is watched while it runs: a conversion that outlives its time
+    /// budget is killed and reaped rather than waited out.
+    #[test]
+    fn a_bridge_that_outlives_its_budget_is_stopped() {
+        let dir = std::env::temp_dir().join(format!("pdfe-bridge-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("make the scratch directory");
+        let produced = dir.join("out.docx");
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a sleeping child");
+        let budget = Limits {
+            bridge_timeout: Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = wait_for_bridge(&mut child, &produced, &budget)
+            .expect_err("the child outlives a zero budget");
+        assert!(error.to_string().contains("timed out"), "{error}");
+        assert!(
+            child.try_wait().expect("reap the child").is_some(),
+            "the conversion was left running"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn named(name: &str) -> PathBuf {
         PathBuf::from(name)

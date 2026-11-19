@@ -203,9 +203,11 @@ impl OdpDocument {
     /// Read an ODP under an explicit input, ZIP, XML and page budget.
     pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
         budget.check_input(data.len())?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
-        budget.check_zip(&mut archive)?;
+        budget.check_zip(archive.archive_mut())?;
 
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
@@ -234,6 +236,7 @@ impl OdpDocument {
         let mut slides = Vec::new();
         let mut page_size = None;
         for (index, page) in presentation.children_named("page").enumerate() {
+            guard.check("reading an ODP page")?;
             let size = page_size_for(page, &layouts);
             page_size.get_or_insert(size);
 
@@ -293,25 +296,21 @@ impl OdpDocument {
     }
 }
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    limits::read_zip_entry(&mut file).ok()
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
-fn read_parts(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    prefix: &str,
-) -> HashMap<String, Vec<u8>> {
+fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let (name, is_dir) = match archive.by_index(index) {
+            Ok(file) => (file.name().to_string(), file.is_dir()),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
-        if file.is_dir() || !name.starts_with(prefix) {
+        if is_dir || !name.starts_with(prefix) {
             continue;
         }
-        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
+        if let Some(buffer) = archive.read_name(&name) {
             parts.insert(name, buffer);
         }
     }
@@ -320,21 +319,22 @@ fn read_parts(
 
 /// The embedded objects a package holds, keyed by the directory a
 /// `draw:object` names (`Object 1`). Each is the object's `content.xml`.
-fn read_object_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, Vec<u8>> {
+fn read_object_parts(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u8>> {
     let mut objects = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let name = match archive.by_index(index) {
+            Ok(file) => file.name().to_string(),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
         let Some(object) = name.strip_suffix("/content.xml") else {
             continue;
         };
+        let object = object.to_string();
         if !object.starts_with("Object ") {
             continue;
         }
-        if let Ok(buffer) = limits::read_zip_entry(&mut file) {
-            objects.insert(object.to_string(), buffer);
+        if let Some(buffer) = archive.read_name(&name) {
+            objects.insert(object, buffer);
         }
     }
     objects
@@ -1245,6 +1245,19 @@ mod tests {
         </table>
       </chart></body></document-content>"#;
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&[("content.xml", CONTENT.as_bytes())]);
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            OdpDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
     #[test]
     fn a_custom_zip_budget_is_enforced() {
         let pkg = package(&[("content.xml", CONTENT.as_bytes())]);
@@ -1253,8 +1266,7 @@ mod tests {
             ..pdfextractor_limits::Limits::default()
         };
         let error = OdpDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the package has one entry");
+            .expect_err("the package has one entry");
         assert!(error.to_string().contains("entries"), "{error}");
     }
 
@@ -1268,9 +1280,8 @@ mod tests {
             max_pages: 1,
             ..pdfextractor_limits::Limits::default()
         };
-        let error = OdpDocument::parse_bytes_with_limits(&pkg, budget)
-            .err()
-            .expect("the deck has two pages");
+        let error =
+            OdpDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deck has two pages");
         assert!(error.to_string().contains("2 pages"), "{error}");
         assert!(error.to_string().contains("limit is 1"), "{error}");
     }

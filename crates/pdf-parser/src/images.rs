@@ -28,15 +28,34 @@ impl PageImage {
 }
 
 /// Encode 8-bit grayscale samples as PNG.
+///
+/// The buffer is cut to the grid it describes: a PDF stream is not required to
+/// hold exactly `/Width` × `/Height` samples — a scan padded to a row boundary
+/// is common — and the PNG encoder asserts the exact length rather than
+/// returning an error, so an over-long buffer would abort the process instead of
+/// being read. A buffer shorter than the grid has no last rows to encode, so it
+/// is refused.
 pub fn encode_gray(width: u32, height: u32, samples: &[u8]) -> Option<Vec<u8>> {
-    let img = image::GrayImage::from_raw(width, height, samples.to_vec())?;
+    let len = grid_len(width, height, 1)?;
+    let img = image::GrayImage::from_raw(width, height, samples.get(..len)?.to_vec())?;
     encode(image::DynamicImage::ImageLuma8(img))
 }
 
 /// Encode 8-bit RGB samples as PNG.
+///
+/// Cut to the grid and refused when short, for the reason [`encode_gray`] gives.
 pub fn encode_rgb(width: u32, height: u32, samples: &[u8]) -> Option<Vec<u8>> {
-    let img = image::RgbImage::from_raw(width, height, samples.to_vec())?;
+    let len = grid_len(width, height, 3)?;
+    let img = image::RgbImage::from_raw(width, height, samples.get(..len)?.to_vec())?;
     encode(image::DynamicImage::ImageRgb8(img))
+}
+
+/// The samples a `width` × `height` grid of `channels` 8-bit components holds.
+fn grid_len(width: u32, height: u32, channels: usize) -> Option<usize> {
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(channels)
 }
 
 /// Encode 8-bit CMYK samples as PNG, converting to RGB.
@@ -541,5 +560,25 @@ mod tests {
     fn gray_encodes_to_png() {
         let png = encode_gray(2, 2, &[0, 128, 200, 255]).unwrap();
         assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    /// The PNG encoder asserts its buffer is exactly the grid, so a stream that
+    /// carried more samples than the image declares must be cut here rather
+    /// than reach the encoder (a fuzzed PDF took the process down that way).
+    #[test]
+    fn a_longer_sample_buffer_is_cut_to_the_grid() {
+        let png = encode_rgb(2, 2, &[7; 13]).expect("the first twelve samples encode");
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+        let png = encode_gray(2, 2, &[7; 5]).expect("the first four samples encode");
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+        let png = encode_rgb(2, 2, &[7; 12]).expect("exactly the grid encodes");
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn a_sample_buffer_shorter_than_the_grid_is_refused() {
+        assert!(encode_gray(2, 2, &[7; 3]).is_none());
+        assert!(encode_rgb(2, 2, &[7; 11]).is_none());
+        assert!(encode_rgb(u32::MAX, u32::MAX, &[7; 12]).is_none());
     }
 }

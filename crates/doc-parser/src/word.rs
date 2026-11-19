@@ -17,6 +17,7 @@
 //! tab-separated text rather than rebuilt as grids. See the crate docs.
 
 use anyhow::{bail, Context, Result};
+use pdfextractor_limits::Guard;
 
 use crate::cfb::CompoundFile;
 
@@ -68,6 +69,22 @@ impl DocDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_bytes_with_limits(data, pdfextractor_limits::Limits::default())
+    }
+
+    /// Read a legacy Word document under an explicit input, block and time
+    /// budget.
+    ///
+    /// The budget is checked before the container is opened (its directory can
+    /// name streams that are not there), as the character stream is walked, and
+    /// once the blocks are known.
+    pub fn parse_bytes_with_limits(
+        data: &[u8],
+        budget: pdfextractor_limits::Limits,
+    ) -> Result<Self> {
+        let guard = budget.guard();
+        guard.check_input(data.len())?;
+        guard.check("reading a legacy Word container")?;
         let compound =
             CompoundFile::open(data).context("not a legacy Word (.doc) OLE compound file")?;
         let word = compound
@@ -80,7 +97,8 @@ impl DocDocument {
             .with_context(|| format!("compound file has no {} stream", fib.table_stream()))?;
 
         let pieces = piece_table(&table, &fib)?;
-        let chars = text_in_range(&word, &pieces, 0, fib.ccp_text);
+        guard.check("reading a legacy Word piece table")?;
+        let chars = text_in_range(&word, &pieces, 0, fib.ccp_text, &guard)?;
 
         // The subdocuments that follow the body share its character stream:
         // footnotes (`ccpFtn`), then headers and footers (`ccpHdd`), then the
@@ -88,9 +106,12 @@ impl DocDocument {
         let after_footnotes = fib.ccp_text.saturating_add(fib.ccp_ftn);
         let header_start = after_footnotes;
         let header_end = header_start.saturating_add(fib.ccp_hdd);
-        let furniture = structure(&text_in_range(&word, &pieces, header_start, header_end));
+        let furniture = structure_checked(
+            &text_in_range(&word, &pieces, header_start, header_end, &guard)?,
+            &guard,
+        )?;
 
-        let mut items = structure(&chars);
+        let mut items = structure_checked(&chars, &guard)?;
         if fib.comments > 0 {
             let stories = text_in_range(
                 &word,
@@ -100,7 +121,8 @@ impl DocDocument {
                     .saturating_add(fib.ccp_mcr)
                     .saturating_add(fib.ccp_atn)
                     .saturating_add(fib.ccp_edn),
-            );
+                &guard,
+            )?;
             for comment in comment_stories(&stories, fib.comments as usize) {
                 items.push(DocItem::Text {
                     text: comment,
@@ -109,6 +131,7 @@ impl DocDocument {
             }
         }
 
+        guard.check_flow_blocks(items.len() + furniture.len())?;
         Ok(DocDocument {
             items,
             furniture,
@@ -140,6 +163,15 @@ const TAB: char = '\u{0009}';
 /// This is a pure function of the character stream so it can be tested against
 /// synthetic sequences for structures the corpus does not contain.
 fn structure(chars: &[char]) -> Vec<DocItem> {
+    structure_checked(chars, &Guard::unbudgeted()).expect("a guard with no budget refuses nothing")
+}
+
+/// [`structure`] under a budget: the walk is bounded in time, so a character
+/// stream that is one enormous paragraph cannot run past the deadline.
+fn structure_checked(
+    chars: &[char],
+    guard: &Guard<'_>,
+) -> pdfextractor_limits::Result<Vec<DocItem>> {
     let mut items = Vec::new();
     let mut text = String::new();
     let mut picture = false;
@@ -162,7 +194,10 @@ fn structure(chars: &[char]) -> Vec<DocItem> {
         *picture = false;
     };
 
-    for &c in chars {
+    for (index, &c) in chars.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            guard.check("reading a legacy Word character")?;
+        }
         match c {
             FIELD_BEGIN => fields.push(true),
             FIELD_SEPARATOR => {
@@ -193,7 +228,7 @@ fn structure(chars: &[char]) -> Vec<DocItem> {
         }
     }
     commit(&mut text, &mut picture);
-    items
+    Ok(items)
 }
 
 // --- Fib and the piece table ----------------------------------------------
@@ -311,9 +346,22 @@ struct Piece {
 /// The piece table covers the body *and* the subdocuments after it (footnotes,
 /// headers and footers, comments, endnotes) as one run of character positions,
 /// so any of them can be read from its position alone.
-fn text_in_range(word: &[u8], pieces: &[Piece], from: u32, to: u32) -> Vec<char> {
-    let mut chars = Vec::with_capacity(to.saturating_sub(from) as usize);
-    for piece in pieces {
+fn text_in_range(
+    word: &[u8],
+    pieces: &[Piece],
+    from: u32,
+    to: u32,
+    guard: &Guard<'_>,
+) -> pdfextractor_limits::Result<Vec<char>> {
+    // The Fib's counts are a claim: reserving what they say can ask for a
+    // multi-gigabyte vector before a byte is decoded, so the reservation is
+    // clamped to what the stream could hold.
+    let claimed = to.saturating_sub(from) as usize;
+    let mut chars = Vec::with_capacity(claimed.min(word.len()));
+    for (index, piece) in pieces.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            guard.check("reading a legacy Word piece")?;
+        }
         let piece_end = piece.cp + piece.ccp;
         if piece_end <= from {
             continue;
@@ -325,7 +373,7 @@ fn text_in_range(word: &[u8], pieces: &[Piece], from: u32, to: u32) -> Vec<char>
         let end = to.min(piece_end) - piece.cp;
         decode_piece(word, piece, start, end, &mut chars);
     }
-    chars
+    Ok(chars)
 }
 
 /// Parse the piece table (`Clx`) into the runs of the character stream.
@@ -489,6 +537,32 @@ fn le32(data: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Size is checked before the container is opened, so an oversized input
+    /// is refused by name rather than by a failing parse.
+    #[test]
+    fn a_custom_input_budget_is_enforced() {
+        let budget = pdfextractor_limits::Limits {
+            max_input_bytes: 4,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocDocument::parse_bytes_with_limits(b"\xd0\xcf\x11\xe0 longer", budget)
+            .expect_err("the input is longer than four bytes");
+        assert!(error.to_string().contains("limit is 4 bytes"), "{error}");
+    }
+
+    /// The container, piece table and character stream each check the clock, so
+    /// a spent deadline refuses the file before anything is opened.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocDocument::parse_bytes_with_limits(b"\xd0\xcf\x11\xe0", budget)
+            .expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
 
     fn text_of(items: &[DocItem]) -> String {
         items

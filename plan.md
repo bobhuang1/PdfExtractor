@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,207 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,245 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -348,6 +348,18 @@ pdf-extractor/
   or fails, and it is bounded (2,000 blocks a side, 2,000 rows, 300 characters a text) so
   a pathological document cannot hang the window. Exercised end to end by
   `--selftest <doc> --selftest-ref <reference>`
+- [x] Two-document **redline** mode for one PDF or DOCX (`--input new
+  --redline old`). **Done**: both versions are converted through the normal readers and
+  compared with the same `diff::compare_documents` alignment the Compare panel and the
+  `--compare` gate use, then written as one self-contained HTML report. A PDF is grouped
+  by the pages its provenance publishes — including `Page 3 → 5` for a move and removed
+  or added pages — with unchanged pages kept as context and their rows folded; a DOCX is
+  one labelled **Document flow** section because Word has no fixed pagination. Changed
+  rows are cut into words for display only, with `<del>`/`<ins>` on the old/new sides;
+  counts for changed, added, removed, placed and unchanged rows and the character share
+  head the page. Cross-family comparisons, directories, ambiguous conversion flags and a
+  report path that would overwrite an input are refused before conversion. Pinned by
+  `crates/cli/tests/redline_test.rs`.
 - [x] Installers/bundling: a `v*` tag builds and publishes them — `.deb` and
   `.AppImage` (Linux), `.msi` (Windows), `.dmg` (macOS) — with per-platform
   icons (`.ico`/`.icns` grown from the PNG), this build of the command line
@@ -366,6 +378,7 @@ pdf-extractor/
 
 ### Phase 10: Testing, Optimization, Docs (Ongoing)
 - [x] Golden test suite (input docs → expected Docling JSON) **Done**: `crates/cli/tests/docling_golden_test.rs` converts the corpus and the fixtures beside it, holds every output to the committed schema (`every_corpus_document_conforms_to_the_docling_schema`) and compares each with its reference — forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
+- [x] Fast local test selection and sharding **Done**: `scripts/test.sh` reads the files changed against `HEAD`/`--since`, maps them to crates through the workspace's path dependencies (including reverse closure), and runs only the affected lib/bin/integration/doc targets. A changed integration-test file selects its target; documentation changes select `documentation_test`; broad or unknown inputs select everything. `--path` and `--package` make editor-driven and one-crate runs explicit, and `--list` inspects them without executing anything. `--shard I/N` deals sorted selected targets round-robin; `--full --shard I/N` shards every target. The full release check stays explicit as `--full`, which is exactly `cargo test --workspace --locked`.
 - [ ] Performance tests with varied sizes
 - [ ] Cross-platform testing
 - [x] Error handling tests (malformed docs) **Done**: `cli_test` holds the inputs a run must refuse rather than crash on — `a_failed_document_appears_in_the_progress_stream` (a `.docx` that is not a package), `an_unsupported_file_errors`, `a_missing_input_errors`, `an_empty_directory_errors` and `a_refused_name_is_explained_by_the_files_bytes` — and each asserts the exit status and the reason, not merely that something failed.
@@ -383,20 +396,20 @@ at the end.*
 
 ### The gap, in one table
 
-| Capability | Docling (2.138) | Other converters | Mature PDF libs | Us (v0.1.0) |
+| Capability | Docling (2.138) | Other converters | Mature PDF libs | Us (v0.2.0-dev) |
 |---|---|---|---|---|
-| Export formats | 12 `--to` values (`md` **default**, `json`, `yaml`, `html`, `html_split_page`, `text`, `doctags`, `vtt`, `doclang`, `dclx`, `chunks`, `latex`) | Marker: md/html/json/chunks; MinerU: md/html/latex/docx/epub | `pdftotext`, `pdftohtml` | **JSON only** (the preview HTML is a debug overlay, not an export) |
+| Export formats | 12 `--to` values (`md` **default**, `json`, `yaml`, `html`, `html_split_page`, `text`, `doctags`, `vtt`, `doclang`, `dclx`, `chunks`, `latex`) | Marker: md/html/json/chunks; MinerU: md/html/latex/docx/epub | `pdftotext`, `pdftohtml` | **JSON, Markdown, HTML, text, YAML and chunks** (`--to` repeatable; JSON stays the default); the preview HTML is a debug overlay, not an export |
 | RAG chunks | `--to chunks`, hybrid + hierarchical chunkers, `--chunks-max-tokens` | Unstructured: by-title/page/similarity; Marker chunks | — | `--to chunks`: hierarchical + hybrid, `--chunks-max-tokens`/`--chunks-overlap-tokens`, provenance per chunk (a real `--chunks-tokenizer` file's own count, or the approximation by default) |
-| OCR languages | `--ocr-lang` comma list (engine codes or `iso:` BCP-47) | Surya: 91 languages | — | **hardcoded `eng`** |
-| OCR page modes | `--ocr-mode full_page/…`, `--psm` 0–13 | Marker `--force_ocr` / `--strip_existing_ocr` | — | `auto|always|never`, over embedded images only |
-| Rotation | engine OSD (Tesseract), olmOCR auto-rotation | | PyMuPDF page rotation | **`/Rotate` ignored** |
-| Scan clean-up | deskew/despeckle options in the pipeline | | | none |
-| Image codecs | via backends | | `pdfimages`: JPEG, **JBIG2, JPX, CCITT** + masks + Indexed/Separation | Flate + DCT only (a JP2's bytes pass through undecoded, and `image/jp2` cannot be named in an `ImageRef`) |
-| Page selection | `--page-range` | MinerU page groups | `pdftotext -f/-l` | none |
+| OCR languages | `--ocr-lang` comma list (engine codes or `iso:` BCP-47) | Surya: 91 languages | — | `--ocr-lang` takes a comma list (`eng,deu`), and a package's tessdata is used only when it carries every requested language |
+| OCR page modes | `--ocr-mode full_page/…`, `--psm` 0–13 | Marker `--force_ocr` / `--strip_existing_ocr` | — | `auto|always|never` and `--psm` 0–13; embedded images only, with no full-page rasterisation of vector pages yet |
+| Rotation | engine OSD (Tesseract), olmOCR auto-rotation | | PyMuPDF page rotation | `/Rotate` is applied to the page, boxes and OCR bitmap; EXIF orientation and OSD auto-upright handle untagged scans |
+| Scan clean-up | deskew/despeckle options in the pipeline | | | none yet — deskew/despeckle is still planned |
+| Image codecs | via backends | | `pdfimages`: JPEG, **JBIG2, JPX, CCITT** + masks + Indexed/Separation | Flate, DCT, JPX, **CCITT G3/G4 and JBIG2** are decoded; other picture encodings are transcoded to PNG |
+| Page selection | `--page-range` | MinerU page groups | `pdftotext -f/-l` | `--page-range` for PDF pages, image frames/TIFF directories, workbook sheets and presentation slides, keeping each page's original number |
 | Hyperlinks | schema carries it (`TextItem.hyperlink`; our own golden references contain it) | Marker links; MinerU locators | PyMuPDF links; pdfplumber annotations | PDF `/Link`, DOCX external `w:hyperlink`, HTML `a[href]` and Markdown `[text](url)` all read (internal PDF dests as `#page=N`) and re-emitted by the Markdown (`[text](url)`) and HTML (`<a href>`) writers, so a Markdown round trip keeps its links |
-| Outline / TOC | outlines used for heading-depth recovery | Marker TOC in metadata | PyMuPDF/PDFBox/PDF.js TOC | none |
-| Encrypted PDFs | `--pdf-password` (docling-parse) | pass-through where supported | passwords everywhere (PyMuPDF, PDFBox, PDF.js) | **no `/Encrypt` handling at all** |
-| Malformed PDFs | qpdf-based parser repairs | | MuPDF repairs, PDFBox lenient | no xref rebuild |
+| Outline / TOC | outlines used for heading-depth recovery | Marker TOC in metadata | PyMuPDF/PDFBox/PDF.js TOC | none yet — headings come from layout only |
+| Encrypted PDFs | `--pdf-password` (docling-parse) | pass-through where supported | passwords everywhere (PyMuPDF, PDFBox, PDF.js) | `/Encrypt` is recognised and the file refused by name; decryption and `--pdf-password` are still missing |
+| Malformed PDFs | qpdf-based parser repairs | | MuPDF repairs, PDFBox lenient | no xref rebuild yet |
 | Merged table cells | TableFormer predicts spans; our own references carry 27 spanned cells | Surya full-mode HTML spans | | DOCX `gridSpan`/`vMerge`/`tblHeader` now read into real spans; **PDF cells still 1×1** |
 | Formulas | layout model labels `formula` (132 labels in our references), optional LaTeX enrichment | Marker/Surya/Nougat → LaTeX | | DOCX math linearised to Unicode under label `formula`; **no PDF formula detection**; notation deliberately not compared |
 | New inputs | PPTX, XLSX, ODF, images, HTML family, markup, mail, … | Marker: +EPUB; MinerU: +EPUB/OFD | | pdf/docx/doc/odt/ods/odp/rtf/html/txt/md/csv/pptx/images/legacy `.ppt` (bridged) — mail and EPUB still out |
@@ -522,7 +535,10 @@ a renderer needs.
   keys, a `pages` map, every `self_ref`). The JSON schema layer and the
   compare ratchet keep running
   untouched — they only ever read JSON.
-- [ ] Window: a format picker in settings; the result pane names every file written.
+- [x] Window: a format picker in settings; the result pane names every file written.
+  **Done for the picker**: the settings form exposes the `--to` choices (JSON plus
+  Markdown, HTML, text, YAML or chunks beside it), and W7's result-pane wiring names
+  the output folder and reveals the single file a one-format run wrote.
 
 Acceptance: `pdfextractor-cli -i doc.pdf --to md --to html` writes both; the md of our
 Docling-corpus documents is *readably* equivalent to `docling --to md` of the same files
@@ -588,19 +604,29 @@ right-side-up-only, and blind to any scan whose image we cannot decode.
 - [ ] **Deskew/despeckle before recognition** (`imageproc`: projection-profile skew angle,
   rotate small angles; Sauvola threshold on the OCR input only, never on the output).
   Flag `--ocr-preprocess auto|on|off`, default auto.
-- [ ] **Decode the scans we refuse today**: `CCITTFaxDecode` (G3/G4) and `JBIG2Decode`
-  image XObjects — the two codecs scanned documents in the wild actually use — plus
-  `JPXDecode` (JPEG 2000), whose bytes today pass through with nothing able to decode
-  them. These are codecs, i.e. infrastructure, so an open-source decoder is the correct
-  spend under the reuse policy.
+- [x] **Decode the scans we refuse today**: `CCITTFaxDecode` (G3/G4) and `JBIG2Decode`
+  image XObjects — the two codecs scanned documents in the wild actually use. These are
+  codecs, i.e. infrastructure, so an open-source decoder is the correct spend under the
+  reuse policy. **Done**: `hayro-ccitt` reads Group 3 one- and two-dimensional and
+  Group 4 from the stream's `/K`, `/Columns`, `/EndOfLine`, `/EndOfBlock` and
+  `/EncodedByteAlign`; `hayro-jbig2` reads the embedded organization with its
+  `/JBIG2Globals` dictionary. Filters wrapped around either codec are undone first.
+  The decoders produce grayscale PNGs at the coded grid, so OCR consumes them like any
+  other scan.
 - [ ] **Full-page OCR** for vector-only pages: rasterise the page, then the existing
   pipeline (Docling's `--ocr-mode full_page`). Interim path: shell to `pdftoppm` when
   present — the preview already soft-depends on it and degrades with a clear message;
   the honest long-term path is a small in-tree rasteriser (text, images, fills at
   216 DPI, Docling's own default scale), tracked here rather than hidden.
-- [ ] Fixtures and tests: a rotated page, a non-English scan, a JBIG2 scan and a CCITT
-  fax scan (generated from the existing scanned fixture), asserting recognised text,
-  box placement, and no ratchet movement on the PDF corpus.
+- [x] Fixtures and tests for the codecs: `test-data/ccitt_scan.pdf` (Group 3 one-
+  dimensional and Group 4 pages), `test-data/ccitt_g3_2d_scan.pdf` (a Group 3
+  two-dimensional page, `/K 1`, written by Ghostscript's `tiffg32d` device) and
+  `test-data/jbig2_scan.pdf` (a page whose symbol dictionary is a `/JBIG2Globals`
+  stream), generated from `invoice_scan.png` by `test-data/make_scan_codec_pdfs.py`.
+  The parser tests hold them to 620 × 350 and to the scan's ink; the end-to-end test
+  asserts their recognised text and that every box lies inside the page. The rotated
+  page is covered by `scanned_rotated.pdf` above.
+- [ ] Remaining OCR fixture: a non-English scan.
 
 ### W4 — PDF depth: links, outlines, encryption, repair (P1, ~1–2 weeks)
 
@@ -1094,6 +1120,11 @@ in parallel.
 - Clamp to reasonable range (e.g., 1..=256 or 1..=num_cpus * 4). 1000 threads causes excessive context switching on typical machines. Recommend clamping sensibly with warning/log.
 - Process files in parallel; also parallelize page-level work where safe (OCR per page).
 - Memory constraints with high parallelism - need resource limits.
+
+### Untrusted input budgets
+- **Done**: `crates/limits` defines the default budgets for input size, page count, PDF objects and nesting, decoded streams, ZIP entries/sizes/ratios, XML size and nesting, image pixels/frames and a 30-second parser deadline. The PDF, all six OOXML/ODF readers, the XML gate and the image reader apply them; `PdfDocument::extract_checked` reports a refusal instead of a short page list.
+- Fuzz targets for PDF, ZIP, XML and images are in `fuzz/` (`cargo-fuzz`, outside the workspace).
+- Still open: expose per-run overrides on the command line (the library API already accepts a `Limits` value), and decide whether OCR time belongs in the same deadline as parsing.
 
 ### Cross-Platform
 - Use platform-agnostic APIs (std + crates). wgpu handles GPU differences.
