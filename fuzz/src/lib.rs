@@ -53,6 +53,9 @@ pub fn limits() -> Limits {
     if let Some(value) = number("FUZZ_MAX_FLOW_BLOCKS") {
         limits.max_flow_blocks = value as usize;
     }
+    if let Some(value) = number("FUZZ_MAX_DOCUMENT_BYTES") {
+        limits.max_document_bytes = value;
+    }
     if let Some(value) = number("FUZZ_TIMEOUT_MS") {
         limits.timeout = Duration::from_millis(value);
     }

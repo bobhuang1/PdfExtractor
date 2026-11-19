@@ -3,7 +3,8 @@
 use libfuzzer_sys::fuzz_target;
 use pdfextractor_fuzz::{limits, note};
 use pdfextractor_image_parser::{
-    gif_frames_checked, tiff_frames_checked, transcode_to_png, webp_frames_checked, ImageDocument,
+    gif_frames_checked, tiff_frames_checked, transcode_to_png_with_limits, webp_frames_checked,
+    ImageDocument,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -12,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
         "image",
         &ImageDocument::parse_bytes_with_limits(data, &budget),
     );
-    let _ = transcode_to_png(data);
+    let _ = transcode_to_png_with_limits(data, &budget);
     // Each checked reader returns an empty list for a non-matching format, so
     // all three can be called on every input without a discriminator byte.
     note("gif", &gif_frames_checked(data, &budget));
