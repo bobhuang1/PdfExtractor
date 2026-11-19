@@ -2129,15 +2129,72 @@ mod tests {
         assert!(gif_frames(b"not a picture at all").is_empty());
     }
 
-    /// A frame budget of two refuses the third frame of a GIF and of a TIFF,
-    /// by name, on small inputs built here.
+    /// A three-frame animated WebP, written here because the `image` crate's
+    /// WebP encoder writes one frame: each frame is encoded losslessly, then put
+    /// in an `ANMF` chunk under the `VP8X`/`ANIM` header an animation states.
+    fn animated_webp(frames: [[u8; 4]; 3]) -> Vec<u8> {
+        fn chunk(out: &mut Vec<u8>, fourcc: &[u8; 4], payload: &[u8]) {
+            out.extend_from_slice(fourcc);
+            out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            out.extend_from_slice(payload);
+            if payload.len() % 2 == 1 {
+                out.push(0);
+            }
+        }
+
+        // Each frame's lossless bitstream, without the RIFF container around it.
+        let mut bitstreams = Vec::new();
+        for colour in frames {
+            let pixels = image::RgbaImage::from_pixel(8, 6, image::Rgba(colour)).into_raw();
+            let mut encoded = Vec::new();
+            image::codecs::webp::WebPEncoder::new_lossless(&mut encoded)
+                .encode(&pixels, 8, 6, image::ExtendedColorType::Rgba8)
+                .expect("encode a WebP frame");
+            assert_eq!(&encoded[0..4], b"RIFF");
+            assert_eq!(&encoded[8..12], b"WEBP");
+            assert_eq!(&encoded[12..16], b"VP8L", "the encoder's own frame chunk");
+            let size =
+                u32::from_le_bytes(encoded[16..20].try_into().expect("a chunk size")) as usize;
+            bitstreams.push(encoded[20..20 + size].to_vec());
+        }
+
+        let mut body = Vec::new();
+        // Animation and alpha, over an 8x6 canvas.
+        let mut header = vec![0x12u8, 0, 0, 0];
+        header.extend_from_slice(&(8u32 - 1).to_le_bytes()[..3]);
+        header.extend_from_slice(&(6u32 - 1).to_le_bytes()[..3]);
+        chunk(&mut body, b"VP8X", &header);
+        // A transparent background, looping forever.
+        chunk(&mut body, b"ANIM", &[0, 0, 0, 0, 0, 0]);
+        for bitstream in bitstreams {
+            // Where the frame sits and how long it shows, in the format's own
+            // fixed-width fields: x, y, width - 1, height - 1, duration, flags.
+            let mut frame = Vec::new();
+            for value in [0u32, 0, 8 - 1, 6 - 1, 100] {
+                frame.extend_from_slice(&value.to_le_bytes()[..3]);
+            }
+            frame.push(0);
+            chunk(&mut frame, b"VP8L", &bitstream);
+            chunk(&mut body, b"ANMF", &frame);
+        }
+
+        let mut webp = Vec::new();
+        webp.extend_from_slice(b"RIFF");
+        webp.extend_from_slice(&((body.len() + 4) as u32).to_le_bytes());
+        webp.extend_from_slice(b"WEBP");
+        webp.extend_from_slice(&body);
+        webp
+    }
+
+    /// A frame budget of two refuses the third frame of a GIF, a WebP and a
+    /// TIFF, by name, on small inputs built here.
     ///
     /// The image fuzzer reached this only by mutation: the seed corpus has no
     /// three-frame picture, so a refusal that depends on the third frame being
-    /// read and counted was one mutation away from untested. Both readers are
-    /// held here — the GIF counts the frame it has just pushed, the TIFF counts
-    /// a directory before it reads it — so the two paths agree on the refusal
-    /// they report for the same ceiling.
+    /// read and counted was one mutation away from untested. All three readers
+    /// are held here — the GIF and the WebP count the frame they have just
+    /// pushed, the TIFF counts a directory before it reads it — so the paths
+    /// agree on the refusal they report for the same ceiling.
     #[test]
     fn a_third_frame_is_refused_by_a_two_frame_budget() {
         fn frame(colour: [u8; 4]) -> image::Frame {
@@ -2159,13 +2216,20 @@ mod tests {
                 ])
                 .expect("encode the animation");
         }
+        let webp = animated_webp([[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]);
         let tiff = multipage_tiff(&[(4, 2), (3, 1), (2, 2)]);
 
-        // The defaults read all three frames of both, so the refusal below is
+        // The defaults read all three frames of each, so the refusal below is
         // the budget's and not the input's.
         assert_eq!(
             gif_frames_checked(&gif, &Limits::default())
                 .expect("the defaults read the GIF")
+                .len(),
+            3
+        );
+        assert_eq!(
+            webp_frames_checked(&webp, &Limits::default())
+                .expect("the defaults read the WebP")
                 .len(),
             3
         );
@@ -2182,6 +2246,7 @@ mod tests {
         };
         for error in [
             gif_frames_checked(&gif, &limits).unwrap_err(),
+            webp_frames_checked(&webp, &limits).unwrap_err(),
             tiff_frames_checked(&tiff, &limits).unwrap_err(),
         ] {
             assert!(
