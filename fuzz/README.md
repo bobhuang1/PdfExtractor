@@ -33,9 +33,12 @@ cargo +nightly fuzz run image -- -max_total_time=60
 A finding is written under `fuzz/artifacts/<target>/`; reproduce it with
 `cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`.
 
-The corpus and the artifacts are machine-generated, so they stay out of the
+The corpus and new findings are machine-generated, so they stay out of the
 repository (see `.gitignore`); the seeding commands above rebuild the corpus
-from fixtures that are committed.
+from fixtures that are committed. A finding that becomes a regression test is
+the exception: the two PDF crashes are committed under `fuzz/artifacts/pdf/`
+and replayed by `crates/pdf-parser/tests/fuzz_regressions_test.rs`, so the case
+stays covered without a nightly toolchain.
 
 ## Lowered budgets
 

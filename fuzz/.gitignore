@@ -1,4 +1,12 @@
 target/
-artifacts/
 coverage/
 corpus/
+
+# Findings are machine-generated and stay out of the repository, except for the
+# two crash reproducers that are replayed by
+# `crates/pdf-parser/tests/fuzz_regressions_test.rs`.
+artifacts/*
+!artifacts/pdf/
+artifacts/pdf/*
+!artifacts/pdf/crash-5ab64f5f121aa960e309bd2185d4263d6bab8a6d
+!artifacts/pdf/crash-b6e2decaa61d0829f9a5e149d256bf95e8017915

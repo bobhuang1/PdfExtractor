@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,245 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,246 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -1123,7 +1123,7 @@ in parallel.
 
 ### Untrusted input budgets
 - **Done**: `crates/limits` defines the default budgets for input size, page count, PDF objects and nesting, decoded streams, ZIP entries/sizes/ratios, XML size and nesting, image pixels/frames and a 30-second parser deadline. The PDF, all six OOXML/ODF readers, the XML gate and the image reader apply them; `PdfDocument::extract_checked` reports a refusal instead of a short page list.
-- Fuzz targets for PDF, ZIP, XML and images are in `fuzz/` (`cargo-fuzz`, outside the workspace).
+- Fuzz targets for PDF, ZIP, XML and images are in `fuzz/` (`cargo-fuzz`, outside the workspace). The two PDF crashes they found are committed under `fuzz/artifacts/pdf/` and replayed by `crates/pdf-parser/tests/fuzz_regressions_test.rs`.
 - Still open: expose per-run overrides on the command line (the library API already accepts a `Limits` value), and decide whether OCR time belongs in the same deadline as parsing.
 
 ### Cross-Platform
