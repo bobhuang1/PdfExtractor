@@ -228,10 +228,74 @@ struct Args {
     #[arg(long, value_name = "N")]
     max_image_pixels: Option<u64>,
 
+    /// The largest one side of an image grid may be, in pixels (default
+    /// 100000)
+    #[arg(long, value_name = "N")]
+    max_image_dimension: Option<u32>,
+
+    /// The most bytes one image decode may allocate (default 536870912)
+    #[arg(long, value_name = "N")]
+    max_image_alloc_bytes: Option<u64>,
+
+    /// The most frames a TIFF, GIF or animated WebP may hold when its frames
+    /// are read as pages (default 1000)
+    #[arg(long, value_name = "N")]
+    max_image_frames: Option<usize>,
+
+    /// The most blocks a flow reader — text, Markdown, CSV, RTF, HTML, DOCX or
+    /// legacy `.doc` — may produce (default 1000000). A table is one block per
+    /// cell
+    #[arg(long, value_name = "N")]
+    max_flow_blocks: Option<usize>,
+
+    /// The largest byte count a single decoded PDF stream may produce (default
+    /// 134217728)
+    #[arg(long, value_name = "N")]
+    max_decoded_stream_bytes: Option<u64>,
+
+    /// The most entries a ZIP package may hold (default 10000)
+    #[arg(long, value_name = "N")]
+    max_zip_entries: Option<usize>,
+
+    /// The largest uncompressed size one ZIP entry may reach, in bytes
+    /// (default 67108864)
+    #[arg(long, value_name = "N")]
+    max_zip_entry_bytes: Option<u64>,
+
+    /// The largest total uncompressed size a ZIP package may reach, in bytes
+    /// (default 536870912)
+    #[arg(long, value_name = "N")]
+    max_zip_total_bytes: Option<u64>,
+
+    /// The largest expansion ratio an entry above one mebibyte may declare
+    /// (default 200)
+    #[arg(long, value_name = "N")]
+    max_zip_ratio: Option<u64>,
+
+    /// The largest XML part a package may carry, in bytes (default 67108864)
+    #[arg(long, value_name = "N")]
+    max_xml_bytes: Option<u64>,
+
+    /// The deepest XML element nesting accepted (default 256)
+    #[arg(long, value_name = "N")]
+    max_xml_depth: Option<usize>,
+
+    /// The largest total one document may expand to, across every PDF stream
+    /// and image frame its reader decodes, in bytes (default 1073741824). The
+    /// per-item ceilings bound one item each; this bounds what a file of many
+    /// of them adds up to
+    #[arg(long, value_name = "N")]
+    max_document_bytes: Option<u64>,
+
     /// The wall-clock budget for one document's reading, in seconds (default
     /// 30). A read that outlives it is refused rather than finished
     #[arg(long, value_name = "SECONDS")]
     timeout: Option<f64>,
+
+    /// The wall-clock budget for one document's OCR pages, in seconds (default
+    /// 600). Recognition is seconds a page, so it has a budget of its own
+    #[arg(long, value_name = "SECONDS")]
+    ocr_timeout: Option<f64>,
 
     /// Include the notes layer — a deck's speaker notes and comments — in the
     /// Markdown, HTML and text outputs. Off, those three are a reading of the
@@ -357,10 +421,12 @@ fn budgets() -> pdfextractor_limits::Limits {
     BUDGETS.get().cloned().unwrap_or_default()
 }
 
-/// Apply `--max-input-bytes`, `--max-pages`, `--max-image-pixels` and
-/// `--timeout` to the shared defaults before anything is read, so the PDF
-/// reader, the packages, the flow formats, `.doc` and the LibreOffice bridge
-/// are all held to one value.
+/// Apply every `--max-*` and `--timeout` flag to the shared defaults before
+/// anything is read, so the PDF reader, the packages, the flow formats, `.doc`,
+/// the image readers and the OCR pages are all held to one value.
+///
+/// The flags are named one per budget, so a refusal can point at the flag that
+/// would raise it (`raise_flag`).
 fn install_budgets(args: &Args) {
     let mut limits = budgets();
     if let Some(bytes) = args.max_input_bytes {
@@ -372,8 +438,47 @@ fn install_budgets(args: &Args) {
     if let Some(pixels) = args.max_image_pixels {
         limits.max_image_pixels = pixels;
     }
+    if let Some(dimension) = args.max_image_dimension {
+        limits.max_image_dimension = dimension;
+    }
+    if let Some(bytes) = args.max_image_alloc_bytes {
+        limits.max_image_alloc_bytes = bytes;
+    }
+    if let Some(frames) = args.max_image_frames {
+        limits.max_image_frames = frames;
+    }
+    if let Some(blocks) = args.max_flow_blocks {
+        limits.max_flow_blocks = blocks;
+    }
+    if let Some(bytes) = args.max_decoded_stream_bytes {
+        limits.max_decoded_stream_bytes = bytes;
+    }
+    if let Some(entries) = args.max_zip_entries {
+        limits.max_zip_entries = entries;
+    }
+    if let Some(bytes) = args.max_zip_entry_bytes {
+        limits.max_zip_entry_bytes = bytes;
+    }
+    if let Some(bytes) = args.max_zip_total_bytes {
+        limits.max_zip_total_bytes = bytes;
+    }
+    if let Some(ratio) = args.max_zip_ratio {
+        limits.max_zip_ratio = ratio;
+    }
+    if let Some(bytes) = args.max_xml_bytes {
+        limits.max_xml_bytes = bytes;
+    }
+    if let Some(depth) = args.max_xml_depth {
+        limits.max_xml_depth = depth;
+    }
+    if let Some(bytes) = args.max_document_bytes {
+        limits.max_document_bytes = bytes;
+    }
     if let Some(seconds) = args.timeout {
         limits.timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
+    }
+    if let Some(seconds) = args.ocr_timeout {
+        limits.ocr_timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
     }
     let _ = BUDGETS.set(limits);
 }
@@ -387,12 +492,67 @@ fn is_limit_refusal(error: &anyhow::Error) -> bool {
     })
 }
 
+/// The `error_kind` a `--progress` record carries for `error`.
+///
+/// A refusal is its own kind: the budgets said no, which is not the same failure
+/// as a file that cannot be read, and a consumer deciding whether to retry needs
+/// the two apart.
+fn error_kind(error: &anyhow::Error) -> &'static str {
+    if is_limit_refusal(error) {
+        "limit"
+    } else {
+        "error"
+    }
+}
+
+/// The flag that would raise the budget a refusal ran out of.
+///
+/// `None` for a refusal no flag here raises: a malformed part, a `DOCTYPE`, an
+/// empty image, and the PDF's object, token and nesting ceilings, which the
+/// command line does not expose.
+fn raise_flag(error: &anyhow::Error) -> Option<&'static str> {
+    use pdfextractor_limits::LimitError;
+    let refusal = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>())?;
+    Some(match refusal {
+        LimitError::InputTooLarge { .. } => "--max-input-bytes",
+        LimitError::TooManyPages { .. } => "--max-pages",
+        LimitError::DecodedStreamTooLarge { .. } => "--max-decoded-stream-bytes",
+        LimitError::TooManyZipEntries { .. } => "--max-zip-entries",
+        LimitError::ZipEntryTooLarge { .. } => "--max-zip-entry-bytes",
+        LimitError::ZipRatioTooHigh { .. } => "--max-zip-ratio",
+        LimitError::ZipTotalTooLarge { .. } => "--max-zip-total-bytes",
+        LimitError::XmlTooLarge { .. } => "--max-xml-bytes",
+        LimitError::XmlTooDeep { .. } => "--max-xml-depth",
+        LimitError::ImageTooWide { .. } => "--max-image-dimension",
+        LimitError::ImageTooManyPixels { .. } => "--max-image-pixels",
+        LimitError::ImageAllocTooLarge { .. } => "--max-image-alloc-bytes",
+        LimitError::TooManyImageFrames { .. } => "--max-image-frames",
+        LimitError::TooManyFlowBlocks { .. } => "--max-flow-blocks",
+        LimitError::DocumentTooLarge { .. } => "--max-document-bytes",
+        // The OCR deadline is checked between pages, so its refusal carries
+        // that stage; every other deadline is the parser's `--timeout`.
+        LimitError::Timeout { stage, .. } if stage == "recognising a page" => "--ocr-timeout",
+        LimitError::Timeout { .. } => "--timeout",
+        _ => return None,
+    })
+}
+
+/// The suffix a refusal's message carries: the flag that would raise it.
+fn flag_hint(error: &anyhow::Error) -> String {
+    match raise_flag(error) {
+        Some(flag) => format!(" (raise {flag} to allow it)"),
+        None => String::new(),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     match run() {
         Ok(()) => Ok(()),
         Err(error) => {
             if is_limit_refusal(&error) {
-                eprintln!("error: {error:#}");
+                eprintln!("error: {error:#}{}", flag_hint(&error));
                 std::process::exit(EXIT_LIMIT_REFUSED);
             }
             Err(error)
@@ -641,8 +801,21 @@ fn run() -> anyhow::Result<()> {
             .filter_map(|(_, result)| result.as_ref().err())
             .all(is_limit_refusal);
         if all_refused {
+            // When every refusal is the same budget, the summary can name the
+            // one flag that would read them all.
+            let flags: Vec<&str> = results
+                .iter()
+                .filter_map(|(_, result)| result.as_ref().err())
+                .filter_map(raise_flag)
+                .collect();
+            let hint = match flags.first() {
+                Some(flag) if flags.iter().all(|other| other == flag) => {
+                    format!(" (raise {flag} to allow them)")
+                }
+                _ => String::new(),
+            };
             eprintln!(
-                "{failures} of {} document(s) were refused by the shared budgets",
+                "{failures} of {} document(s) were refused by the shared budgets{hint}",
                 results.len()
             );
             std::process::exit(EXIT_LIMIT_REFUSED);
@@ -857,13 +1030,14 @@ fn announce(
                         "total": total,
                         "input": input.display().to_string(),
                         "ok": false,
-                        "error_kind": if is_limit_refusal(&err) { "limit" } else { "error" },
+                        "error_kind": error_kind(err),
+                        "limit_flag": raise_flag(err),
                         "error": format!("{err:#}"),
                     })
                 );
                 flush_stdout();
             }
-            eprintln!("error: {}: {err:#}", input.display());
+            eprintln!("error: {}: {err:#}{}", input.display(), flag_hint(err));
         }
     }
 }
@@ -5598,5 +5772,221 @@ mod tests {
         ] {
             assert_eq!(data_uri_picture(source), None, "{source}");
         }
+    }
+
+    /// One value of every `LimitError` variant.
+    ///
+    /// [`limit_error_variant`] matches the same enum with no wildcard arm, so a
+    /// new variant fails to compile until it is named here and given an index;
+    /// the test below then holds the count to `variant_count`, which is what
+    /// catches a sample that was never added.
+    fn limit_error_samples() -> Vec<pdfextractor_limits::LimitError> {
+        use pdfextractor_limits::LimitError::*;
+        let timeout = std::time::Duration::from_secs(1);
+        vec![
+            InputTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPages {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPdfObjects {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPdfTokens {
+                actual: 2,
+                limit: 1,
+            },
+            PdfTooDeep {
+                actual: 2,
+                limit: 1,
+            },
+            DecodedStreamTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyZipEntries {
+                actual: 2,
+                limit: 1,
+            },
+            ZipEntryTooLarge {
+                name: "word/document.xml".to_string(),
+                actual: 2,
+                limit: 1,
+            },
+            ZipRatioTooHigh {
+                name: "word/document.xml".to_string(),
+                ratio: 2,
+                limit: 1,
+            },
+            ZipTotalTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            Zip {
+                detail: "invalid Zip archive".to_string(),
+            },
+            XmlTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            XmlTooDeep {
+                actual: 2,
+                limit: 1,
+            },
+            XmlDoctype,
+            XmlMalformed {
+                detail: "mismatched close tag".to_string(),
+            },
+            ImageDecode {
+                detail: "truncated PNG".to_string(),
+            },
+            ImageEmpty,
+            ImageTooWide {
+                width: 2,
+                height: 2,
+                limit: 1,
+            },
+            ImageTooManyPixels {
+                width: 2,
+                height: 2,
+                pixels: 4,
+                limit: 1,
+            },
+            ImageAllocTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyImageFrames {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyFlowBlocks {
+                actual: 2,
+                limit: 1,
+            },
+            DocumentTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            BridgeOutputTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            Timeout {
+                stage: "reading the PDF header".to_string(),
+                elapsed: timeout,
+                limit: timeout,
+            },
+        ]
+    }
+
+    /// Which variant `error` is, numbered in the order of the enum.
+    fn limit_error_variant(error: &pdfextractor_limits::LimitError) -> usize {
+        use pdfextractor_limits::LimitError::*;
+        match error {
+            InputTooLarge { .. } => 0,
+            TooManyPages { .. } => 1,
+            TooManyPdfObjects { .. } => 2,
+            TooManyPdfTokens { .. } => 3,
+            PdfTooDeep { .. } => 4,
+            DecodedStreamTooLarge { .. } => 5,
+            TooManyZipEntries { .. } => 6,
+            ZipEntryTooLarge { .. } => 7,
+            ZipRatioTooHigh { .. } => 8,
+            ZipTotalTooLarge { .. } => 9,
+            Zip { .. } => 10,
+            XmlTooLarge { .. } => 11,
+            XmlTooDeep { .. } => 12,
+            XmlDoctype => 13,
+            XmlMalformed { .. } => 14,
+            ImageDecode { .. } => 15,
+            ImageEmpty => 16,
+            ImageTooWide { .. } => 17,
+            ImageTooManyPixels { .. } => 18,
+            ImageAllocTooLarge { .. } => 19,
+            TooManyImageFrames { .. } => 20,
+            TooManyFlowBlocks { .. } => 21,
+            DocumentTooLarge { .. } => 22,
+            BridgeOutputTooLarge { .. } => 23,
+            Timeout { .. } => 24,
+        }
+    }
+
+    /// Every `LimitError` ends a run the same way: the refusal exit code and the
+    /// `limit` error kind, so a consumer can act on a refusal without parsing the
+    /// sentence it carries.
+    #[test]
+    fn every_limit_error_variant_maps_to_the_refusal_exit_code_and_kind() {
+        // The sample at position `i` must be variant `i`: the indices are dense
+        // and in enum order, so a sample inserted out of order, or one of two
+        // samples of the same variant, fails here. A variant with no sample is a
+        // compile error first — `limit_error_variant` has no wildcard arm.
+        // The flag each sample's refusal names, in variant order: every budget
+        // the command line exposes has one, and the malformed-input and
+        // unexposed-ceiling variants have none.
+        let flags: [Option<&str>; 25] = [
+            Some("--max-input-bytes"),
+            Some("--max-pages"),
+            None, // PDF objects: not a flag
+            None, // PDF tokens: not a flag
+            None, // PDF nesting: not a flag
+            Some("--max-decoded-stream-bytes"),
+            Some("--max-zip-entries"),
+            Some("--max-zip-entry-bytes"),
+            Some("--max-zip-ratio"),
+            Some("--max-zip-total-bytes"),
+            None, // a corrupt package
+            Some("--max-xml-bytes"),
+            Some("--max-xml-depth"),
+            None, // a DOCTYPE is refused outright
+            None, // malformed XML
+            None, // a picture that will not decode
+            None, // an empty picture
+            Some("--max-image-dimension"),
+            Some("--max-image-pixels"),
+            Some("--max-image-alloc-bytes"),
+            Some("--max-image-frames"),
+            Some("--max-flow-blocks"),
+            Some("--max-document-bytes"),
+            None, // the bridge's output ceiling: not a flag
+            Some("--timeout"),
+        ];
+
+        for (position, sample) in limit_error_samples().into_iter().enumerate() {
+            assert_eq!(
+                limit_error_variant(&sample),
+                position,
+                "sample {position} is not its variant: {sample:?}"
+            );
+            let error = anyhow::Error::new(sample);
+            assert!(is_limit_refusal(&error), "{error:#} is not a refusal");
+            assert_eq!(error_kind(&error), "limit");
+            assert_eq!(
+                raise_flag(&error),
+                flags[position],
+                "the refusal at {position} names the wrong flag"
+            );
+        }
+
+        // The OCR deadline is a different budget from the parser's, and its
+        // stage is what tells the two apart.
+        let ocr = anyhow::Error::new(pdfextractor_limits::LimitError::Timeout {
+            stage: "recognising a page".to_string(),
+            elapsed: std::time::Duration::from_secs(1),
+            limit: std::time::Duration::from_secs(1),
+        });
+        assert_eq!(raise_flag(&ocr), Some("--ocr-timeout"));
+        assert!(flag_hint(&ocr).contains("--ocr-timeout"));
+
+        assert_eq!(EXIT_LIMIT_REFUSED, 3, "the refusal exit code moved");
+        // The other kind: a file that cannot be read is not a refusal, so it
+        // exits through the ordinary error path.
+        let ordinary = anyhow::anyhow!("not a DOCX (ZIP) package");
+        assert_eq!(error_kind(&ordinary), "error");
+        assert!(!is_limit_refusal(&ordinary));
     }
 }
