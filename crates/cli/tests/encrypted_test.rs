@@ -8,7 +8,7 @@
 //! password is read with `--pdf-password` (or `PDFE_PDF_PASSWORD`), and one the
 //! password does not open is refused by name with no document written.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn fixture(name: &str) -> PathBuf {
@@ -21,7 +21,7 @@ fn out_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pdfe-encrypted-{tag}-{}.json", std::process::id()))
 }
 
-fn run(name: &str, out: &PathBuf, extra: &[&str], env_password: Option<&str>) -> Output {
+fn run(name: &str, out: &Path, extra: &[&str], env_password: Option<&str>) -> Output {
     let _ = std::fs::remove_file(out);
     let mut command = Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"));
     command
@@ -41,7 +41,7 @@ fn run(name: &str, out: &PathBuf, extra: &[&str], env_password: Option<&str>) ->
     command.output().expect("spawn the CLI binary")
 }
 
-fn assert_read(name: &str, out: &PathBuf, output: &Output) {
+fn assert_read(name: &str, out: &Path, output: &Output) {
     assert!(
         output.status.success(),
         "{name} was not read:\nstderr={}",
@@ -55,7 +55,7 @@ fn assert_read(name: &str, out: &PathBuf, output: &Output) {
     let _ = std::fs::remove_file(out);
 }
 
-fn assert_refused(name: &str, out: &PathBuf, output: &Output, says: &str) {
+fn assert_refused(name: &str, out: &Path, output: &Output, says: &str) {
     assert!(
         !output.status.success(),
         "{name} was read without the password it needs"

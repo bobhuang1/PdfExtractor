@@ -107,8 +107,10 @@ impl ChunkType {
     }
 }
 
-/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to.
+/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to. The
+/// variants are tiktoken's own names (`cl100k_base`, …), suffix and all.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+#[allow(clippy::enum_variant_names)]
 enum TokenizerEncoding {
     #[value(name = "cl100k_base", alias = "cl100k")]
     Cl100kBase,

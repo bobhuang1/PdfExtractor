@@ -337,8 +337,8 @@ pub struct Tokenizer {
 }
 
 enum TokenizerKind {
-    HuggingFace(tokenizers::Tokenizer),
-    SentencePiece(sentencepiece_rs::SentencePieceProcessor),
+    HuggingFace(Box<tokenizers::Tokenizer>),
+    SentencePiece(Box<sentencepiece_rs::SentencePieceProcessor>),
     Tiktoken(tiktoken_rs::CoreBPE),
 }
 
@@ -383,17 +383,17 @@ impl Tokenizer {
         let tiktoken_family =
             (format == TokenizerFormat::Tiktoken).then(|| tiktoken_encoding(path, encoding));
         let inner = match format {
-            TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(
+            TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(Box::new(
                 tokenizers::Tokenizer::from_file(path)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?,
-            ),
+            )),
             TokenizerFormat::SentencePiece => {
                 let bytes = std::fs::read(path)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-                TokenizerKind::SentencePiece(
+                TokenizerKind::SentencePiece(Box::new(
                     sentencepiece_rs::SentencePieceProcessor::from_serialized_model(&bytes)
                         .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?,
-                )
+                ))
             }
             TokenizerFormat::Tiktoken => {
                 let bytes = std::fs::read(path)

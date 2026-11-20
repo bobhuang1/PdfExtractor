@@ -152,6 +152,8 @@ fn count_before_in(text: &str, marker: &str, source: &str) -> usize {
 }
 
 /// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
+/// Only the Unix-only workspace total reads it.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn count_after(plan: &str, prefix: &str) -> usize {
     count_after_in(plan, prefix, "plan.md")
 }

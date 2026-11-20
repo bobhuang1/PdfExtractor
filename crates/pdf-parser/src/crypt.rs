@@ -475,18 +475,18 @@ fn aes256_cbc_no_iv_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 fn cbc_decrypt(key: &[u8], iv: &[u8], body: &[u8]) -> Vec<u8> {
     enum Cipher {
-        A128(aes::Aes128),
-        A256(aes::Aes256),
+        A128(Box<aes::Aes128>),
+        A256(Box<aes::Aes256>),
     }
     let cipher = match key.len() {
-        16 => Cipher::A128(aes::Aes128::new(GenericArray::from_slice(key))),
-        32 => Cipher::A256(aes::Aes256::new(GenericArray::from_slice(key))),
+        16 => Cipher::A128(Box::new(aes::Aes128::new(GenericArray::from_slice(key)))),
+        32 => Cipher::A256(Box::new(aes::Aes256::new(GenericArray::from_slice(key)))),
         _ => return Vec::new(),
     };
     let mut prev = [0u8; 16];
     prev.copy_from_slice(iv);
     let mut out = Vec::with_capacity(body.len());
-    for chunk in body.chunks_exact(16) {
+    for chunk in body.as_chunks::<16>().0 {
         let mut block = GenericArray::clone_from_slice(chunk);
         match &cipher {
             Cipher::A128(c) => c.decrypt_block(&mut block),
@@ -507,7 +507,7 @@ fn aes128_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Vec<u8> {
     let mut prev = [0u8; 16];
     prev.copy_from_slice(iv);
     let mut out = Vec::with_capacity(data.len());
-    for chunk in data.chunks_exact(16) {
+    for chunk in data.as_chunks::<16>().0 {
         let mut block = [0u8; 16];
         for (b, (c, p)) in block.iter_mut().zip(chunk.iter().zip(prev.iter())) {
             *b = c ^ p;
@@ -539,7 +539,7 @@ mod tests {
         let iv = [9u8; 16];
         let plain = b"Secret ledger";
         let mut padded = plain.to_vec();
-        padded.extend(std::iter::repeat(3u8).take(3));
+        padded.extend(std::iter::repeat_n(3u8, 3));
         let mut data = iv.to_vec();
         data.extend(aes128_cbc_encrypt(&key, &iv, &padded));
         assert_eq!(aes_cbc_decrypt(&key, &data), plain);
