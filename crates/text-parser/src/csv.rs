@@ -6,10 +6,23 @@
 //! row/column structure the format exists to express is preserved.
 
 use crate::{Block, TableGrid, TextDocument};
+use pdfextractor_limits::{Guard, Limits, Result};
 
 /// Parse delimited text with `delimiter`, typically `,` or `\t`.
 pub fn parse(bytes: &[u8], delimiter: u8) -> TextDocument {
-    let rows = records(bytes, delimiter);
+    parse_with_guard(bytes, delimiter, &Guard::unbudgeted())
+        .expect("a guard with no budget refuses nothing")
+}
+
+/// Parse delimited text under `budget`: a workbook-sized grid counts one block
+/// per cell against `max_flow_blocks`.
+pub fn parse_with_limits(bytes: &[u8], delimiter: u8, budget: &Limits) -> Result<TextDocument> {
+    parse_with_guard(bytes, delimiter, &budget.guard())
+}
+
+fn parse_with_guard(bytes: &[u8], delimiter: u8, guard: &Guard<'_>) -> Result<TextDocument> {
+    guard.check_input(bytes.len())?;
+    let rows = records_with_guard(bytes, delimiter, guard)?;
     let mut doc = TextDocument::default();
     if !rows.is_empty() {
         // A delimited file says nothing about merges: every field is one slot.
@@ -17,11 +30,17 @@ pub fn parse(bytes: &[u8], delimiter: u8) -> TextDocument {
             grid: TableGrid::from_rows(&rows),
         });
     }
-    doc
+    guard.check_flow_blocks(crate::flow_units(&doc.items))?;
+    Ok(doc)
 }
 
 /// Split delimited bytes into records of fields.
 pub fn records(bytes: &[u8], delimiter: u8) -> Vec<Vec<String>> {
+    records_with_guard(bytes, delimiter, &Guard::unbudgeted())
+        .expect("a guard with no budget refuses nothing")
+}
+
+fn records_with_guard(bytes: &[u8], delimiter: u8, guard: &Guard<'_>) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
     let mut row: Vec<String> = Vec::new();
     let mut field: Vec<u8> = Vec::new();
@@ -29,6 +48,9 @@ pub fn records(bytes: &[u8], delimiter: u8) -> Vec<Vec<String>> {
     let mut i = 0usize;
 
     while i < bytes.len() {
+        if i.is_multiple_of(65536) {
+            guard.check("reading a delimited record")?;
+        }
         let b = bytes[i];
         if quoted {
             if b == b'"' {
@@ -88,7 +110,7 @@ pub fn records(bytes: &[u8], delimiter: u8) -> Vec<Vec<String>> {
         row.push(field_string(&field));
         rows.push(row);
     }
-    rows
+    Ok(rows)
 }
 
 fn field_string(bytes: &[u8]) -> String {
@@ -103,14 +125,51 @@ pub fn parse_csv(bytes: &[u8]) -> TextDocument {
     parse(bytes, b',')
 }
 
+/// Parse comma-separated values under `budget`.
+pub fn parse_csv_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_with_limits(bytes, b',', budget)
+}
+
 /// Parse tab-separated values.
 pub fn parse_tsv(bytes: &[u8]) -> TextDocument {
     parse(bytes, b'\t')
 }
 
+/// Parse tab-separated values under `budget`.
+pub fn parse_tsv_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_with_limits(bytes, b'\t', budget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    /// A grid counts one block per cell, so a caller that lowers the block
+    /// budget refuses a file whose grid is wider than it allows.
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let budget = Limits {
+            max_flow_blocks: 3,
+            ..Limits::default()
+        };
+        let error =
+            parse_with_limits(b"a,b\n1,2\n", b',', &budget).expect_err("the file has four cells");
+        assert!(error.to_string().contains("4 blocks"), "{error}");
+        assert!(error.to_string().contains("limit is 3"), "{error}");
+    }
+
+    /// The walk checks the clock as it goes, so a spent deadline refuses a file
+    /// however small it is.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let budget = Limits {
+            timeout: Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"a,b\n", b',', &budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
 
     #[test]
     fn simple_rows_and_columns() {

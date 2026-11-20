@@ -8,6 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# A text file is untrusted input like any other: the shared budgets bound how
+# many blocks one may produce and how long the walk through it may take.
+pdfextractor-limits = { path = "../limits" }
 # An RTF `\pict` payload is carried into the document model as a base64
 # `data:` URI, the same spelling an embedded Markdown or HTML page uses.
 base64.workspace = true

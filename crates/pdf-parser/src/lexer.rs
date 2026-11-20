@@ -84,6 +84,15 @@ impl<'a> Lexer<'a> {
 
     /// Tokenize, keeping the byte range of every token.
     pub fn tokenize_spanned(&mut self) -> Vec<SpannedToken> {
+        self.tokenize_spanned_limited(usize::MAX).0
+    }
+
+    /// Tokenize under a ceiling on the token vector.
+    ///
+    /// The second value is true when the ceiling stopped the lexer before the
+    /// end of the input. A caller that cares returns a resource-limit error
+    /// rather than parsing a prefix of the file as though it were complete.
+    pub fn tokenize_spanned_limited(&mut self, max_tokens: usize) -> (Vec<SpannedToken>, bool) {
         let mut out: Vec<SpannedToken> = Vec::new();
 
         // Header, e.g. "%PDF-1.4". Must be read before generic comment skipping.
@@ -108,6 +117,9 @@ impl<'a> Lexer<'a> {
             self.skip_whitespace_and_comments();
             if self.pos >= self.bytes.len() {
                 break;
+            }
+            if out.len() >= max_tokens {
+                return (out, true);
             }
 
             // %%EOF marks the end of a cross-reference section. A linearized
@@ -233,7 +245,7 @@ impl<'a> Lexer<'a> {
                 token,
             });
         }
-        out
+        (out, false)
     }
 
     fn peek(&self, offset: usize) -> Option<u8> {

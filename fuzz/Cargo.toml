@@ -1,0 +1,58 @@
+[package]
+name = "pdfextractor-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+name = "pdfextractor_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pdfextractor-limits = { path = "../crates/limits" }
+pdfextractor-pdf-parser = { path = "../crates/pdf-parser" }
+pdfextractor-docx-parser = { path = "../crates/docx-parser" }
+pdfextractor-xlsx-parser = { path = "../crates/xlsx-parser" }
+pdfextractor-pptx-parser = { path = "../crates/pptx-parser" }
+pdfextractor-odt-parser = { path = "../crates/odt-parser" }
+pdfextractor-ods-parser = { path = "../crates/ods-parser" }
+pdfextractor-odp-parser = { path = "../crates/odp-parser" }
+pdfextractor-image-parser = { path = "../crates/image-parser" }
+pdfextractor-formats = { path = "../crates/formats" }
+zip = "2"
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "zip"
+path = "fuzz_targets/zip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "xml"
+path = "fuzz_targets/xml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = true
+
+# The fuzz crate is a separate workspace: cargo-fuzz builds it with the nightly
+# sanitizer runtime, while the product workspace stays on the stable toolchain.
+[workspace]

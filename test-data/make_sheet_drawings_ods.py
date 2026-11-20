@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the ODS picture and chart fixtures with LibreOffice.
 
-Two XLSX fixtures already hold what the ODS reader must follow:
+Four XLSX fixtures already hold what the ODS reader must follow:
 
 * `worksheet_pictures.xlsx` draws six pictures on `Pictures` — a BMP, a GIF, a
   PNG, a JPEG, and two JPEG 2000s — and one on `Summary`. LibreOffice keeps the
@@ -10,6 +10,12 @@ Two XLSX fixtures already hold what the ODS reader must follow:
 * `chart_sheet.xlsx` draws a bar chart on `Quarterly` and a line chart on
   `Trend`. LibreOffice writes each as an embedded object, `Object N/content.xml`,
   with the chart's cell ranges in the object and a replacement image beside it.
+* `chart_cross_sheet.xlsx` draws a bar chart on `Charts` whose categories and
+  series name cells on `Figures`, so the chart has to follow the sheet each
+  range carries rather than read the sheet it is anchored on.
+* `chart_quoted_sheet.xlsx` draws its chart on `Dashboard` and names its data
+  on `Quarterly Totals`; the space makes LibreOffice quote that sheet on both
+  ends of every range.
 
 The `.ods` files are real Calc packages, not hand-written XML, so the reader is
 held to the markup a producer writes. Their stems are `_calc` so they cannot
@@ -31,6 +37,8 @@ ROOT = pathlib.Path(__file__).resolve().parent
 FIXTURES = [
     ("worksheet_pictures.xlsx", "worksheet_pictures_calc.ods"),
     ("chart_sheet.xlsx", "chart_sheet_calc.ods"),
+    ("chart_cross_sheet.xlsx", "chart_cross_sheet_calc.ods"),
+    ("chart_quoted_sheet.xlsx", "chart_quoted_sheet_calc.ods"),
 ]
 
 

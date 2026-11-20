@@ -28,7 +28,7 @@
 //!
 //! The corpus contains one more real-world wrinkle worth knowing about. The WMFs
 //! written by Word and CorelDRAW put a pad word after each record's size field,
-//! so a standard walk of the file reads garbage. [`wmf`] recognises both
+//! so a standard walk of the file reads garbage. `wmf` recognises both
 //! layouts by walking the record chain: the one that ends exactly at the end of
 //! the file, on the end-of-file record, is the one the file uses.
 

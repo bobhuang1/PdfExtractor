@@ -50,7 +50,8 @@
 mod parser;
 
 pub use parser::{
-    gif_frames, is_document_media_type, mimetype, tiff_frames, transcode_to_png, turn_upright,
-    upright_png, webp_frames, ImageDocument, Orientation, PngPicture, UprightPicture, DEFAULT_DPI,
-    DOCUMENT_MEDIA_TYPES,
+    decode, decode_checked, gif_frames, gif_frames_checked, is_document_media_type, mimetype,
+    tiff_frames, tiff_frames_checked, transcode_to_png, transcode_to_png_checked, turn_upright,
+    upright_png, webp_frames, webp_frames_checked, ImageDocument, Orientation, PngPicture,
+    UprightPicture, DEFAULT_DPI, DOCUMENT_MEDIA_TYPES,
 };

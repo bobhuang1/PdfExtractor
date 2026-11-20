@@ -32,33 +32,50 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `picture_names.html`, whose picture's file name carries a space and an
 /// ampersand, so the HTML golden pins the name the writer escapes.
 const CASES: &[&str] = &[
-    "hello.pdf",               // the smallest fixture: one heading-sized line
-    "dummy.pdf",               // a one-paragraph PDF
-    "calibre_demo.docx",       // prose, lists, tables and pictures in one document
-    "math-accents.docx",       // Office Math, which becomes `$$` in Markdown
-    "irs_f1040.pdf",           // a long form: many tables, columns and furniture
-    "flow.html",               // a flow format: headings, lists, code and a table
-    "late_header.html",        // a table whose header row is declared below a caption
-    "late_merged_header.html", // a late header row whose own cells merge
-    "social_cards.html",       // the head's description, canonical URL and social cards
-    "picture_names.html",      // a picture named with a space and an ampersand
-    "fenced.md",               // Markdown in, HTML/text/YAML out
-    "pictures.md",             // Markdown in with a picture: its file is copied and referenced
-    "merged_cells.docx",       // a DOCX whose table merges cells: rowspan/colspan in HTML
-    "merged_table.rtf",        // the same merged table as a word processor's own RTF export
-    "link_annotations.pdf",    // a PDF whose link is an `<a href>` in the HTML
-    "chart_deck.pptx",         // a deck whose only picture is a chart: no file to place
-    "inventory_calc.ods",      // a workbook whose sheets are pages, its merge a span
-    "brief_odt.odt",           // a Writer document: a flow with a picture, read as one
-    "notes_odt.odt",           // a Writer document with a footnote and a table inside a cell
-    "q3_review_impress.odp",   // the deck as Impress saved it: slides, notes and comments
-    "rtf_bitmap.rtf",          // a word processor's own RTF export, control words and all
+    "hello.pdf",                     // the smallest fixture: one heading-sized line
+    "dummy.pdf",                     // a one-paragraph PDF
+    "calibre_demo.docx",             // prose, lists, tables and pictures in one document
+    "math-accents.docx",             // Office Math, which becomes `$$` in Markdown
+    "irs_f1040.pdf",                 // a long form: many tables, columns and furniture
+    "flow.html",                     // a flow format: headings, lists, code and a table
+    "late_header.html",              // a table whose header row is declared below a caption
+    "late_merged_header.html",       // a late header row whose own cells merge
+    "social_cards.html",             // the head's description, canonical URL and social cards
+    "picture_names.html",            // a picture named with a space and an ampersand
+    "fenced.md",                     // Markdown in, HTML/text/YAML out
+    "pictures.md", // Markdown in with a picture: its file is copied and referenced
+    "merged_cells.docx", // a DOCX whose table merges cells: rowspan/colspan in HTML
+    "merged_table.rtf", // the same merged table as a word processor's own RTF export
+    "link_annotations.pdf", // a PDF whose link is an `<a href>` in the HTML
+    "chart_deck.pptx", // a deck whose only picture is a chart: no file to place
+    "inventory_calc.ods", // a workbook whose sheets are pages, its merge a span
+    "annotations_calc.ods", // a workbook's cell comments, pinned with --include-notes
+    "worksheet_pictures_calc.ods", // a worksheet's pictures, copied beside the render
+    "chart_sheet_calc.ods", // a worksheet's charts: tables and captions, no image
+    "chart_cross_sheet_calc.ods", // a chart plotting another sheet: tables and a caption
+    "filler_rows_over_cap_calc.ods", // a filler run beyond the cap: the next block keeps its row
+    "chart_types_impress.odp", // a slide's chart data, with no image to render
+    "brief_odt.odt", // a Writer document: a flow with a picture, read as one
+    "notes_odt.odt", // a Writer document with a footnote and a table inside a cell
+    "q3_review_impress.odp", // the deck as Impress saved it: slides, notes and comments
+    "rtf_bitmap.rtf", // a word processor's own RTF export, control words and all
 ];
 
 /// What is pinned and under which name: the `--to` value (never the
 /// extension, so a format whose file name changes still fails the same way)
 /// and the file extension it is written under.
 const FORMATS: &[(&str, &str)] = &[("html", "html"), ("text", "txt"), ("yaml", "yaml")];
+
+/// The renderings pinned for `name`. The chart-family deck is pinned in HTML
+/// here, with its Markdown pin in `md_golden_test`; text and YAML are not
+/// pinned for it.
+fn formats_of(name: &str) -> &'static [(&'static str, &'static str)] {
+    if name == "chart_types_impress.odp" {
+        &[("html", "html")]
+    } else {
+        FORMATS
+    }
+}
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -80,6 +97,12 @@ fn input_of(name: &str) -> PathBuf {
         | "link_annotations.pdf"
         | "chart_deck.pptx"
         | "inventory_calc.ods"
+        | "annotations_calc.ods"
+        | "worksheet_pictures_calc.ods"
+        | "chart_sheet_calc.ods"
+        | "chart_cross_sheet_calc.ods"
+        | "filler_rows_over_cap_calc.ods"
+        | "chart_types_impress.odp"
         | "brief_odt.odt"
         | "notes_odt.odt"
         | "q3_review_impress.odp"
@@ -175,6 +198,16 @@ fn difference(golden: &str, actual: &str) -> String {
     )
 }
 
+/// The annotated workbook is the one case whose remarks belong in these
+/// renderings; every other case stays body-only.
+fn extra_args(name: &str) -> &'static [&'static str] {
+    if name == "annotations_calc.ods" {
+        &["--include-notes"]
+    } else {
+        &[]
+    }
+}
+
 /// Compare one rendering with its golden, or rewrite every golden when
 /// `UPDATE_GOLDEN_FORMATS` is set.
 ///
@@ -184,7 +217,7 @@ fn difference(golden: &str, actual: &str) -> String {
 /// committed bytes, so a new picture is covered without a test of its own.
 /// Returns the golden's text, for the set-wide pin sweep.
 fn assert_matches_golden(format: &str, ext: &str, name: &str) -> String {
-    let (actual, dir) = convert(name, format, ext, &[]);
+    let (actual, dir) = convert(name, format, ext, extra_args(name));
     let golden_path = golden_of(format, ext, name);
     let pins = Pins {
         label: &format!("{name} as {format}"),
@@ -228,8 +261,8 @@ fn html_text_and_yaml_match_the_golden_files() {
     // from a leftover once all of that format's documents have been read.
     let mut goldens: BTreeMap<&str, Vec<String>> = BTreeMap::new();
 
-    for (format, ext) in FORMATS {
-        for name in CASES {
+    for name in CASES {
+        for (format, ext) in formats_of(name) {
             goldens
                 .entry(*format)
                 .or_default()

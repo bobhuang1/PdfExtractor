@@ -34,6 +34,7 @@
 //! `every_markdown_golden_is_a_fixed_point` in the CLI's tests.
 
 use crate::{decode, Block, TableGrid, TextDocument};
+use pdfextractor_limits::{Guard, Limits, Result};
 
 /// Split into lines, treating CRLF, CR and LF alike.
 fn lines(text: &str) -> Vec<String> {
@@ -54,10 +55,25 @@ fn lines(text: &str) -> Vec<String> {
 /// opens with a header row over a pipe-table alignment row is a table, the same
 /// grid Markdown and the text writer share.
 pub fn parse_plain(bytes: &[u8]) -> TextDocument {
+    parse_plain_with_guard(bytes, &Guard::unbudgeted())
+        .expect("a guard with no budget refuses nothing")
+}
+
+/// Parse a plain-text file under `budget`: the input it may be, the blocks it
+/// may produce and the time the walk through it may take.
+pub fn parse_plain_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_plain_with_guard(bytes, &budget.guard())
+}
+
+fn parse_plain_with_guard(bytes: &[u8], guard: &Guard<'_>) -> Result<TextDocument> {
+    guard.check_input(bytes.len())?;
     let raw = lines(&decode(bytes));
     let mut doc = TextDocument::default();
     let mut i = 0usize;
     while i < raw.len() {
+        if i.is_multiple_of(4096) {
+            guard.check("reading a text line")?;
+        }
         if raw[i].trim().is_empty() {
             i += 1;
             continue;
@@ -91,11 +107,23 @@ pub fn parse_plain(bytes: &[u8]) -> TextDocument {
                 .push(Block::labelled(block.join("\n"), "code", None, None)),
         }
     }
-    doc
+    guard.check_flow_blocks(crate::flow_units(&doc.items))?;
+    Ok(doc)
 }
 
 /// Parse a Markdown file, keeping the block structure it expresses.
 pub fn parse_markdown(bytes: &[u8]) -> TextDocument {
+    parse_markdown_with_guard(bytes, &Guard::unbudgeted())
+        .expect("a guard with no budget refuses nothing")
+}
+
+/// Parse a Markdown file under `budget`.
+pub fn parse_markdown_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_markdown_with_guard(bytes, &budget.guard())
+}
+
+fn parse_markdown_with_guard(bytes: &[u8], guard: &Guard<'_>) -> Result<TextDocument> {
+    guard.check_input(bytes.len())?;
     let (raw, front) = take_front_matter(lines(&decode(bytes)));
     let mut doc = TextDocument::default();
     if let Some(front) = front {
@@ -114,6 +142,9 @@ pub fn parse_markdown(bytes: &[u8]) -> TextDocument {
     let mut quoted_at: Option<usize> = None;
 
     while i < raw.len() {
+        if i.is_multiple_of(4096) {
+            guard.check("reading a Markdown line")?;
+        }
         let line = raw[i].as_str();
 
         // Fenced code block: everything up to the closing fence is verbatim.
@@ -329,7 +360,8 @@ pub fn parse_markdown(bytes: &[u8]) -> TextDocument {
         i += 1;
     }
 
-    doc
+    guard.check_flow_blocks(crate::flow_units(&doc.items))?;
+    Ok(doc)
 }
 
 /// The head facts a Markdown front matter states, in the shape the writer
@@ -1013,6 +1045,53 @@ fn list_item(line: &str) -> Option<(String, i32, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A caller-supplied block budget is enforced by both text readers, so a
+    /// file that expands past it is refused rather than returned in part.
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let budget = Limits {
+            max_flow_blocks: 1,
+            ..Limits::default()
+        };
+        let error = parse_plain_with_limits(b"one\n\ntwo\n", &budget)
+            .expect_err("the file has two paragraphs");
+        assert!(error.to_string().contains("2 blocks"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
+
+        let error = parse_markdown_with_limits(b"# One\n\nTwo\n", &budget)
+            .expect_err("the file has a title and a paragraph");
+        assert!(error.to_string().contains("2 blocks"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_input_budget_is_enforced() {
+        let budget = Limits {
+            max_input_bytes: 4,
+            ..Limits::default()
+        };
+        let error = parse_plain_with_limits(b"one\n\ntwo\n", &budget)
+            .expect_err("the file is longer than four bytes");
+        assert!(error.to_string().contains("limit is 4 bytes"), "{error}");
+    }
+
+    /// The line walks check the clock, so a spent deadline refuses a file
+    /// however small it is — in both text readers.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let budget = Limits {
+            timeout: std::time::Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = parse_plain_with_limits(b"one\n", &budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("reading a text line"), "{error}");
+        let error =
+            parse_markdown_with_limits(b"# One\n", &budget).expect_err("the deadline is spent");
+        assert!(
+            error.to_string().contains("reading a Markdown line"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn plain_text_keeps_every_non_empty_line() {

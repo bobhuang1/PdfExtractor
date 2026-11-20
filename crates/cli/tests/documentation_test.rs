@@ -5,7 +5,10 @@
 //! numbers are useful only while they are true: a count copied by hand goes
 //! stale the moment a test is added. This test asks Cargo for the current list
 //! (`--list`, which does not run anything) and holds every documented count to
-//! it.
+//! it. A stale count does not stop the gate at the first mismatch: every count
+//! the documentation states is compared, and one failure lists all of them.
+//! Each report names the file, line and nearest heading, and quotes the line,
+//! so a stale count can be found without searching for its number.
 //!
 //! The check is itself one of the tests it counts. Adding it moved the
 //! workspace total, so the plan states the new total; a later test added
@@ -20,7 +23,14 @@
 //! two: a reference named after a document in `test-data/real` is a corpus
 //! document, one that is not is a fixture beside the corpus (`test-data/*`).
 //! Both counts, and the sum the reference count is made of, are read off the
-//! disk, so an added or renamed document cannot leave the prose behind.
+//! disk and held against every file that states them — plan.md's reference
+//! count, and README's and the golden README's reference, corpus and fixture
+//! counts — so an added or renamed document cannot leave the prose behind.
+//!
+//! A corpus document with no reference and a reference with no fixture are
+//! collected with the stale counts instead of being asserted inside their
+//! counting helpers, so one run reports every missing reference and every stale
+//! count together.
 //!
 //! The workspace total is the Unix suite, because `crates/ui/tests/job_test.rs`
 //! is Unix-only. On another platform only that total is skipped; the target
@@ -128,47 +138,174 @@ fn word_value(word: &str) -> Option<usize> {
     })
 }
 
-/// The count after `prefix` in `text`, naming the file when it cannot be read.
-fn count_after_in(text: &str, prefix: &str, source: &str) -> usize {
-    let start = text
-        .find(prefix)
-        .unwrap_or_else(|| panic!("{source} no longer contains {prefix:?}"));
-    let token = text[start + prefix.len()..]
-        .split_whitespace()
-        .next()
-        .unwrap_or_default();
-    count_from(token)
-        .unwrap_or_else(|| panic!("{source}: {token:?} after {prefix:?} is not a count"))
+/// A count read from documentation, with the place that states it.
+struct DocumentedCount {
+    value: usize,
+    source: String,
+    line: usize,
+    section: Option<String>,
+    excerpt: String,
+    /// The column of the count within `excerpt`, for the report's caret.
+    caret: usize,
 }
 
-/// The count before `marker` in `text`, naming the file when it cannot be read.
-fn count_before_in(text: &str, marker: &str, source: &str) -> usize {
+impl DocumentedCount {
+    /// The place to point at in a stale-count report.
+    fn place(&self) -> String {
+        let section = self
+            .section
+            .as_ref()
+            .map(|section| format!(" in section {section:?}"))
+            .unwrap_or_default();
+        format!(
+            "{}:{}{section}\n    {}\n    {}^",
+            self.source,
+            self.line,
+            self.excerpt,
+            " ".repeat(self.caret)
+        )
+    }
+}
+
+/// The count at `offset`, with its line number, nearest heading and line.
+fn documented_count(source: &str, text: &str, offset: usize, value: usize) -> DocumentedCount {
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |index| offset + index);
+    let line = &text[line_start..line_end];
+    let line_number = text[..line_start].matches('\n').count() + 1;
+    let (excerpt, caret) = line_excerpt(line, offset - line_start);
+
+    DocumentedCount {
+        value,
+        source: source.to_string(),
+        line: line_number,
+        section: section_at(text, offset),
+        excerpt,
+        caret,
+    }
+}
+
+/// The nearest Markdown heading above `offset`, without its `#` markers.
+fn section_at(text: &str, offset: usize) -> Option<String> {
+    text[..offset].lines().rev().find_map(|line| {
+        let heading = line
+            .trim()
+            .strip_prefix('#')?
+            .trim_start_matches('#')
+            .trim();
+        (!heading.is_empty()).then(|| heading.to_string())
+    })
+}
+
+/// The line holding the count, shortened around `column` when it is very long.
+/// The line holding the count and the column of the count within that excerpt.
+fn line_excerpt(line: &str, column: usize) -> (String, usize) {
+    const LIMIT: usize = 240;
+
+    let trimmed = line.trim();
+    let leading = line.len() - line.trim_start().len();
+    let column = column.saturating_sub(leading);
+    let column = if column <= trimmed.len() && trimmed.is_char_boundary(column) {
+        column
+    } else {
+        trimmed.len()
+    };
+    let column = trimmed[..column].chars().count();
+    if trimmed.chars().count() <= LIMIT {
+        return (trimmed.to_string(), column);
+    }
+
+    let characters: Vec<char> = trimmed.chars().collect();
+    let start = column.saturating_sub(LIMIT / 3);
+    let end = (start + LIMIT).min(characters.len());
+    let start = end.saturating_sub(LIMIT);
+
+    let mut caret = column.saturating_sub(start);
+    let mut excerpt = String::new();
+    if start > 0 {
+        excerpt.push('…');
+        caret += 1;
+    }
+    excerpt.extend(&characters[start..end]);
+    if end < characters.len() {
+        excerpt.push('…');
+    }
+    (excerpt, caret)
+}
+
+/// The report for a marker that is absent, naming the section the search
+/// reached the end of instead of only the file and marker.
+fn missing_marker(source: &str, text: &str, marker: &str) -> String {
+    let section = section_at(text, text.len())
+        .map(|section| format!(" in section {section:?}"))
+        .unwrap_or_default();
+    format!("{source} no longer contains marker {marker:?}{section}")
+}
+
+/// The count after `prefix` in `text`, or why its marker or count is missing.
+fn count_after_in(text: &str, prefix: &str, source: &str) -> Result<DocumentedCount, String> {
+    let start = text
+        .find(prefix)
+        .ok_or_else(|| missing_marker(source, text, prefix))?;
+    let after = &text[start + prefix.len()..];
+    let token = after.split_whitespace().next().unwrap_or_default();
+    let value = count_from(token)
+        .ok_or_else(|| format!("{source}: {token:?} after marker {prefix:?} is not a count"))?;
+    let token_start = start + prefix.len() + after.find(token).unwrap_or(0);
+    Ok(documented_count(source, text, token_start, value))
+}
+
+/// The count before `marker` in `text`, or why its marker or count is missing.
+fn count_before_in(text: &str, marker: &str, source: &str) -> Result<DocumentedCount, String> {
     let end = text
         .find(marker)
-        .unwrap_or_else(|| panic!("{source} no longer contains {marker:?}"));
-    let token = text[..end].split_whitespace().last().unwrap_or_default();
-    count_from(token)
-        .unwrap_or_else(|| panic!("{source}: {token:?} before {marker:?} is not a count"))
+        .ok_or_else(|| missing_marker(source, text, marker))?;
+    let before = &text[..end];
+    let token = before.split_whitespace().last().unwrap_or_default();
+    let value = count_from(token)
+        .ok_or_else(|| format!("{source}: {token:?} before marker {marker:?} is not a count"))?;
+    let token_start = before
+        .rfind(token)
+        .unwrap_or(end.saturating_sub(token.len()));
+    Ok(documented_count(source, text, token_start, value))
 }
 
 /// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
 /// Only the Unix-only workspace total reads it.
 #[cfg_attr(not(unix), allow(dead_code))]
-fn count_after(plan: &str, prefix: &str) -> usize {
+fn count_after(plan: &str, prefix: &str) -> Result<DocumentedCount, String> {
     count_after_in(plan, prefix, "plan.md")
 }
 
 /// The count before `marker` in the plan, e.g. `128 end-to-end tests`.
-fn count_before(plan: &str, marker: &str) -> usize {
+fn count_before(plan: &str, marker: &str) -> Result<DocumentedCount, String> {
     count_before_in(plan, marker, "plan.md")
 }
 
-fn assert_count(what: &str, documented: usize, listed: usize) {
-    assert_eq!(
-        documented, listed,
-        "plan.md says {what} is {documented}, but `cargo test -- --list` lists {listed}.\n\
-         Update the documented count in the same change as the suite."
-    );
+/// Add a stale test count or a missing-marker problem, so the gate reports all.
+fn check_count(
+    stale: &mut Vec<String>,
+    what: &str,
+    documented: &Result<DocumentedCount, String>,
+    listed: usize,
+) {
+    let documented = match documented {
+        Ok(documented) => documented,
+        Err(problem) => {
+            stale.push(problem.clone());
+            return;
+        }
+    };
+    if documented.value != listed {
+        stale.push(format!(
+            "{} says {what} is {}, but `cargo test -- --list` lists {listed}.\n  stated at {}",
+            documented.source,
+            documented.value,
+            documented.place()
+        ));
+    }
 }
 
 /// The file stems directly inside `dir`, ignoring directories.
@@ -209,41 +346,53 @@ fn reference_count(root: &Path) -> usize {
     reference_stems(root).len()
 }
 
-/// The corpus documents (`test-data/real`), every one of which must have a
-/// reference.
-fn corpus_document_count(root: &Path) -> usize {
+/// The corpus documents (`test-data/real`) and the stem of every one that has
+/// no committed reference.
+fn corpus_document_count(root: &Path) -> (usize, Vec<String>) {
     let corpus = document_stems(&root.join("test-data/real"));
     let references = reference_stems(root);
-    let missing: Vec<&String> = corpus
+    let missing: Vec<String> = corpus
         .iter()
         .filter(|stem| !references.iter().any(|name| name == *stem))
+        .cloned()
         .collect();
-    assert!(
-        missing.is_empty(),
-        "the golden set has no Docling reference for corpus document(s) {missing:?}"
-    );
-    corpus.len()
+    (corpus.len(), missing)
 }
 
 /// The references that name no corpus document — the fixtures beside the corpus
-/// (`inventory.xlsx`, `q3_review_impress.odp`, …) — each of which must be a file
-/// committed under `test-data/`.
-fn fixture_count(root: &Path) -> usize {
+/// (`inventory.xlsx`, `q3_review_impress.odp`, …) — and the stem of every one
+/// that has no file committed under `test-data/`.
+fn fixture_count(root: &Path) -> (usize, Vec<String>) {
     let corpus = document_stems(&root.join("test-data/real"));
     let fixtures: Vec<String> = reference_stems(root)
         .into_iter()
         .filter(|stem| !corpus.contains(stem))
         .collect();
     let present = document_stems(&root.join("test-data"));
-    let missing: Vec<&String> = fixtures
+    let missing: Vec<String> = fixtures
         .iter()
         .filter(|stem| !present.iter().any(|name| name == *stem))
+        .cloned()
         .collect();
-    assert!(
-        missing.is_empty(),
-        "these Docling references name no fixture under test-data/: {missing:?}"
-    );
-    fixtures.len()
+    (fixtures.len(), missing)
+}
+
+/// Add a missing corpus reference or a reference with no fixture to `stale`.
+fn check_reference_files(
+    stale: &mut Vec<String>,
+    missing_corpus_references: &[String],
+    missing_fixture_files: &[String],
+) {
+    if !missing_corpus_references.is_empty() {
+        stale.push(format!(
+            "the golden set has no Docling reference for corpus document(s) {missing_corpus_references:?}"
+        ));
+    }
+    if !missing_fixture_files.is_empty() {
+        stale.push(format!(
+            "these Docling references name no fixture under test-data/: {missing_fixture_files:?}"
+        ));
+    }
 }
 
 /// The number of documents the ratchet baseline remembers.
@@ -260,13 +409,28 @@ fn baseline_document_count(root: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Hold a documented reference or baseline count to the repository's own.
-fn assert_repository_count(what: &str, source: &str, documented: usize, actual: usize) {
-    assert_eq!(
-        documented, actual,
-        "{source} says {what} is {documented}, but the repository has {actual}.\n\
-         Update the documented count in the same change as the references or the baseline."
-    );
+/// Add a stale reference/baseline count or a missing-marker problem.
+fn check_repository_count(
+    stale: &mut Vec<String>,
+    what: &str,
+    documented: &Result<DocumentedCount, String>,
+    actual: usize,
+) {
+    let documented = match documented {
+        Ok(documented) => documented,
+        Err(problem) => {
+            stale.push(problem.clone());
+            return;
+        }
+    };
+    if documented.value != actual {
+        stale.push(format!(
+            "{} says {what} is {}, but the repository has {actual}.\n  stated at {}",
+            documented.source,
+            documented.value,
+            documented.place()
+        ));
+    }
 }
 
 #[test]
@@ -283,18 +447,12 @@ fn documented_test_counts_match_the_test_list() {
         .unwrap_or_else(|error| panic!("could not read {}: {error}", golden_readme_path.display()));
     let references = reference_count(&root);
     let baseline_documents = baseline_document_count(&root);
-    let corpus_documents = corpus_document_count(&root);
-    let fixtures = fixture_count(&root);
+    let (corpus_documents, missing_corpus_references) = corpus_document_count(&root);
+    let (fixtures, missing_fixture_files) = fixture_count(&root);
     assert!(
         references > 0 && baseline_documents > 0 && corpus_documents > 0 && fixtures > 0,
         "a reference, baseline, corpus or fixture count came back empty, so this check \
          would pass without checking anything"
-    );
-    assert_eq!(
-        references,
-        corpus_documents + fixtures,
-        "the {references} committed references are not the {corpus_documents} corpus \
-         documents plus the {fixtures} fixtures beside them"
     );
 
     let workspace = listed_tests(&root, &["test", "--workspace"]);
@@ -342,12 +500,25 @@ fn documented_test_counts_match_the_test_list() {
         })
         .count();
 
+    let mut stale = Vec::new();
+    check_reference_files(
+        &mut stale,
+        &missing_corpus_references,
+        &missing_fixture_files,
+    );
+    if missing_corpus_references.is_empty() && references != corpus_documents + fixtures {
+        stale.push(format!(
+            "the {references} committed references are not the {corpus_documents} corpus \
+             documents plus the {fixtures} fixtures beside them"
+        ));
+    }
     // `job_test.rs` is `#![cfg(unix)]`; the documented total is the Unix suite
     // the test gate runs, so another platform's smaller total is not drift.
     #[cfg(unix)]
-    assert_count(
+    check_count(
+        &mut stale,
         "the workspace suite",
-        count_after(&plan, "the suite holds "),
+        &count_after(&plan, "the suite holds "),
         workspace.len(),
     );
     #[cfg(not(unix))]
@@ -356,80 +527,224 @@ fn documented_test_counts_match_the_test_list() {
          documented total counts the Unix-only tests in `job_test`",
         workspace.len()
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the `cli_test` suite",
-        count_before(&plan, " end-to-end tests in `cli_test`"),
+        &count_before(&plan, " end-to-end tests in `cli_test`"),
         cli.len(),
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden binary",
-        count_before(&plan, " tests in the binary"),
+        &count_before(&plan, " tests in the binary"),
         golden.len(),
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden fixture checks",
-        count_before(&plan, " fixture checks"),
+        &count_before(&plan, " fixture checks"),
         fixture_checks,
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden comparison units",
-        count_before(&plan, " comparison units"),
+        &count_before(&plan, " comparison units"),
         comparison_units,
     );
-    assert_count(
+    check_count(
+        &mut stale,
         "the golden acceptance tests",
-        count_before(&plan, " acceptance tests"),
+        &count_before(&plan, " acceptance tests"),
         acceptance_tests,
     );
 
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "plan.md",
-        count_before(&plan, " real Docling conversions"),
+        &count_before(&plan, " real Docling conversions"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "README.md",
-        count_before_in(&readme, " comparable references", "README.md"),
+        &count_before_in(&readme, " comparable references", "README.md"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the committed Docling references",
-        "test-data/golden/README.md",
-        count_after_in(&golden_readme, ") — **", "test-data/golden/README.md"),
+        &count_after_in(&golden_readme, ") — **", "test-data/golden/README.md"),
         references,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the baseline documents",
-        "README.md",
-        count_after_in(&readme, "docling · memory: ", "README.md"),
+        &count_after_in(&readme, "docling · memory: ", "README.md"),
         baseline_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the corpus documents",
-        "README.md",
-        count_before_in(&readme, " corpus documents", "README.md"),
+        &count_before_in(&readme, " corpus documents", "README.md"),
         corpus_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
+        "the fixtures beside the corpus",
+        &count_before_in(&readme, " fixtures beside them", "README.md"),
+        fixtures,
+    );
+    check_repository_count(
+        &mut stale,
         "the corpus documents",
-        "test-data/golden/README.md",
-        count_after_in(
+        &count_after_in(
             &golden_readme,
             "every one of the ",
             "test-data/golden/README.md",
         ),
         corpus_documents,
     );
-    assert_repository_count(
+    check_repository_count(
+        &mut stale,
         "the fixtures beside the corpus",
-        "test-data/golden/README.md",
-        count_before_in(
+        &count_before_in(
             &golden_readme,
             "fixtures beside the corpus",
             "test-data/golden/README.md",
         ),
         fixtures,
     );
+
+    assert!(
+        stale.is_empty(),
+        "{} stale count(s), missing marker(s) or reference problem(s) in the documentation:\n\n{}\n\n\
+         Update the documented counts, markers and reference files in the same change as the suite, references or baseline.",
+        stale.len(),
+        stale.join("\n\n")
+    );
+}
+
+#[test]
+fn every_stale_count_is_collected_before_the_gate_reports_it() {
+    let plan = "## Tests\n\nThe workspace holds 10 tests.\n";
+    let readme = "## Golden set\n\nThere are 41 comparable references.\n";
+    let workspace = count_after_in(plan, "holds ", "plan.md");
+    let references = count_before_in(readme, " comparable references", "README.md");
+    let missing = count_after_in("## Tests\n\nNo count here.\n", "holds ", "plan.md");
+    let missing_references = count_after_in(
+        "## Golden set\n\nNo references here.\n",
+        "comparable references",
+        "README.md",
+    );
+
+    let mut stale = Vec::new();
+    check_count(&mut stale, "the workspace suite", &workspace, 11);
+    check_count(&mut stale, "the `cli_test` suite", &workspace, 10);
+    check_count(&mut stale, "a test count", &missing, 1);
+    check_repository_count(
+        &mut stale,
+        "the committed Docling references",
+        &references,
+        42,
+    );
+    check_repository_count(&mut stale, "a reference count", &missing_references, 42);
+
+    assert_eq!(stale.len(), 4);
+    assert!(stale[0].contains("plan.md says the workspace suite is 10"));
+    assert!(stale[0].contains("lists 11"));
+    assert!(stale[0].contains("plan.md:3"));
+    assert!(stale[0].contains("section \"Tests\""));
+    assert!(stale[0].contains("The workspace holds 10 tests."));
+    assert!(stale[1].contains("plan.md no longer contains marker \"holds \""));
+    assert!(stale[1].contains("in section \"Tests\""));
+    assert!(stale[2].contains("README.md says the committed Docling references is 41"));
+    assert!(stale[2].contains("has 42"));
+    assert!(stale[2].contains("README.md:3"));
+    assert!(stale[2].contains("section \"Golden set\""));
+    assert!(stale[2].contains("There are 41 comparable references."));
+    assert!(stale[3].contains("README.md no longer contains marker \"comparable references\""));
+    assert!(stale[3].contains("in section \"Golden set\""));
+
+    for (report, quoted, number) in [
+        (&stale[0], "The workspace holds 10 tests.", "10"),
+        (&stale[2], "There are 41 comparable references.", "41"),
+    ] {
+        let lines: Vec<&str> = report.lines().collect();
+        let quoted_line = lines
+            .iter()
+            .position(|line| line.contains(quoted))
+            .unwrap_or_else(|| panic!("the report did not quote {quoted:?}:\n{report}"));
+        let caret_line = lines
+            .get(quoted_line + 1)
+            .unwrap_or_else(|| panic!("the report had no caret after {quoted:?}:\n{report}"));
+        assert_eq!(
+            caret_line.trim(),
+            "^",
+            "the caret line held more than its caret:\n{report}"
+        );
+        assert_eq!(
+            caret_line.find('^'),
+            lines[quoted_line].find(number),
+            "the caret did not point at {number} in {quoted:?}:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn two_missing_markers_in_one_document_are_both_collected() {
+    let plan = "## Tests\n\nNo counts here.\n";
+    let after = count_after_in(plan, "holds ", "plan.md");
+    let before = count_before_in(plan, " end-to-end tests", "plan.md");
+
+    let mut stale = Vec::new();
+    check_count(&mut stale, "the workspace suite", &after, 1);
+    check_count(&mut stale, "the `cli_test` suite", &before, 2);
+
+    assert_eq!(
+        stale.len(),
+        2,
+        "one missing marker stopped the other from being collected: {stale:#?}"
+    );
+    assert!(stale[0].contains("plan.md no longer contains marker \"holds \" in section \"Tests\""));
+    assert!(stale[1]
+        .contains("plan.md no longer contains marker \" end-to-end tests\" in section \"Tests\""));
+}
+
+#[test]
+fn missing_references_are_collected_with_the_other_problems() {
+    let root = std::env::temp_dir().join(format!(
+        "pdfextractor-documentation-{}-missing-references",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    for directory in ["test-data/real", "test-data/golden/docling"] {
+        std::fs::create_dir_all(root.join(directory)).expect("create the temporary test tree");
+    }
+    for document in ["present.pdf", "absent.pdf"] {
+        std::fs::write(root.join("test-data/real").join(document), b"fixture")
+            .expect("write a corpus document");
+    }
+    for reference in ["present.json", "orphan.json"] {
+        std::fs::write(root.join("test-data/golden/docling").join(reference), b"{}")
+            .expect("write a reference");
+    }
+
+    let (corpus_documents, missing_corpus_references) = corpus_document_count(&root);
+    let (fixtures, missing_fixture_files) = fixture_count(&root);
+    let mut stale = Vec::new();
+    check_reference_files(
+        &mut stale,
+        &missing_corpus_references,
+        &missing_fixture_files,
+    );
+
+    assert_eq!(corpus_documents, 2);
+    assert_eq!(fixtures, 1);
+    assert_eq!(missing_corpus_references, vec!["absent".to_string()]);
+    assert_eq!(missing_fixture_files, vec!["orphan".to_string()]);
+    assert_eq!(stale.len(), 2);
+    assert!(stale[0].contains("absent"));
+    assert!(stale[1].contains("orphan"));
+
+    let _ = std::fs::remove_dir_all(&root);
 }

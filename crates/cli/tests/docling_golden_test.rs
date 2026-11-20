@@ -684,6 +684,74 @@ fn an_ods_workbook_conforms_to_the_docling_schema() {
     assert_fixture_conforms("inventory_calc.ods", "inventory_calc", "ods-schema");
 }
 
+/// The commented workbook adds what `inventory_calc.ods` has no instance of:
+/// two `office:annotation` comments, one beside a value and one on an empty
+/// cell, which our reader holds on the notes layer rather than in the grid.
+#[test]
+fn an_ods_workbook_with_cell_comments_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "annotations_calc.ods",
+        "annotations_calc",
+        "ods-comments-schema",
+    );
+}
+
+/// The filler workbook adds an empty worksheet — a page with no table — and a
+/// run of `table:number-rows-repeated` empties between two data blocks, which
+/// both readings skip without materializing a row for each.
+#[test]
+fn an_ods_workbook_with_an_empty_sheet_and_filler_rows_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "filler_rows_calc.ods",
+        "filler_rows_calc",
+        "ods-filler-schema",
+    );
+}
+
+/// The same filler shape with a run longer than the reader's 1,024-row
+/// materialization cap: the empty run is skipped whole, so the block after it
+/// stays at the row the producer wrote and the page matches Docling's height.
+#[test]
+fn an_ods_workbook_with_a_filler_run_beyond_the_cap_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "filler_rows_over_cap_calc.ods",
+        "filler_rows_over_cap_calc",
+        "ods-filler-over-cap-schema",
+    );
+}
+
+/// The boolean workbook isolates what the other Calc fixtures only meet in
+/// passing: displayed `TRUE`/`FALSE` with Docling's `True`/`False` values, and
+/// rows that end before the table's last columns.
+#[test]
+fn an_ods_workbook_with_boolean_flags_and_trailing_empty_cells_conforms_to_the_docling_schema() {
+    assert_fixture_conforms("booleans_calc.ods", "booleans_calc", "ods-booleans-schema");
+}
+
+/// The picture workbook adds the drawings the other Calc fixtures have none of:
+/// five cell-anchored pictures written beside the JSON, each a picture item
+/// rather than a table or an image carried inside one.
+#[test]
+fn an_ods_workbook_with_pictures_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "worksheet_pictures_calc.ods",
+        "worksheet_pictures_calc",
+        "ods-pictures-schema",
+    );
+}
+
+/// The chart workbook adds the chart pictures the picture workbook has no
+/// instance of: two charts read as tabular data with their caption and no image,
+/// on the same sheet groups and tables the schema already knows.
+#[test]
+fn an_ods_workbook_with_charts_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "chart_sheet_calc.ods",
+        "chart_sheet_calc",
+        "ods-charts-schema",
+    );
+}
+
 /// A Writer document is flow-based, so it adds the shapes the corpus's DOCX
 /// files already carry — title, headings, lists, a linked paragraph, a table
 /// with real spans and a picture — without a page: the page style's rectangle
@@ -701,6 +769,19 @@ fn an_odt_document_conforms_to_the_docling_schema() {
 #[test]
 fn an_odt_document_with_notes_and_a_nested_table_conforms_to_the_docling_schema() {
     assert_fixture_conforms("notes_odt.odt", "notes_odt", "odt-notes-schema");
+}
+
+/// The third Writer fixture puts a master page's running header and page footer
+/// around three body items. Neither our reader nor Docling's OpenDocument
+/// backend publishes them, so the reference holds the body alone; the fixture
+/// pins that a producer's header and footer stay out of the body on both sides.
+#[test]
+fn an_odt_document_with_a_header_and_footer_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "header_footer_odt.odt",
+        "header_footer_odt",
+        "odt-header-footer-schema",
+    );
 }
 
 /// A deck adds things no corpus document has: `chapter` groups that hold
@@ -728,6 +809,18 @@ fn an_odp_presentation_with_master_backgrounds_and_animations_conforms_to_the_do
         "master_animations_impress.odp",
         "master_animations_impress",
         "odp-master-schema",
+    );
+}
+
+/// The chart fixture isolates what the deck above only meets as one bar chart:
+/// a pie, a line with two series, a scatter with x-values in its domain, and a
+/// chart object with no `local-table` to read its numbers from.
+#[test]
+fn an_odp_presentation_with_charts_conforms_to_the_docling_schema() {
+    assert_fixture_conforms(
+        "chart_types_impress.odp",
+        "chart_types_impress",
+        "odp-charts-schema",
     );
 }
 
@@ -1560,7 +1653,14 @@ const LABEL_BUDGETS: [(&str, usize, usize); 9] = [
 /// what this comparison calls a defect in *our* output — so 78/93 = 0.839 is this
 /// document's ceiling rather than a shortfall, and every character outside that
 /// duplicate is held. Everything not listed keeps the global floor.
-const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
+///
+/// `worksheet_pictures_calc.ods` is read completely: its five drawings are pictures
+/// on both sides, and the sheets' prose and data are the tables we hold. Docling's
+/// OpenDocument backend also turns each drawing's file name into a one-cell table —
+/// six on `Pictures` and one on `Summary` — and a file name is not document text;
+/// those seven cells are the whole shortfall behind 0.634, so the floor sits just
+/// under what this reading can reach.
+const TEXT_FLOORS: [(&str, f64); 2] = [("late_header", 0.83), ("worksheet_pictures_calc", 0.63)];
 
 /// Documents whose reference publishes no pages although ours does, with the
 /// reason the page count is not compared.
@@ -1568,11 +1668,15 @@ const TEXT_FLOORS: [(&str, f64); 1] = [("late_header", 0.83)];
 /// Docling's ODP backend reads a presentation as a flow document: it publishes
 /// no `pages` map, while our reader pages every slide. The content is still
 /// Docling's reading and is compared in full; the slide count is held by the ODP
-/// suite, which converts the same fixture and checks its three pages.
-const PAGE_COUNT_EXEMPT: [(&str, &str); 2] = [
+/// suite, which converts the fixtures and checks their pages.
+const PAGE_COUNT_EXEMPT: [(&str, &str); 3] = [
     (
         "q3_review_impress",
         "Docling's ODP backend publishes no pages; the slides are pages in ours",
+    ),
+    (
+        "chart_types_impress",
+        "Docling's ODP backend publishes no pages; the slide is a page in ours",
     ),
     (
         "master_animations_impress",
@@ -1824,18 +1928,38 @@ fn our_output_agrees_with_real_docling_conversions() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
-/// The `docling-core` model itself, when a Python with it installed is pointed
-/// at. This is the authoritative check — it is the library that defines the
+/// The `docling-core` model itself, loaded with the Python `DOCLING_PY` names.
+/// This is the authoritative check — it is the library that defines the
 /// format — but it is not required to build the project.
+///
+/// It is not silently optional either: with no Python the loader never runs,
+/// so passing here would report the corpus as loader-validated by a run that
+/// validated nothing. Unset `DOCLING_PY` therefore fails the test, and the only
+/// way past it is the deliberate `DOCLING_SKIP_ORACLE=1`, which prints that the
+/// layer did not run.
 #[test]
 fn docling_core_accepts_our_documents() {
-    let Ok(python) = std::env::var("DOCLING_PY") else {
-        println!(
-            "skipped: set DOCLING_PY to a python with docling-core installed, e.g.\n  \
-             DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p pdfextractor-cli \
-             --test docling_golden_test"
-        );
-        return;
+    let python = match std::env::var("DOCLING_PY") {
+        Ok(python) if !python.trim().is_empty() => python,
+        _ => {
+            let opt_out = std::env::var("DOCLING_SKIP_ORACLE").unwrap_or_default();
+            if matches!(opt_out.trim(), "1" | "true" | "yes") {
+                println!(
+                    "skipped on purpose (DOCLING_SKIP_ORACLE={opt_out}): docling-core did not \
+                     load the corpus, so this run does not say the loader accepts it"
+                );
+                return;
+            }
+            panic!(
+                "DOCLING_PY is unset (or empty), so docling-core cannot load the corpus — and a \
+                 run that does not load it must not report it as accepted.\n  \
+                 Point DOCLING_PY at a python with docling-core installed:\n  \
+                 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python cargo test -p pdfextractor-cli \
+                 --test docling_golden_test\n  \
+                 or opt out in so many words, for a run that checks the schema alone:\n  \
+                 DOCLING_SKIP_ORACLE=1 cargo test -p pdfextractor-cli --test docling_golden_test"
+            );
+        }
     };
 
     let script = golden_dir().join("validate_with_docling.py");
@@ -1851,10 +1975,16 @@ fn docling_core_accepts_our_documents() {
     for (file, stem) in [
         ("inventory.xlsx", "inventory"),
         ("inventory_calc.ods", "inventory_calc"),
+        ("annotations_calc.ods", "annotations_calc"),
+        ("filler_rows_calc.ods", "filler_rows_calc"),
+        ("filler_rows_over_cap_calc.ods", "filler_rows_over_cap_calc"),
+        ("booleans_calc.ods", "booleans_calc"),
         ("brief_odt.odt", "brief_odt"),
         ("notes_odt.odt", "notes_odt"),
+        ("header_footer_odt.odt", "header_footer_odt"),
         ("q3_review.pptx", "q3_review"),
         ("q3_review_impress.odp", "q3_review_impress"),
+        ("chart_types_impress.odp", "chart_types_impress"),
         ("master_animations_impress.odp", "master_animations_impress"),
         ("invoice_scan.png", "invoice_scan"),
     ] {

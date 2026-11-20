@@ -12,7 +12,7 @@
 //!   relationship id — including the preview of an embedded object (`w:object`,
 //!   a MathType equation or a pasted drawing), and including the vector
 //!   drawings Word stores as metafiles, which are played into PNGs first (see
-//!   [`crate::drawing`]),
+//!   `crate::drawing`),
 //! * a chart's title, which exists only in the chart part, as a caption,
 //! * Office Math (`m:oMath`), linearised to readable text — one formula item per
 //!   equation.
@@ -34,10 +34,11 @@ use pdfextractor_drawingml::{
     paints_a_picture_fill, render as render_drawing, render_with as render_drawing_with, Media,
     Theme,
 };
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 /// English Metric Units per point (914400 EMU per inch, 72 points per inch).
 const EMU_PER_POINT: f64 = 12700.0;
@@ -211,23 +212,30 @@ impl DocxDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> anyhow::Result<Self> {
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read a DOCX under an explicit input, ZIP and XML budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> anyhow::Result<Self> {
+        budget.check_input(data.len())?;
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not a DOCX (ZIP) package: {e}"))?;
+        budget.check_zip(archive.archive_mut())?;
 
         // Snapshot every media part up front. Holding the archive open while the
         // extractor walks the XML would tangle the mutable borrows for no gain.
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
         for i in 0..archive.len() {
-            let mut file = match archive.by_index(i) {
-                Ok(f) => f,
+            let name = match archive.by_index(i) {
+                Ok(file) => file.name().to_string(),
                 Err(_) => continue,
             };
-            let name = file.name().to_string();
             if !name.starts_with("word/media/") {
                 continue;
             }
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_ok() {
+            if let Some(buf) = archive.read_name(&name) {
                 media.insert(name, buf);
             }
         }
@@ -237,16 +245,14 @@ impl DocxDocument {
         // them, and dropping them loses text a reader sees (bug 46).
         let mut charts: HashMap<String, Vec<u8>> = HashMap::new();
         for i in 0..archive.len() {
-            let mut file = match archive.by_index(i) {
-                Ok(f) => f,
+            let name = match archive.by_index(i) {
+                Ok(file) => file.name().to_string(),
                 Err(_) => continue,
             };
-            let name = file.name().to_string();
             if !name.starts_with("word/charts/") || !name.ends_with(".xml") {
                 continue;
             }
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_ok() {
+            if let Some(buf) = archive.read_name(&name) {
                 charts.insert(name, buf);
             }
         }
@@ -269,8 +275,8 @@ impl DocxDocument {
         let numbering = read_numbering(&mut archive);
 
         let mut doc = DocxDocument::default();
-        let mut extractor = Extractor::new(&rels, &media, &charts, &theme, &numbering);
-        extractor.run(&main);
+        let mut extractor = Extractor::new(&rels, &media, &charts, &theme, &numbering, &budget);
+        extractor.run(&main, &guard)?;
         doc.page_width = extractor.page_width;
         doc.page_height = extractor.page_height;
         doc.items = extractor.items;
@@ -294,8 +300,8 @@ impl DocxDocument {
                 &mut archive,
                 &format!("word/_rels/{}.rels", name.trim_start_matches("word/")),
             )?;
-            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering);
-            sub.run(&bytes);
+            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering, &budget);
+            sub.run(&bytes, &guard)?;
             extra.extend(sub.items);
         }
         doc.furniture = extra;
@@ -312,8 +318,8 @@ impl DocxDocument {
                 &mut archive,
                 &format!("word/_rels/{}.rels", part.trim_start_matches("word/")),
             )?;
-            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering);
-            sub.run(&bytes);
+            let mut sub = Extractor::new(&sub_rels, &media, &charts, &theme, &numbering, &budget);
+            sub.run(&bytes, &guard)?;
             for mut item in sub.items {
                 if let DocxItem::Text { label, .. } = &mut item {
                     *label = "footnote".to_string();
@@ -322,20 +328,64 @@ impl DocxDocument {
             }
         }
 
+        // A DOCX is a flow format like RTF or HTML, and the bridge hands its
+        // Writer output back as one: a package whose parts fit the ZIP budget
+        // can still expand into a document of very many blocks, so the
+        // block budget every other flow reader applies is applied here. The
+        // count is only known after the walk, exactly as it is for the flow
+        // readers. The built-in `.doc` reader applies the same ceiling but
+        // counts one unit per flow item: it has no table model, so a table
+        // reaches it as tabbed text. The per-cell count below is therefore the
+        // stricter of the two routes to a legacy `.doc`, not an equal one.
+        guard.check_flow_blocks(flow_blocks(&doc))?;
+
         Ok(doc)
     }
 }
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    Some(buf)
+/// What this document costs against [`limits::Limits::max_flow_blocks`].
+///
+/// A paragraph, a formula or a picture is one block; a table costs what it
+/// holds — one per cell, with the pictures and nested tables inside a cell
+/// counted on top rather than folded into it — which is the rule the flow
+/// readers apply to their own tables.
+fn flow_blocks(document: &DocxDocument) -> usize {
+    document
+        .items
+        .iter()
+        .chain(&document.furniture)
+        .map(item_unit)
+        .sum()
+}
+
+fn item_unit(item: &DocxItem) -> usize {
+    match item {
+        DocxItem::Table(table) => table_units(table),
+        _ => 1,
+    }
+}
+
+fn table_units(table: &DocxTable) -> usize {
+    let cells: usize = table
+        .rows
+        .iter()
+        .flatten()
+        .map(|cell| {
+            let nested: usize = cell.tables.iter().map(table_units).sum();
+            1 + nested + cell.pictures.len()
+        })
+        .sum();
+    // An empty table is still one block in the document.
+    cells.max(1)
+}
+
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
 /// Map relationship ids to part names, e.g. `rId5` -> `word/media/image1.png`.
 fn read_relationships(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    archive: &mut limits::Package<'_>,
     rels_path: &str,
 ) -> anyhow::Result<HashMap<String, String>> {
     let mut out = HashMap::new();
@@ -486,7 +536,7 @@ fn store_level(
 /// halves are needed before a list item can be expanded. A `w:lvlOverride`
 /// inside `w:num` redefines (or restarts) a level for that one list, and it
 /// overrides the abstract scheme it came from.
-fn read_numbering(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Numbering {
+fn read_numbering(archive: &mut limits::Package<'_>) -> Numbering {
     let Some(bytes) = read_part(archive, "word/numbering.xml") else {
         return Numbering::default();
     };
@@ -942,6 +992,8 @@ struct Extractor<'a> {
     /// The package's theme, where a DrawingML shape's colours come from.
     theme: &'a Theme,
     rels: &'a HashMap<String, String>,
+    /// The image budgets a picture painted into a shape is decoded under.
+    limits: limits::Limits,
 
     items: Vec<DocxItem>,
 
@@ -1104,12 +1156,14 @@ impl<'a> Extractor<'a> {
         charts: &'a HashMap<String, Vec<u8>>,
         theme: &'a Theme,
         numbering: &'a Numbering,
+        budget: &limits::Limits,
     ) -> Self {
         Self {
             media,
             charts,
             theme,
             rels,
+            limits: budget.clone(),
             items: Vec::new(),
             in_paragraph: false,
             para_text: String::new(),
@@ -1140,14 +1194,21 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn run(&mut self, xml: &[u8]) {
+    fn run(&mut self, xml: &[u8], guard: &limits::Guard<'_>) -> anyhow::Result<()> {
         let mut reader = Reader::from_reader(Cursor::new(xml));
         // Keep text exactly as written: `w:t` content is authoritative,
         // including leading and trailing spaces.
         reader.config_mut().trim_text(false);
         let mut buf = Vec::new();
+        // The deadline is checked as the part is walked, so one enormous part
+        // inside the XML budget cannot run past the time budget.
+        let mut events = 0u64;
 
         loop {
+            events = events.wrapping_add(1);
+            if events.is_multiple_of(4096) {
+                guard.check("reading a DOCX part")?;
+            }
             let event = match reader.read_event_into(&mut buf) {
                 Ok(e) => e,
                 Err(err) => {
@@ -1258,6 +1319,7 @@ impl<'a> Extractor<'a> {
             buf.clear();
         }
         self.finish_paragraph();
+        Ok(())
     }
 
     fn start(&mut self, e: &BytesStart, at: Option<usize>) {
@@ -2187,6 +2249,7 @@ impl<'a> Extractor<'a> {
                 let media = DocxMedia {
                     rels: self.rels,
                     media: self.media,
+                    limits: self.limits.clone(),
                 };
                 if let Some(painted) = render_drawing_with(markup, self.theme, &media) {
                     return Some(DocxItem::Picture {
@@ -2241,6 +2304,7 @@ impl<'a> Extractor<'a> {
 struct DocxMedia<'a> {
     rels: &'a HashMap<String, String>,
     media: &'a HashMap<String, Vec<u8>>,
+    limits: limits::Limits,
 }
 
 impl Media for DocxMedia<'_> {
@@ -2249,6 +2313,10 @@ impl Media for DocxMedia<'_> {
         let mime = mime_for_part(target)?;
         let data = self.media.get(target)?;
         Some((mime.to_string(), data.clone()))
+    }
+
+    fn limits(&self) -> limits::Limits {
+        self.limits.clone()
     }
 }
 
@@ -3059,6 +3127,102 @@ mod tests {
 
     const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     const M: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
+
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(
+            &format!(r#"<w:document {W}><w:body/></w:document>"#),
+            "",
+            &[],
+        );
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            DocxDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
+    /// The blocks a DOCX expands into are held to the same budget the flow
+    /// readers apply: a package of two paragraphs and a four-cell table is six
+    /// blocks.
+    #[test]
+    fn a_custom_block_budget_is_enforced() {
+        let pkg = package(
+            &format!(
+                r#"<w:document {W}><w:body>
+                     <w:p><w:r><w:t>one</w:t></w:r></w:p>
+                     <w:p><w:r><w:t>two</w:t></w:r></w:p>
+                     <w:tbl>
+                       <w:tr>
+                         <w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc>
+                         <w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc>
+                       </w:tr>
+                       <w:tr>
+                         <w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc>
+                         <w:tc><w:p><w:r><w:t>d</w:t></w:r></w:p></w:tc>
+                       </w:tr>
+                     </w:tbl>
+                   </w:body></w:document>"#
+            ),
+            "",
+            &[],
+        );
+        DocxDocument::parse_bytes_with_limits(&pkg, pdfextractor_limits::Limits::default())
+            .expect("the document fits the default budget");
+        let tight = pdfextractor_limits::Limits {
+            max_flow_blocks: 5,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocxDocument::parse_bytes_with_limits(&pkg, tight)
+            .expect_err("two paragraphs and four cells are six blocks");
+        assert!(
+            error.to_string().contains("6 blocks") && error.to_string().contains("limit is 5"),
+            "{error}"
+        );
+    }
+
+    /// A custom package total is enforced against what the parts actually
+    /// decode to, not only against the sizes the central directory declares: a
+    /// package that fits a small XML budget per part is still refused when the
+    /// parts together expand past the total.
+    #[test]
+    fn a_custom_package_total_is_enforced() {
+        let pkg = package(
+            &format!(
+                r#"<w:document {W}><w:body><w:p><w:r><w:t>hello</w:t></w:r></w:p></w:body></w:document>"#
+            ),
+            "",
+            &[],
+        );
+        DocxDocument::parse_bytes_with_limits(&pkg, pdfextractor_limits::Limits::default())
+            .expect("the parts fit the default total");
+        let tight = pdfextractor_limits::Limits {
+            max_zip_total_bytes: 16,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocxDocument::parse_bytes_with_limits(&pkg, tight)
+            .expect_err("sixteen bytes cannot hold the package's parts");
+        assert!(error.to_string().contains("limit is 16 bytes"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(
+            &format!(r#"<w:document {W}><w:body/></w:document>"#),
+            "",
+            &[],
+        );
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = DocxDocument::parse_bytes_with_limits(&pkg, budget)
+            .expect_err("the package has two entries");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
 
     #[test]
     fn extracts_paragraphs_and_heading_labels() {

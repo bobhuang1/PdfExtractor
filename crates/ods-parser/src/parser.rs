@@ -30,13 +30,14 @@
 //! displays is read.
 
 use anyhow::{Context, Result};
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use pdfextractor_picture_formats::{format_for_mime, mime_for_extension};
-use pdfextractor_xlsx_parser::{Sheet, SheetCell, SheetPicture, SheetTable};
+use pdfextractor_xlsx_parser::{Sheet, SheetAnnotation, SheetCell, SheetPicture, SheetTable};
 
 mod chart;
 
@@ -59,25 +60,8 @@ pub struct OdsDocument {
     pub annotations: Vec<SheetAnnotation>,
 }
 
-/// A comment on a cell.
-///
-/// It is about the cell, not a part of it: Calc writes it as an
-/// `office:annotation` beside the cell's paragraphs, so the words are a remark
-/// on the sheet rather than the cell's content.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SheetAnnotation {
-    /// The sheet's number in the workbook, 1-based — the page it is read as.
-    pub sheet: usize,
-    /// The cell's row and column on the sheet, both 0-based.
-    pub row: usize,
-    pub col: usize,
-    /// The name the comment's `dc:creator` states, when it states one.
-    pub author: Option<String>,
-    /// The time its `dc:date` states, when it states one.
-    pub date: Option<String>,
-    /// Its words, one paragraph per line.
-    pub text: String,
-}
+// A cell's comment is the workbook model's [`SheetAnnotation`], because a
+// comment reaches the command line the same way whichever package wrote it.
 
 impl OdsDocument {
     pub fn parse_file(path: &str) -> Result<Self> {
@@ -86,8 +70,17 @@ impl OdsDocument {
     }
 
     pub fn parse_bytes(data: &[u8]) -> Result<Self> {
-        let mut archive = zip::ZipArchive::new(Cursor::new(data))
+        Self::parse_bytes_with_limits(data, limits::Limits::default())
+    }
+
+    /// Read an ODS under an explicit input, ZIP, XML and page budget.
+    pub fn parse_bytes_with_limits(data: &[u8], budget: limits::Limits) -> Result<Self> {
+        budget.check_input(data.len())?;
+        let guard = budget.guard();
+        guard.check("reading a package")?;
+        let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
+        budget.check_zip(archive.archive_mut())?;
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;
         let media = read_parts(&mut archive, "Pictures/");
@@ -96,7 +89,8 @@ impl OdsDocument {
         // A hidden sheet is named by its style, and the style is stated in the
         // same part: read the whole part before any sheet is.
         let hidden = hidden_sheet_styles(&content)?;
-        let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects)?;
+        let (sheets, annotations) = read_sheets(&content, &hidden, &media, &objects, &guard)?;
+        budget.check_pages(sheets.len())?;
         Ok(Self {
             sheets,
             annotations,
@@ -104,28 +98,21 @@ impl OdsDocument {
     }
 }
 
-fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut file = archive.by_name(name).ok()?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
-    Some(buffer)
+fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
+    archive.read_name(name)
 }
 
-fn read_parts(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    prefix: &str,
-) -> HashMap<String, Vec<u8>> {
+fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let (name, is_dir) = match archive.by_index(index) {
+            Ok(file) => (file.name().to_string(), file.is_dir()),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
-        if file.is_dir() || !name.starts_with(prefix) {
+        if is_dir || !name.starts_with(prefix) {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
+        if let Some(buffer) = archive.read_name(&name) {
             parts.insert(name, buffer);
         }
     }
@@ -134,22 +121,22 @@ fn read_parts(
 
 /// The embedded chart objects a package holds, keyed by the directory a
 /// `draw:object` names (`Object 1`). Each is the chart's `content.xml`.
-fn read_chart_objects(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> HashMap<String, Vec<u8>> {
+fn read_chart_objects(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u8>> {
     let mut objects = HashMap::new();
     for index in 0..archive.len() {
-        let Ok(mut file) = archive.by_index(index) else {
-            continue;
+        let name = match archive.by_index(index) {
+            Ok(file) => file.name().to_string(),
+            Err(_) => continue,
         };
-        let name = file.name().to_string();
         let Some(object) = name.strip_suffix("/content.xml") else {
             continue;
         };
+        let object = object.to_string();
         if !object.starts_with("Object ") {
             continue;
         }
-        let mut buffer = Vec::new();
-        if file.read_to_end(&mut buffer).is_ok() {
-            objects.insert(object.to_string(), buffer);
+        if let Some(buffer) = archive.read_name(&name) {
+            objects.insert(object, buffer);
         }
     }
     objects
@@ -193,17 +180,19 @@ fn read_sheets(
     hidden_styles: &HashSet<String>,
     media: &HashMap<String, Vec<u8>>,
     objects: &HashMap<String, Vec<u8>>,
+    guard: &limits::Guard<'_>,
 ) -> Result<(Vec<Sheet>, Vec<SheetAnnotation>)> {
     let mut pull = Pull::new(xml);
     let mut sheets = Vec::new();
     let mut frames = Vec::new();
     let mut annotations = Vec::new();
     loop {
+        guard.check("reading an ODS sheet")?;
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table" => {
                 let index = sheets.len() + 1;
                 let (sheet, sheet_frames, sheet_annotations) =
-                    read_sheet(&mut pull, &attrs, index, hidden_styles)?;
+                    read_sheet(&mut pull, &attrs, index, hidden_styles, guard)?;
                 sheets.push(sheet);
                 frames.push(sheet_frames);
                 annotations.extend(sheet_annotations);
@@ -213,11 +202,13 @@ fn read_sheets(
         }
     }
 
-    let resolved: Vec<(Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>)> = sheets
-        .iter()
-        .zip(&frames)
-        .map(|(sheet, frames)| drawings(&sheets, &sheet.name, frames, media, objects))
-        .collect();
+    let mut resolved = Vec::with_capacity(sheets.len());
+    for (sheet, frames) in sheets.iter().zip(&frames) {
+        resolved.push(
+            drawings(&sheets, &sheet.name, frames, media, objects)
+                .with_context(|| format!("reading the charts on sheet {:?}", sheet.name))?,
+        );
+    }
     for (sheet, (pictures, charts)) in sheets.iter_mut().zip(resolved) {
         sheet.pictures = pictures;
         sheet.charts = charts;
@@ -232,6 +223,7 @@ fn read_sheet(
     attrs: &[(String, String)],
     index: usize,
     hidden_styles: &HashSet<String>,
+    guard: &limits::Guard<'_>,
 ) -> Result<(Sheet, Vec<Frame>, Vec<SheetAnnotation>)> {
     let name = field(attrs, "name")
         .filter(|name| !name.is_empty())
@@ -247,14 +239,30 @@ fn read_sheet(
     let mut row = 0usize;
     let mut frames = Vec::new();
     let mut annotations = Vec::new();
+    // A single sheet can hold a whole workbook's cells, so the deadline is
+    // checked as its rows are read, not only between sheets.
+    let mut rows = 0u64;
 
     loop {
+        rows = rows.wrapping_add(1);
+        if rows.is_multiple_of(1024) {
+            guard.check("reading an ODS sheet")?;
+        }
         match pull.next()? {
             Tok::Start { name, attrs } if name == "table-row" => {
-                let repeat = count(&attrs, "number-rows-repeated").min(MAX_REPEAT);
+                let declared = count(&attrs, "number-rows-repeated");
+                let repeat = declared.min(MAX_REPEAT);
                 let mut row_frames = Vec::new();
                 let mut row_annotations = Vec::new();
                 let cells = read_row(pull, row, &mut row_frames, &mut row_annotations)?;
+                if cells.is_empty() && row_frames.is_empty() && row_annotations.is_empty() {
+                    // The cap bounds what a repeated row can materialize, not
+                    // how far an empty filler run moves the grid: skipping it
+                    // costs nothing, so the block after it keeps the row the
+                    // producer wrote even when the run is longer than the cap.
+                    row = row.saturating_add(declared);
+                    continue;
+                }
                 for copy in 0..repeat {
                     for cell in &cells {
                         place(&mut grid, &mut covered, row + copy, cell);
@@ -368,8 +376,12 @@ fn repeat_cell(
     }
 }
 
-/// An annotation's author (`dc:creator`), time (`dc:date`) and words.
-type AnnotationParts = (Option<String>, Option<String>, String);
+/// The parts of one `office:annotation` that become a cell's remark.
+struct AnnotationContent {
+    author: Option<String>,
+    date: Option<String>,
+    text: String,
+}
 
 /// Read one `office:annotation`: its author, its time and its words.
 ///
@@ -377,7 +389,7 @@ type AnnotationParts = (Option<String>, Option<String>, String);
 /// paragraphs, with the name in `dc:creator`, the time in `dc:date` and the
 /// words in one or more paragraphs joined by a newline. An annotation with no
 /// words is no remark and is not one.
-fn read_annotation(pull: &mut Pull<'_>) -> Result<Option<AnnotationParts>> {
+fn read_annotation(pull: &mut Pull<'_>) -> Result<Option<AnnotationContent>> {
     let mut author = None;
     let mut date = None;
     let mut paragraphs: Vec<String> = Vec::new();
@@ -403,11 +415,11 @@ fn read_annotation(pull: &mut Pull<'_>) -> Result<Option<AnnotationParts>> {
     if text.is_empty() {
         return Ok(None);
     }
-    Ok(Some((
-        author.filter(|author| !author.is_empty()),
-        date.filter(|date| !date.is_empty()),
+    Ok(Some(AnnotationContent {
+        author: author.filter(|author| !author.is_empty()),
+        date: date.filter(|date| !date.is_empty()),
         text,
-    )))
+    }))
 }
 
 /// One cell of the grid a sheet is read onto.
@@ -588,12 +600,12 @@ fn read_cell(
                 // keeps only what it displays. A frame's words are the frame's,
                 // and the frame itself is a picture or a chart.
                 "annotation" => {
-                    if let Some((author, date, text)) = read_annotation(pull)? {
+                    if let Some(annotation) = read_annotation(pull)? {
                         annotations.push(CellAnnotation {
                             col,
-                            author,
-                            date,
-                            text,
+                            author: annotation.author,
+                            date: annotation.date,
+                            text: annotation.text,
                         });
                     }
                 }
@@ -727,14 +739,14 @@ fn drawings(
     frames: &[Frame],
     media: &HashMap<String, Vec<u8>>,
     objects: &HashMap<String, Vec<u8>>,
-) -> (Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>) {
+) -> Result<(Vec<SheetPicture>, Vec<pdfextractor_chart::ChartShape>)> {
     let mut pictures = Vec::new();
     let mut charts = Vec::new();
     for frame in frames {
         if let Some(object) = &frame.object {
             let object = object.trim_start_matches("./");
             if let Some(bytes) = objects.get(object) {
-                if let Some(mut chart) = chart::read_chart(bytes, sheet_name, sheets) {
+                if let Some(mut chart) = chart::read_chart(bytes, sheet_name, sheets)? {
                     chart.bbox = frame.bbox();
                     charts.push(chart);
                 }
@@ -768,7 +780,7 @@ fn drawings(
             });
         }
     }
-    (pictures, charts)
+    Ok((pictures, charts))
 }
 
 /// The value a cell states when it displays no text.
@@ -1110,6 +1122,51 @@ mod tests {
         )
     }
 
+    /// A spent deadline refuses the read by name rather than walking the part.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let pkg = package(&content(""));
+        let budget = pdfextractor_limits::Limits {
+            timeout: std::time::Duration::ZERO,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error =
+            OdsDocument::parse_bytes_with_limits(&pkg, budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_zip_budget_is_enforced() {
+        let pkg = package(&content(""));
+        let budget = pdfextractor_limits::Limits {
+            max_zip_entries: 2,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
+            .expect_err("the package has three entries");
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let body = r#"
+            <table:table table:name="One">
+              <table:table-row><table:table-cell><text:p>A</text:p></table:table-cell></table:table-row>
+            </table:table>
+            <table:table table:name="Two">
+              <table:table-row><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>
+            </table:table>"#;
+        let pkg = package(&content(body));
+        let budget = pdfextractor_limits::Limits {
+            max_pages: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let error = OdsDocument::parse_bytes_with_limits(&pkg, budget)
+            .expect_err("the content has two sheets");
+        assert!(error.to_string().contains("2 pages"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
+    }
+
     fn texts(sheet: &Sheet) -> Vec<String> {
         sheet
             .tables
@@ -1340,6 +1397,46 @@ mod tests {
             (second.num_rows, second.num_cols),
             (2, 2),
             "a repeated row is repeated, and trailing filler is not a column"
+        );
+    }
+
+    #[test]
+    fn a_filler_run_beyond_the_cap_is_skipped_whole() {
+        let body = r#"
+            <table:table table:name="Filler">
+              <table:table-column table:number-columns-repeated="2"/>
+              <table:table-row>
+                <table:table-cell><text:p>Region</text:p></table:table-cell>
+                <table:table-cell><text:p>Total</text:p></table:table-cell>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell><text:p>North</text:p></table:table-cell>
+                <table:table-cell><text:p>10</text:p></table:table-cell>
+              </table:table-row>
+              <table:table-row table:number-rows-repeated="2000">
+                <table:table-cell table:number-columns-repeated="2"/>
+              </table:table-row>
+              <table:table-row>
+                <table:table-cell><text:p>South</text:p></table:table-cell>
+                <table:table-cell><text:p>20</text:p></table:table-cell>
+              </table:table-row>
+            </table:table>"#;
+        let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
+        let sheet = &document.sheets[0];
+        assert_eq!(sheet.tables.len(), 2);
+        let first = &sheet.tables[0];
+        assert_eq!(first.anchor, (0, 0));
+        assert_eq!((first.num_rows, first.num_cols), (2, 2));
+        let second = &sheet.tables[1];
+        assert_eq!(
+            second.anchor,
+            (0, 2002),
+            "the filler run is not truncated at the materialization cap"
+        );
+        assert_eq!((second.num_rows, second.num_cols), (1, 2));
+        assert_eq!(
+            texts(sheet),
+            ["Region", "Total", "North", "10", "South", "20"]
         );
     }
 }

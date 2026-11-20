@@ -6,6 +6,7 @@
 //! into two data regions, numbers, a boolean, a date and a cached formula.
 
 use serde_json::Value;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -412,6 +413,330 @@ fn an_ods_sheet_chart_is_its_data_rather_than_a_picture() {
     let html = std::fs::read_to_string(ws.join("chart_sheet_calc.html")).expect("the HTML");
     assert!(!html.contains("<img"), "a chart became an image: {html}");
     assert!(!ws.join("chart_sheet_calc_images").exists());
+}
+
+/// A chart's ranges name the sheet they read, and the chart sheet's own cells are
+/// not a stand-in for them: this workbook anchors the chart on `Charts`, plots
+/// `Figures`, and puts deliberately wrong numbers on `Charts` so a reading that
+/// ignored the sheet in a range would be visible in the table.
+#[test]
+fn a_chart_on_one_sheet_plots_cells_from_another() {
+    let ws = Workspace::new("cross-sheet-chart");
+    let path = test_data("chart_cross_sheet_calc.ods");
+    let output = ws.join("chart_cross_sheet_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--to",
+        "html",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(page_numbers(&doc), [1, 2]);
+
+    // Both sheets are still pages of their own, and the chart sheet keeps its
+    // decoy cells as that sheet's table.
+    let tables = doc["tables"].as_array().expect("a table list");
+    assert_eq!(tables.len(), 2, "{tables:#?}");
+    assert_eq!(cell(&doc, "999")["text"], "999");
+    assert_eq!(cell(&doc, "North")["text"], "North");
+
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 1, "the chart on Charts: {pictures:#?}");
+    let chart = &pictures[0];
+    assert_eq!(
+        chart["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+    assert!(chart["image"].is_null(), "a chart was written as an image");
+    assert_eq!(chart["prov"][0]["page_no"].as_i64(), Some(2));
+    assert_eq!(chart["prov"][0]["bbox"]["l"].as_f64(), Some(4.0));
+    assert_eq!(chart["prov"][0]["bbox"]["t"].as_f64(), Some(1.0));
+
+    let data = &chart["meta"]["tabular_chart"]["chart_data"];
+    assert_eq!(data["num_rows"].as_u64(), Some(4), "{data:#?}");
+    assert_eq!(data["num_cols"].as_u64(), Some(3), "{data:#?}");
+    let cells: Vec<(u64, u64, &str)> = data["table_cells"]
+        .as_array()
+        .expect("the chart's cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["start_row_offset_idx"].as_u64().unwrap(),
+                cell["start_col_offset_idx"].as_u64().unwrap(),
+                cell["text"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for cell in [
+        (0, 1, "Q1"),
+        (0, 2, "Q2"),
+        (1, 0, "North"),
+        (1, 1, "120"),
+        (1, 2, "140"),
+        (2, 0, "South"),
+        (2, 1, "90"),
+        (2, 2, "95"),
+        (3, 0, "West"),
+        (3, 1, "60"),
+        (3, 2, "80"),
+    ] {
+        assert!(cells.contains(&cell), "{cell:?} is missing: {cells:?}");
+    }
+    assert!(
+        cells
+            .iter()
+            .all(|(_, _, text)| *text != "Wrong" && !text.contains("999")),
+        "the chart plotted the chart sheet's decoys: {cells:?}"
+    );
+
+    let caption = chart["captions"][0]["$ref"]
+        .as_str()
+        .expect("a caption ref");
+    let caption_item = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .find(|item| item["self_ref"] == caption)
+        .expect("the caption item");
+    assert_eq!(caption_item["text"], "Cross-sheet revenue");
+    assert_eq!(caption_item["label"], "caption");
+
+    let markdown =
+        std::fs::read_to_string(ws.join("chart_cross_sheet_calc.md")).expect("the Markdown");
+    assert!(markdown.contains("Cross-sheet revenue"), "{markdown}");
+    assert!(
+        !markdown.contains("!["),
+        "a chart became an image: {markdown}"
+    );
+    let html = std::fs::read_to_string(ws.join("chart_cross_sheet_calc.html")).expect("the HTML");
+    assert!(html.contains("Cross-sheet revenue"), "{html}");
+    assert!(!html.contains("<img"), "a chart became an image: {html}");
+    assert!(!ws.join("chart_cross_sheet_calc_images").exists());
+}
+
+/// A sheet name with a space is written quoted in an ODF chart range, on both
+/// ends of the range. The chart is anchored on `Dashboard`, so the quoted name
+/// has to resolve to `Quarterly Totals`; the `999` cells on the chart's own
+/// sheet are the decoys a reading that ignored the quote would pick up.
+#[test]
+fn a_chart_with_a_quoted_sheet_name_plots_that_sheet() {
+    let path = test_data("chart_quoted_sheet_calc.ods");
+
+    // Pin the fixture's own spelling: the point of this case is the quoted
+    // range a real Calc package writes, not a hand-simplified one.
+    let bytes = std::fs::read(&path).expect("the quoted-sheet workbook");
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("the workbook is a ZIP package");
+    let mut chart_xml = String::new();
+    archive
+        .by_name("Object 1/content.xml")
+        .expect("the embedded chart part")
+        .read_to_string(&mut chart_xml)
+        .expect("the chart XML");
+    assert!(
+        chart_xml.contains(
+            "table:cell-range-address=\"&apos;Quarterly Totals&apos;.A2:&apos;Quarterly Totals&apos;.A4\""
+        ),
+        "the categories are not quoted over both range ends: {chart_xml}"
+    );
+    assert!(
+        chart_xml.contains(
+            "chart:values-cell-range-address=\"&apos;Quarterly Totals&apos;.B2:&apos;Quarterly Totals&apos;.B4\""
+        ),
+        "the first series is not quoted over both range ends: {chart_xml}"
+    );
+
+    let ws = Workspace::new("quoted-sheet-chart");
+    let output = ws.join("chart_quoted_sheet_calc.json");
+    run_ok(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--to",
+        "html",
+    ]);
+
+    let doc = json_of(&output);
+    assert_eq!(page_numbers(&doc), [1, 2]);
+    let sheets: Vec<&str> = doc["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .filter(|group| group["label"] == "sheet")
+        .map(|group| group["name"].as_str().expect("a sheet name"))
+        .collect();
+    assert_eq!(sheets, ["Quarterly Totals", "Dashboard"]);
+
+    let tables = doc["tables"].as_array().expect("a table list");
+    assert_eq!(tables.len(), 2, "{tables:#?}");
+    assert_eq!(cell(&doc, "North")["text"], "North");
+    assert_eq!(cell(&doc, "999")["text"], "999");
+
+    let pictures = doc["pictures"].as_array().expect("a pictures list");
+    assert_eq!(pictures.len(), 1, "the chart on Dashboard: {pictures:#?}");
+    let chart = &pictures[0];
+    assert_eq!(
+        chart["meta"]["classification"]["predictions"][0]["class_name"],
+        "bar_chart"
+    );
+    assert!(chart["image"].is_null(), "a chart was written as an image");
+    assert_eq!(chart["prov"][0]["page_no"].as_i64(), Some(2));
+    assert_eq!(chart["prov"][0]["bbox"]["l"].as_f64(), Some(4.0));
+    assert_eq!(chart["prov"][0]["bbox"]["t"].as_f64(), Some(1.0));
+
+    let data = &chart["meta"]["tabular_chart"]["chart_data"];
+    assert_eq!(data["num_rows"].as_u64(), Some(4), "{data:#?}");
+    assert_eq!(data["num_cols"].as_u64(), Some(3), "{data:#?}");
+    let cells: Vec<(u64, u64, &str)> = data["table_cells"]
+        .as_array()
+        .expect("the chart's cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["start_row_offset_idx"].as_u64().unwrap(),
+                cell["start_col_offset_idx"].as_u64().unwrap(),
+                cell["text"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for cell in [
+        (0, 1, "Q1"),
+        (0, 2, "Q2"),
+        (1, 0, "North"),
+        (1, 1, "120"),
+        (1, 2, "140"),
+        (2, 0, "South"),
+        (2, 1, "90"),
+        (2, 2, "95"),
+        (3, 0, "West"),
+        (3, 1, "60"),
+        (3, 2, "80"),
+    ] {
+        assert!(cells.contains(&cell), "{cell:?} is missing: {cells:?}");
+    }
+    assert!(
+        cells
+            .iter()
+            .all(|(_, _, text)| *text != "Wrong" && !text.contains("999")),
+        "the chart plotted the dashboard's decoys: {cells:?}"
+    );
+
+    let caption = chart["captions"][0]["$ref"]
+        .as_str()
+        .expect("a caption ref");
+    let caption_item = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .find(|item| item["self_ref"] == caption)
+        .expect("the caption item");
+    assert_eq!(caption_item["text"], "Quoted ranges");
+    assert_eq!(caption_item["label"], "caption");
+
+    let markdown =
+        std::fs::read_to_string(ws.join("chart_quoted_sheet_calc.md")).expect("the Markdown");
+    assert!(markdown.contains("Quoted ranges"), "{markdown}");
+    assert!(
+        !markdown.contains("!["),
+        "a chart became an image: {markdown}"
+    );
+    let html = std::fs::read_to_string(ws.join("chart_quoted_sheet_calc.html")).expect("the HTML");
+    assert!(html.contains("Quoted ranges"), "{html}");
+    assert!(!html.contains("<img"), "a chart became an image: {html}");
+    assert!(!ws.join("chart_quoted_sheet_calc_images").exists());
+}
+
+/// Copy an ODS package, changing one sheet name in its embedded chart ranges.
+/// The package is otherwise the real Calc output, so the refusal is exercised
+/// through the same XML a producer writes.
+fn ods_with_chart_sheet(source: &Path, target: &Path, from: &str, to: &str) {
+    let file = std::fs::File::open(source).expect("open the source workbook");
+    let mut archive = zip::ZipArchive::new(file).expect("the source is a ZIP package");
+    let output = std::fs::File::create(target).expect("create the rewritten workbook");
+    let mut writer = zip::ZipWriter::new(output);
+    let mut replaced = false;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).expect("a package entry");
+        let name = entry.name().to_string();
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer
+                .add_directory(name, options)
+                .expect("copy a package directory");
+            continue;
+        }
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("read a package entry");
+        if name.starts_with("Object ") && name.ends_with("/content.xml") {
+            let text = String::from_utf8(data).expect("the chart XML is UTF-8");
+            replaced = text.contains(from);
+            data = text.replace(from, to).into_bytes();
+        }
+        writer
+            .start_file(name, options)
+            .expect("write a package entry");
+        writer
+            .write_all(&data)
+            .expect("write a package entry's bytes");
+    }
+    writer.finish().expect("finish the rewritten workbook");
+    assert!(replaced, "the chart did not name {from:?}");
+}
+
+/// A chart range that names a sheet the workbook does not have is a refusal,
+/// not a chart with empty values. The diagnostic names the chart's own sheet,
+/// the range and the missing sheet, and the run writes nothing.
+#[test]
+fn a_chart_range_naming_a_missing_sheet_fails_with_its_name() {
+    let ws = Workspace::new("missing-chart-sheet");
+    let path = ws.join("chart_missing_sheet_calc.ods");
+    ods_with_chart_sheet(
+        &test_data("chart_quoted_sheet_calc.ods"),
+        &path,
+        "Quarterly Totals",
+        "Missing Sheet",
+    );
+    let output = ws.join("chart_missing_sheet_calc.json");
+    let out = run(&[
+        "-i",
+        path.to_str().expect("a UTF-8 path"),
+        "-o",
+        output.to_str().expect("a UTF-8 path"),
+        "--to",
+        "json",
+    ]);
+    assert!(!out.status.success(), "a missing sheet was accepted");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("reading the charts on sheet \"Dashboard\""),
+        "the diagnostic does not name the chart's sheet: {stderr}"
+    );
+    assert!(
+        stderr.contains("Missing Sheet"),
+        "the diagnostic does not name the missing sheet: {stderr}"
+    );
+    assert!(
+        stderr.contains("'Missing Sheet'") && stderr.contains("which the workbook does not have"),
+        "the diagnostic does not name the unresolved range: {stderr}"
+    );
+    assert!(
+        !output.exists(),
+        "a refused workbook still wrote {}",
+        output.display()
+    );
 }
 
 #[test]

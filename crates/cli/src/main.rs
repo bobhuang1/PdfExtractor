@@ -1,5 +1,6 @@
 mod compare;
 mod preview;
+mod redline;
 
 // The range grammar is the window's too: a typo is refused there before a run
 // starts, with the message a process would have printed.
@@ -17,7 +18,7 @@ use clap::{Parser, ValueEnum, ValueHint};
 use pdfextractor_core::{
     DocumentBuilder, GridCell, GridTable, Origin, PictureData, Ref, TextLabel,
 };
-use pdfextractor_formats::{bridge, detect, is_bridged, BridgeTarget, Format};
+use pdfextractor_formats::{bridge_with_limits, detect, is_bridged, BridgeTarget, Format};
 use pdfextractor_json_exporter::export_to_file;
 use pdfextractor_layout::Span as LayoutSpan;
 use pdfextractor_ocr_engine::QuarterTurn;
@@ -44,7 +45,7 @@ impl OcrMode {
     /// The name this mode has on the command line — the same name a compare
     /// baseline records its measurement's OCR mode under, so a run measured with
     /// `--ocr never` matches a memory that says `"never"` and one that does not
-    /// match is told apart as what it is (see [`compare::Session`]).
+    /// match is told apart as what it is (see `compare::Session`).
     fn as_str(self) -> &'static str {
         match self {
             OcrMode::Auto => "auto",
@@ -113,23 +114,23 @@ impl ChunkType {
 #[allow(clippy::enum_variant_names)]
 enum TokenizerEncoding {
     #[value(name = "cl100k_base", alias = "cl100k")]
-    Cl100kBase,
+    Cl100k,
     #[value(name = "o200k_base", alias = "o200k")]
-    O200kBase,
+    O200k,
     #[value(name = "p50k_base", alias = "p50k")]
-    P50kBase,
+    P50k,
     #[value(name = "r50k_base", alias = "r50k")]
-    R50kBase,
+    R50k,
 }
 
 impl TokenizerEncoding {
     fn encoding(self) -> pdfextractor_md_exporter::chunks::TiktokenEncoding {
         use pdfextractor_md_exporter::chunks::TiktokenEncoding;
         match self {
-            TokenizerEncoding::Cl100kBase => TiktokenEncoding::Cl100k,
-            TokenizerEncoding::O200kBase => TiktokenEncoding::O200k,
-            TokenizerEncoding::P50kBase => TiktokenEncoding::P50k,
-            TokenizerEncoding::R50kBase => TiktokenEncoding::R50k,
+            TokenizerEncoding::Cl100k => TiktokenEncoding::Cl100k,
+            TokenizerEncoding::O200k => TiktokenEncoding::O200k,
+            TokenizerEncoding::P50k => TiktokenEncoding::P50k,
+            TokenizerEncoding::R50k => TiktokenEncoding::R50k,
         }
     }
 }
@@ -214,6 +215,89 @@ struct Args {
         action = clap::ArgAction::Set
     )]
     text_dehyphenate: bool,
+
+    /// The largest input a run will read, in bytes (default 268435456). A file
+    /// over it is refused by the shared budgets, not read.
+    #[arg(long, value_name = "N")]
+    max_input_bytes: Option<u64>,
+
+    /// The most pages, sheets, slides or frames one document may have (default
+    /// 10000). A document over it is refused by the shared budgets.
+    #[arg(long, value_name = "N")]
+    max_pages: Option<usize>,
+
+    /// The largest image grid a picture may have, in pixels (default 100000000)
+    #[arg(long, value_name = "N")]
+    max_image_pixels: Option<u64>,
+
+    /// The largest one side of an image grid may be, in pixels (default
+    /// 100000)
+    #[arg(long, value_name = "N")]
+    max_image_dimension: Option<u32>,
+
+    /// The most bytes one image decode may allocate (default 536870912)
+    #[arg(long, value_name = "N")]
+    max_image_alloc_bytes: Option<u64>,
+
+    /// The most frames a TIFF, GIF or animated WebP may hold when its frames
+    /// are read as pages (default 1000)
+    #[arg(long, value_name = "N")]
+    max_image_frames: Option<usize>,
+
+    /// The most blocks a flow reader — text, Markdown, CSV, RTF, HTML, DOCX or
+    /// legacy `.doc` — may produce (default 1000000). A table is one block per
+    /// cell
+    #[arg(long, value_name = "N")]
+    max_flow_blocks: Option<usize>,
+
+    /// The largest byte count a single decoded PDF stream may produce (default
+    /// 134217728)
+    #[arg(long, value_name = "N")]
+    max_decoded_stream_bytes: Option<u64>,
+
+    /// The most entries a ZIP package may hold (default 10000)
+    #[arg(long, value_name = "N")]
+    max_zip_entries: Option<usize>,
+
+    /// The largest uncompressed size one ZIP entry may reach, in bytes
+    /// (default 67108864)
+    #[arg(long, value_name = "N")]
+    max_zip_entry_bytes: Option<u64>,
+
+    /// The largest total uncompressed size a ZIP package may reach, in bytes
+    /// (default 536870912)
+    #[arg(long, value_name = "N")]
+    max_zip_total_bytes: Option<u64>,
+
+    /// The largest expansion ratio an entry above one mebibyte may declare
+    /// (default 200)
+    #[arg(long, value_name = "N")]
+    max_zip_ratio: Option<u64>,
+
+    /// The largest XML part a package may carry, in bytes (default 67108864)
+    #[arg(long, value_name = "N")]
+    max_xml_bytes: Option<u64>,
+
+    /// The deepest XML element nesting accepted (default 256)
+    #[arg(long, value_name = "N")]
+    max_xml_depth: Option<usize>,
+
+    /// The largest total one document may expand to, across every PDF stream
+    /// and image frame its reader decodes, in bytes (default 1073741824). The
+    /// per-item ceilings bound one item each; this bounds what a file of many
+    /// of them adds up to
+    #[arg(long, value_name = "N")]
+    max_document_bytes: Option<u64>,
+
+    /// The wall-clock budget for one document's reading, in seconds (default
+    /// 30). A read that outlives it is refused rather than finished
+    #[arg(long, value_name = "SECONDS")]
+    timeout: Option<f64>,
+
+    /// The wall-clock budget for one document's OCR pages, in seconds (default
+    /// 600). Recognition is seconds a page, so it has a budget of its own
+    #[arg(long, value_name = "SECONDS")]
+    ocr_timeout: Option<f64>,
 
     /// Include the notes layer — a deck's speaker notes and comments — in the
     /// Markdown, HTML and text outputs. Off, those three are a reading of the
@@ -328,11 +412,170 @@ struct Args {
     /// below the floor the memory beside that reference remembers it by
     #[arg(long, value_hint = ValueHint::AnyPath)]
     compare: Option<PathBuf>,
+
+    /// Compare two versions of the same PDF or DOCX and write a page-aware
+    /// HTML redline report with page and picture placement previews. `--input`
+    /// is the newer version and this is the older one; `--output` names the
+    /// report
+    #[arg(long, value_name = "OLD", value_hint = ValueHint::AnyPath)]
+    redline: Option<PathBuf>,
 }
 
 const MAX_PARALLEL: usize = 256;
 
+/// Exit code for a document the shared budgets refused, as opposed to one that
+/// could not be read: a caller that retries with a larger budget needs to tell
+/// the two apart without parsing the message.
+const EXIT_LIMIT_REFUSED: i32 = 3;
+
+/// The budgets this run is held to, set once from the command line.
+static BUDGETS: std::sync::OnceLock<pdfextractor_limits::Limits> = std::sync::OnceLock::new();
+
+/// The shared budgets this run was asked for.
+fn budgets() -> pdfextractor_limits::Limits {
+    BUDGETS.get().cloned().unwrap_or_default()
+}
+
+/// Apply every `--max-*` and `--timeout` flag to the shared defaults before
+/// anything is read, so the PDF reader, the packages, the flow formats, `.doc`,
+/// the image readers and the OCR pages are all held to one value.
+///
+/// The flags are named one per budget, so a refusal can point at the flag that
+/// would raise it (`raise_flag`).
+fn install_budgets(args: &Args) {
+    let mut limits = budgets();
+    if let Some(bytes) = args.max_input_bytes {
+        limits.max_input_bytes = bytes;
+    }
+    if let Some(pages) = args.max_pages {
+        limits.max_pages = pages;
+    }
+    if let Some(pixels) = args.max_image_pixels {
+        limits.max_image_pixels = pixels;
+    }
+    if let Some(dimension) = args.max_image_dimension {
+        limits.max_image_dimension = dimension;
+    }
+    if let Some(bytes) = args.max_image_alloc_bytes {
+        limits.max_image_alloc_bytes = bytes;
+    }
+    if let Some(frames) = args.max_image_frames {
+        limits.max_image_frames = frames;
+    }
+    if let Some(blocks) = args.max_flow_blocks {
+        limits.max_flow_blocks = blocks;
+    }
+    if let Some(bytes) = args.max_decoded_stream_bytes {
+        limits.max_decoded_stream_bytes = bytes;
+    }
+    if let Some(entries) = args.max_zip_entries {
+        limits.max_zip_entries = entries;
+    }
+    if let Some(bytes) = args.max_zip_entry_bytes {
+        limits.max_zip_entry_bytes = bytes;
+    }
+    if let Some(bytes) = args.max_zip_total_bytes {
+        limits.max_zip_total_bytes = bytes;
+    }
+    if let Some(ratio) = args.max_zip_ratio {
+        limits.max_zip_ratio = ratio;
+    }
+    if let Some(bytes) = args.max_xml_bytes {
+        limits.max_xml_bytes = bytes;
+    }
+    if let Some(depth) = args.max_xml_depth {
+        limits.max_xml_depth = depth;
+    }
+    if let Some(bytes) = args.max_document_bytes {
+        limits.max_document_bytes = bytes;
+    }
+    if let Some(seconds) = args.timeout {
+        limits.timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
+    }
+    if let Some(seconds) = args.ocr_timeout {
+        limits.ocr_timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
+    }
+    let _ = BUDGETS.set(limits);
+}
+
+/// Whether `error` is a budget refusal, at any depth of its context.
+fn is_limit_refusal(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<pdfextractor_limits::LimitError>()
+            .is_some()
+    })
+}
+
+/// The `error_kind` a `--progress` record carries for `error`.
+///
+/// A refusal is its own kind: the budgets said no, which is not the same failure
+/// as a file that cannot be read, and a consumer deciding whether to retry needs
+/// the two apart.
+fn error_kind(error: &anyhow::Error) -> &'static str {
+    if is_limit_refusal(error) {
+        "limit"
+    } else {
+        "error"
+    }
+}
+
+/// The flag that would raise the budget a refusal ran out of.
+///
+/// `None` for a refusal no flag here raises: a malformed part, a `DOCTYPE`, an
+/// empty image, and the PDF's object, token and nesting ceilings, which the
+/// command line does not expose.
+fn raise_flag(error: &anyhow::Error) -> Option<&'static str> {
+    use pdfextractor_limits::LimitError;
+    let refusal = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>())?;
+    Some(match refusal {
+        LimitError::InputTooLarge { .. } => "--max-input-bytes",
+        LimitError::TooManyPages { .. } => "--max-pages",
+        LimitError::DecodedStreamTooLarge { .. } => "--max-decoded-stream-bytes",
+        LimitError::TooManyZipEntries { .. } => "--max-zip-entries",
+        LimitError::ZipEntryTooLarge { .. } => "--max-zip-entry-bytes",
+        LimitError::ZipRatioTooHigh { .. } => "--max-zip-ratio",
+        LimitError::ZipTotalTooLarge { .. } => "--max-zip-total-bytes",
+        LimitError::XmlTooLarge { .. } => "--max-xml-bytes",
+        LimitError::XmlTooDeep { .. } => "--max-xml-depth",
+        LimitError::ImageTooWide { .. } => "--max-image-dimension",
+        LimitError::ImageTooManyPixels { .. } => "--max-image-pixels",
+        LimitError::ImageAllocTooLarge { .. } => "--max-image-alloc-bytes",
+        LimitError::TooManyImageFrames { .. } => "--max-image-frames",
+        LimitError::TooManyFlowBlocks { .. } => "--max-flow-blocks",
+        LimitError::DocumentTooLarge { .. } => "--max-document-bytes",
+        // The OCR deadline is checked between pages, so its refusal carries
+        // that stage; every other deadline is the parser's `--timeout`.
+        LimitError::Timeout { stage, .. } if stage == "recognising a page" => "--ocr-timeout",
+        LimitError::Timeout { .. } => "--timeout",
+        _ => return None,
+    })
+}
+
+/// The suffix a refusal's message carries: the flag that would raise it.
+fn flag_hint(error: &anyhow::Error) -> String {
+    match raise_flag(error) {
+        Some(flag) => format!(" (raise {flag} to allow it)"),
+        None => String::new(),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    match run() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if is_limit_refusal(&error) {
+                eprintln!("error: {error:#}{}", flag_hint(&error));
+                std::process::exit(EXIT_LIMIT_REFUSED);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // Log records go to stderr, not the default stdout: stdout carries the
     // `--progress` records, where a stray line of prose would be read as a
     // malformed record by whatever is streaming the run.
@@ -342,6 +585,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    install_budgets(&args);
 
     // A consumer asking what this build can take should not have to hold an
     // input path, run a conversion, or parse help text or a refusal message:
@@ -376,6 +620,13 @@ fn main() -> anyhow::Result<()> {
 
     if !input.exists() {
         anyhow::bail!("input path does not exist: {}", input.display());
+    }
+
+    // Redline is a two-document mode of its own: it converts both versions and
+    // writes one report, rather than running the directory/format/compare
+    // pipeline. Handle it before the input is expanded into a queue.
+    if let Some(old) = args.redline.as_deref() {
+        return run_redline(old, input, &args);
     }
 
     let found = collect_inputs(input, args.recursive)?;
@@ -557,6 +808,33 @@ fn main() -> anyhow::Result<()> {
     };
 
     if failures > 0 {
+        // A refusal is the budgets saying no, not a file that cannot be read:
+        // when that is the only thing that went wrong, the run says so in its
+        // exit code as well as in the message.
+        let all_refused = results
+            .iter()
+            .filter_map(|(_, result)| result.as_ref().err())
+            .all(is_limit_refusal);
+        if all_refused {
+            // When every refusal is the same budget, the summary can name the
+            // one flag that would read them all.
+            let flags: Vec<&str> = results
+                .iter()
+                .filter_map(|(_, result)| result.as_ref().err())
+                .filter_map(raise_flag)
+                .collect();
+            let hint = match flags.first() {
+                Some(flag) if flags.iter().all(|other| other == flag) => {
+                    format!(" (raise {flag} to allow them)")
+                }
+                _ => String::new(),
+            };
+            eprintln!(
+                "{failures} of {} document(s) were refused by the shared budgets{hint}",
+                results.len()
+            );
+            std::process::exit(EXIT_LIMIT_REFUSED);
+        }
         anyhow::bail!("{failures} of {} document(s) failed", results.len());
     }
     if !refused.is_empty() {
@@ -567,6 +845,149 @@ fn main() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Convert two versions of one PDF or DOCX, compare them through the same
+/// `diff` engine the Compare panel uses, and write the redline HTML report.
+///
+/// The older version is `old` and the newer one is `new` (`--input`). Only the
+/// two document families whose readers publish enough structure for the
+/// comparison are accepted: a PDF's page provenance makes the report page-aware
+/// and gives it placement-box previews, and a DOCX is compared as the flow
+/// document it is.
+fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
+    if args.compare.is_some() {
+        anyhow::bail!("--redline and --compare are separate modes; use one or the other");
+    }
+    if args.preview {
+        anyhow::bail!("--redline writes its own HTML report; drop --preview");
+    }
+    if args.progress {
+        anyhow::bail!("--redline writes one report; it has no progress stream");
+    }
+    if !args.to.is_empty() {
+        anyhow::bail!("--redline writes its own HTML report; drop --to");
+    }
+    if args
+        .output
+        .as_deref()
+        .is_some_and(|path| path.as_os_str() == "-")
+    {
+        anyhow::bail!("--redline writes an HTML file; `-o -` is not a report path");
+    }
+    for (role, path) in [("old", old), ("new", new)] {
+        if !path.exists() {
+            anyhow::bail!("redline {role} version does not exist: {}", path.display());
+        }
+        if !path.is_file() {
+            anyhow::bail!(
+                "redline {role} version must be a file, not a directory: {}",
+                path.display()
+            );
+        }
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("read the size of {}", path.display()))?;
+        budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    }
+
+    let family = match (detect(old)?, detect(new)?) {
+        (Format::Pdf, Format::Pdf) => "PDF",
+        (Format::Docx, Format::Docx) => "DOCX",
+        (old_format, new_format) => anyhow::bail!(
+            "--redline compares two versions of the same PDF or DOCX; the old file is {old_format:?} and the new file is {new_format:?}"
+        ),
+    };
+
+    let output = args
+        .output
+        .clone()
+        .unwrap_or_else(|| new.with_extension("redline.html"));
+    let output = if output.extension().is_none() {
+        output.with_extension("html")
+    } else {
+        output
+    };
+    if same_path(&output, old) || same_path(&output, new) {
+        anyhow::bail!(
+            "the redline report would overwrite one of its inputs: {}",
+            output.display()
+        );
+    }
+
+    let scratch = RedlineScratch::new()?;
+    let old_doc = build_document(old, &scratch.path("old.json"), args)?;
+    let new_doc = build_document(new, &scratch.path("new.json"), args)?;
+    let old_name = file_name(old);
+    let new_name = file_name(new);
+    let html = redline::render(&old_doc, &new_doc, &old_name, &new_name, family)?;
+    redline::write(&output, &html)?;
+    eprintln!(
+        "redline: {} against {} -> {}",
+        new.display(),
+        old.display(),
+        output.display()
+    );
+    Ok(())
+}
+
+/// Whether two paths name the same file, including when only one of them can
+/// be canonicalized because the report does not exist yet.
+fn same_path(one: &Path, other: &Path) -> bool {
+    if one == other {
+        return true;
+    }
+    match (resolved_path(one), resolved_path(other)) {
+        (Some(one), Some(other)) => one == other,
+        _ => false,
+    }
+}
+
+/// A path with its parent resolved even when the file itself does not exist
+/// yet, so a report path cannot overwrite an input through a symlinked folder.
+fn resolved_path(path: &Path) -> Option<PathBuf> {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return Some(resolved);
+    }
+    let parent = path.parent()?;
+    let parent = std::fs::canonicalize(parent).ok()?;
+    Some(parent.join(path.file_name()?))
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// A scratch directory for the two conversions' extracted images, removed when
+/// the report is finished.
+///
+/// The report is text, so the pictures the converters write are not referenced;
+/// keeping them out of the user's folder is the point of the directory.
+struct RedlineScratch(PathBuf);
+
+impl RedlineScratch {
+    fn new() -> anyhow::Result<Self> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "pdfextractor-redline-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+        Ok(Self(path))
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for RedlineScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Report one finished document.
@@ -624,12 +1045,14 @@ fn announce(
                         "total": total,
                         "input": input.display().to_string(),
                         "ok": false,
-                        "error": err.to_string(),
+                        "error_kind": error_kind(err),
+                        "limit_flag": raise_flag(err),
+                        "error": format!("{err:#}"),
                     })
                 );
                 flush_stdout();
             }
-            eprintln!("error: {}: {err}", input.display());
+            eprintln!("error: {}: {err:#}{}", input.display(), flag_hint(err));
         }
     }
 }
@@ -1143,6 +1566,18 @@ fn convert_one(
     Ok(primary)
 }
 
+/// Read an input only after its size is known to fit the budget.
+///
+/// The readers also check their slice, but the command line has to read the
+/// file first; checking the metadata here keeps a giant file from becoming an
+/// allocation before any reader sees it.
+fn read_input(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
+    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    std::fs::read(path).with_context(|| format!("read {}", path.display()))
+}
+
 /// Convert one input into a document, without writing it out.
 ///
 /// `output_path` is the primary output's path: extracted images and the
@@ -1160,6 +1595,9 @@ fn build_document(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
+    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     if !is_supported_extension(&ext) {
         // A picture the shared table carries but this reader cannot page is not
         // an unknown format, and the message says so rather than leaving the
@@ -1288,7 +1726,12 @@ fn build_document(
         // of the file the user handed over.
         Format::Doc => {
             note_flow_format(args.preview, path);
-            match bridge(path, BridgeTarget::Docx, "a legacy Word document") {
+            match bridge_with_limits(
+                path,
+                BridgeTarget::Docx,
+                "a legacy Word document",
+                &budgets(),
+            ) {
                 Ok(bridged) => {
                     tracing::info!(
                         "{}: a legacy Word document, read through LibreOffice as docx",
@@ -1338,7 +1781,7 @@ fn build_document(
                 }
                 _ => note_flow_format(args.preview, path),
             }
-            let bridged = bridge(path, target, label)?;
+            let bridged = bridge_with_limits(path, target, label, &budgets())?;
             tracing::info!(
                 "{}: {label}, read through LibreOffice as {}",
                 path.display(),
@@ -1372,7 +1815,7 @@ fn relabel(
     original: &Path,
     mimetype: &str,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(original).with_context(|| format!("read {}", original.display()))?;
+    let data = read_input(original)?;
     let name = original
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1611,8 +2054,16 @@ fn convert_pdf(
     want_preview: bool,
     preview_dpi: u32,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = PdfDocument::parse_with_password(&data, reading.password.map(str::as_bytes))?;
+    let data = read_input(path)?;
+    // Recognition runs after parsing and takes seconds a page where parsing
+    // takes milliseconds, so it is measured against its own budget. The
+    // deadline is checked before each picture is recognised.
+    let ocr_deadline = budgets().ocr_deadline();
+    let parsed = PdfDocument::parse_with_limits_and_password(
+        &data,
+        budgets(),
+        reading.password.map(str::as_bytes),
+    )?;
     // A ciphered file the password does not open is refused here, by name,
     // rather than read as though its streams were plain: what came out unread
     // would be noise in a document that looks successful.
@@ -1635,7 +2086,9 @@ fn convert_pdf(
         }
         Some(pdfextractor_pdf_parser::crypt::CryptError::Unsupported(what)) => {
             anyhow::bail!(
-                "{}: this PDF is encrypted with {what}, which this build cannot decrypt —                  re-save it without encryption, for example `qpdf --decrypt in.pdf out.pdf`,                  and read that file",
+                "{}: this PDF is encrypted with {what}, which this build cannot decrypt — \
+                 re-save it without encryption, for example `qpdf --decrypt in.pdf out.pdf`, \
+                 and read that file",
                 path.display()
             );
         }
@@ -1644,7 +2097,7 @@ fn convert_pdf(
     // them is analysed: the furniture pass must see exactly the pages that were
     // kept, or a running head on the only page left would be judged against
     // neighbours that are not in the document any more.
-    let mut pages = parsed.extract();
+    let mut pages = parsed.extract_checked()?;
     if let Some(range) = reading.range {
         let total = pages.len();
         pages.retain(|page| range.contains(page.page_no));
@@ -1788,6 +2241,7 @@ fn convert_pdf(
             let detect_sideways = page.rotation == 0 && page.spans.is_empty();
 
             for (data, width, height, box_) in images {
+                ocr_deadline.check("recognising a page")?;
                 let turn = if detect_sideways && picture_is_page(box_, page.width, page.height) {
                     match engine.detect_upright(data) {
                         Ok(QuarterTurn::AsStored) => QuarterTurn::AsStored,
@@ -2189,8 +2643,8 @@ fn convert_docx(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -2251,8 +2705,8 @@ fn convert_odt(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -2391,13 +2845,11 @@ fn convert_xlsx(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes_with_limits(&data, budgets())?;
     convert_workbook(
         &parsed.sheets,
-        // The XLSX reader does not read a cell's comment yet, so there is none
-        // to place on the notes layer.
-        &[],
+        &parsed.annotations,
         &data,
         path,
         output_path,
@@ -2416,8 +2868,8 @@ fn convert_ods(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes_with_limits(&data, budgets())?;
     convert_workbook(
         &parsed.sheets,
         &parsed.annotations,
@@ -2441,7 +2893,7 @@ fn convert_ods(
 /// the cell — rather than becoming words in a table.
 fn convert_workbook(
     workbook: &[pdfextractor_xlsx_parser::Sheet],
-    annotations: &[pdfextractor_ods_parser::SheetAnnotation],
+    annotations: &[pdfextractor_xlsx_parser::SheetAnnotation],
     data: &[u8],
     path: &Path,
     output_path: &Path,
@@ -2799,8 +3251,8 @@ fn convert_pptx(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let total = parsed.slides.len();
     let slides: Vec<_> = parsed
@@ -3036,9 +3488,10 @@ fn convert_pptx(
 /// Each slide is a `chapter` group holding its text paragraphs, table and
 /// pictures; a slide's speaker notes are one item on the notes layer inside the
 /// same group. The regular shapes a slide inherits from its master page are
-/// emitted with the slide's own, in master-page order, and each animation
-/// effect is one notes-layer item naming its target shape, property and timing.
-/// A hidden slide stays on the `invisible` layer rather than being dropped.
+/// emitted with the slide's own, in master-page order. A slide's transition is
+/// one notes-layer item, and each animation effect is another, naming its
+/// target shape, property and timing. A hidden slide stays on the `invisible`
+/// layer rather than being dropped.
 /// `--page-range` selects slides before any item is emitted, so a deck's page
 /// number is still the slide's number in the document.
 fn convert_odp(
@@ -3046,8 +3499,8 @@ fn convert_odp(
     output_path: &Path,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -3212,6 +3665,16 @@ fn convert_odp(
         if let Some(notes) = &slide.notes {
             builder.add_notes_item_in(notes, page_no, [0.0, 0.0, 0.0, 0.0], &group);
         }
+        // A transition changes the slide before its shape effects run. Docling
+        // has no transition item either, so it is the first notes-layer item.
+        if let Some(transition) = &slide.transition {
+            builder.add_notes_item_in(
+                &transition_text(transition),
+                page_no,
+                [0.0, 0.0, 0.0, 0.0],
+                &group,
+            );
+        }
         // An animation has no Docling item of its own, so each effect is one
         // notes-layer item: the slide's timing stays in the document without
         // being mistaken for words the slide shows.
@@ -3241,6 +3704,33 @@ fn convert_odp(
     }
 
     Ok(builder.build())
+}
+
+/// One slide transition as the document records it: Docling has no transition
+/// item either, so the effect and its settings become one notes-layer item.
+fn transition_text(transition: &pdfextractor_odp_parser::Transition) -> String {
+    let mut text = format!(
+        "Transition: {}",
+        transition.effect.as_deref().unwrap_or("unspecified")
+    );
+    if let Some(subtype) = &transition.subtype {
+        text.push(' ');
+        text.push_str(subtype);
+    }
+    let mut details = Vec::new();
+    if let Some(direction) = &transition.direction {
+        details.push(format!("direction {direction}"));
+    }
+    if let Some(speed) = &transition.speed {
+        details.push(format!("speed {speed}"));
+    }
+    if let Some(duration) = &transition.duration {
+        details.push(format!("duration {duration}"));
+    }
+    if !details.is_empty() {
+        text.push_str(&format!(" ({})", details.join(", ")));
+    }
+    text
 }
 
 /// One animation effect as the document records it: Docling has no animation
@@ -3397,7 +3887,7 @@ fn comment_timestamp(date: &str) -> std::borrow::Cow<'_, str> {
 /// frames, the sheets need not share a grid: a page is measured from its own
 /// pixels at the resolution the file declares, and recognised on its own.
 fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
     let image = pdfextractor_image_parser::ImageDocument::parse_bytes(&data)?;
 
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("image");
@@ -3419,9 +3909,9 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // TIFF's directories are separate sheets that need not be the same size, so
     // each page is measured from its own grid. One frame is a still image, so
     // only a file that really holds several is read as several pages.
-    let gif_frames = pdfextractor_image_parser::gif_frames(&data);
-    let webp_frames = pdfextractor_image_parser::webp_frames(&data);
-    let tiff_pages = pdfextractor_image_parser::tiff_frames(&data);
+    let gif_frames = pdfextractor_image_parser::gif_frames_checked(&data, &budgets())?;
+    let webp_frames = pdfextractor_image_parser::webp_frames_checked(&data, &budgets())?;
+    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(&data, &budgets())?;
     let animation: &[pdfextractor_image_parser::PngPicture] = if gif_frames.len() > 1 {
         &gif_frames
     } else if webp_frames.len() > 1 {
@@ -3455,8 +3945,9 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     let decoded = if animated {
         Some(animation[0].data.clone())
     } else if matches!(image.mimetype, "image/jp2" | "image/gif") {
-        let decoded =
-            pdfextractor_image_parser::transcode_to_png(&data).map(|picture| picture.data);
+        let decoded = pdfextractor_image_parser::transcode_to_png_checked(&data, &budgets())
+            .ok()
+            .map(|picture| picture.data);
         if decoded.is_none() {
             tracing::warn!(
                 "could not decode {}; OCR sees the stored bytes",
@@ -3601,11 +4092,22 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
                 path.display()
             );
         }
+        // A GIF's or a WebP's pages are frames, and a TIFF's are the directories
+        // its reader counted; the log names the unit the file holds rather than
+        // calling every one of them a page.
+        let (unit, units) = if tiff_stack {
+            ("directory", "directories")
+        } else if animated {
+            ("frame", "frames")
+        } else {
+            ("page", "pages")
+        };
         tracing::info!(
-            "{}: reading {} of {} page(s) ({range})",
+            "{}: reading {} of {} {} ({range})",
             path.display(),
             page_pixels.len(),
-            total
+            total,
+            if total == 1 { unit } else { units }
         );
     }
 
@@ -3624,7 +4126,11 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // the same estimate the PDF path uses for an OCR line. Each page is scaled
     // against its own grid: a GIF's frames share its logical screen, a TIFF's
     // sheets are each their own size.
+    // Frames are recognised one at a time; the deadline is checked before each,
+    // so a stack of them cannot run past the OCR budget.
+    let ocr_deadline = budgets().ocr_deadline();
     for (page_no, pixels, pixel_width, pixel_height, width, height) in &page_pixels {
+        ocr_deadline.check("recognising a page")?;
         let page = *page_no;
         let (pixel_width, pixel_height) = (*pixel_width, *pixel_height);
         let (width, height) = (*width, *height);
@@ -3705,8 +4211,8 @@ fn convert_doc(
     path: &Path,
     _output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
-    let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes(&data)?;
+    let data = read_input(path)?;
+    let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes_with_limits(&data, budgets())?;
 
     let name = path
         .file_name()
@@ -3761,14 +4267,19 @@ fn convert_text(
     path: &Path,
     output_path: &Path,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = std::fs::read(path)?;
+    let data = read_input(path)?;
+    // A flow file is untrusted input like any other: the shared budgets bound
+    // the blocks it may expand into and the time the walk through it may take.
+    let budget = budgets();
     let parsed = match ext {
-        "rtf" => pdfextractor_text_parser::rtf::parse(&data),
-        "html" | "htm" => pdfextractor_text_parser::html::parse(&data),
-        "md" | "markdown" => pdfextractor_text_parser::text::parse_markdown(&data),
-        "csv" => pdfextractor_text_parser::csv::parse_csv(&data),
-        "tsv" => pdfextractor_text_parser::csv::parse_tsv(&data),
-        _ => pdfextractor_text_parser::text::parse_plain(&data),
+        "rtf" => pdfextractor_text_parser::rtf::parse_with_limits(&data, &budget)?,
+        "html" | "htm" => pdfextractor_text_parser::html::parse_with_limits(&data, &budget)?,
+        "md" | "markdown" => {
+            pdfextractor_text_parser::text::parse_markdown_with_limits(&data, &budget)?
+        }
+        "csv" => pdfextractor_text_parser::csv::parse_csv_with_limits(&data, &budget)?,
+        "tsv" => pdfextractor_text_parser::csv::parse_tsv_with_limits(&data, &budget)?,
+        _ => pdfextractor_text_parser::text::parse_plain_with_limits(&data, &budget)?,
     };
 
     let name = path
@@ -4024,7 +4535,7 @@ fn load_flow_picture(document: &Path, source: &str) -> Option<FlowPicture> {
         Some(carried) => carried,
         None => {
             let file = local_image_path(document, source)?;
-            let data = std::fs::read(&file).ok()?;
+            let data = read_input(&file).ok()?;
             (image_mimetype_for_path(&file), data)
         }
     };
@@ -4478,10 +4989,21 @@ fn link_covering(links: &[pdfextractor_pdf_parser::PageLink], bbox: [f64; 4]) ->
 /// type every reader knows rather than dropped. A picture that cannot be
 /// decoded keeps its own type and bytes: a payload is never replaced by a guess.
 fn docling_media(mime: &'static str, data: Vec<u8>) -> (&'static str, Vec<u8>) {
+    docling_media_with_limits(mime, data, &budgets())
+}
+
+/// [`docling_media`] under the run's image budgets: a picture past
+/// `max_image_pixels`, `max_image_dimension` or the allocation ceiling keeps its
+/// own type and bytes rather than being decoded anyway.
+fn docling_media_with_limits(
+    mime: &'static str,
+    data: Vec<u8>,
+    limits: &pdfextractor_limits::Limits,
+) -> (&'static str, Vec<u8>) {
     if pdfextractor_core::is_representable_media_type(mime) {
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png(&data) {
+    match pdfextractor_image_parser::transcode_to_png_checked(&data, limits).ok() {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -4515,6 +5037,19 @@ fn office_media(
     width_pt: Option<f64>,
     height_pt: Option<f64>,
 ) -> (&'static str, Vec<u8>) {
+    office_media_with_limits(mime, data, width_pt, height_pt, &budgets())
+}
+
+/// [`office_media`] under the run's image budgets: a picture past the pixel,
+/// dimension or allocation ceiling keeps its own type and bytes rather than
+/// being decoded anyway — the same answer an undecodable picture gets.
+fn office_media_with_limits(
+    mime: &'static str,
+    data: Vec<u8>,
+    width_pt: Option<f64>,
+    height_pt: Option<f64>,
+    limits: &pdfextractor_limits::Limits,
+) -> (&'static str, Vec<u8>) {
     if mime == "image/png" || mime == "image/jpeg" {
         return (mime, data);
     }
@@ -4535,7 +5070,7 @@ fn office_media(
         }
         return (mime, data);
     }
-    match pdfextractor_image_parser::transcode_to_png(&data) {
+    match pdfextractor_image_parser::transcode_to_png_checked(&data, limits).ok() {
         Some(png) => ("image/png", png.data),
         None => (mime, data),
     }
@@ -4761,7 +5296,7 @@ fn picture_is_page(bbox: [f64; 4], page_width: f64, page_height: f64) -> bool {
 /// in which case Tesseract's own decoder gets the original bytes and its
 /// error policy applies.
 fn rotate_for_ocr(data: &[u8], degrees: i32) -> Option<(Vec<u8>, u32, u32)> {
-    let bitmap = image::load_from_memory(data).ok()?;
+    let bitmap = pdfextractor_image_parser::decode(data)?;
     let turned = match degrees {
         90 => bitmap.rotate90(),
         180 => bitmap.rotate180(),
@@ -5124,6 +5659,69 @@ mod tests {
         assert_eq!(image_mimetype_for_path(Path::new("picture")), None);
     }
 
+    /// The office-media transcode takes the run's image budgets. A picture past
+    /// the pixel ceiling keeps its own type and bytes instead of being decoded
+    /// anyway, so the budget reaches this decode and not only the readers.
+    #[test]
+    fn a_picture_over_the_budget_keeps_its_own_bytes_for_an_office_package() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/images/scan.gif");
+        let gif =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+        let (mime, png) = office_media_with_limits(
+            "image/gif",
+            gif.clone(),
+            None,
+            None,
+            &pdfextractor_limits::Limits::default(),
+        );
+        assert_eq!(mime, "image/png", "the defaults must decode the picture");
+        assert!(!png.is_empty(), "the transcode produced no bytes");
+
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            office_media_with_limits("image/gif", gif.clone(), None, None, &tight),
+            ("image/gif", gif),
+            "a one-pixel budget must leave the picture as it was"
+        );
+    }
+
+    /// The same rule where a picture is transcoded for Docling: a WebP past the
+    /// budget is left as itself, which the builder then leaves out rather than
+    /// naming a type Docling cannot read.
+    #[test]
+    fn a_picture_over_the_budget_is_not_transcoded_for_docling() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/images/chart.webp");
+        let webp =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+        assert_eq!(
+            docling_media_with_limits(
+                "image/webp",
+                webp.clone(),
+                &pdfextractor_limits::Limits::default()
+            )
+            .0,
+            "image/png",
+            "the defaults must transcode the picture"
+        );
+
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            docling_media_with_limits("image/webp", webp.clone(), &tight),
+            ("image/webp", webp),
+            "a one-pixel budget must leave the picture as it was"
+        );
+    }
+
     /// An office SVG is played at the frame the package gives it, and a frame of
     /// different proportions is not permission to squash the drawing: 36 × 36
     /// points is 72 × 72 pixels at 144 dpi, and a 40 × 24 drawing inside it is
@@ -5300,5 +5898,221 @@ mod tests {
         ] {
             assert_eq!(data_uri_picture(source), None, "{source}");
         }
+    }
+
+    /// One value of every `LimitError` variant.
+    ///
+    /// [`limit_error_variant`] matches the same enum with no wildcard arm, so a
+    /// new variant fails to compile until it is named here and given an index;
+    /// the test below then holds the count to `variant_count`, which is what
+    /// catches a sample that was never added.
+    fn limit_error_samples() -> Vec<pdfextractor_limits::LimitError> {
+        use pdfextractor_limits::LimitError::*;
+        let timeout = std::time::Duration::from_secs(1);
+        vec![
+            InputTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPages {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPdfObjects {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyPdfTokens {
+                actual: 2,
+                limit: 1,
+            },
+            PdfTooDeep {
+                actual: 2,
+                limit: 1,
+            },
+            DecodedStreamTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyZipEntries {
+                actual: 2,
+                limit: 1,
+            },
+            ZipEntryTooLarge {
+                name: "word/document.xml".to_string(),
+                actual: 2,
+                limit: 1,
+            },
+            ZipRatioTooHigh {
+                name: "word/document.xml".to_string(),
+                ratio: 2,
+                limit: 1,
+            },
+            ZipTotalTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            Zip {
+                detail: "invalid Zip archive".to_string(),
+            },
+            XmlTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            XmlTooDeep {
+                actual: 2,
+                limit: 1,
+            },
+            XmlDoctype,
+            XmlMalformed {
+                detail: "mismatched close tag".to_string(),
+            },
+            ImageDecode {
+                detail: "truncated PNG".to_string(),
+            },
+            ImageEmpty,
+            ImageTooWide {
+                width: 2,
+                height: 2,
+                limit: 1,
+            },
+            ImageTooManyPixels {
+                width: 2,
+                height: 2,
+                pixels: 4,
+                limit: 1,
+            },
+            ImageAllocTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyImageFrames {
+                actual: 2,
+                limit: 1,
+            },
+            TooManyFlowBlocks {
+                actual: 2,
+                limit: 1,
+            },
+            DocumentTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            BridgeOutputTooLarge {
+                actual: 2,
+                limit: 1,
+            },
+            Timeout {
+                stage: "reading the PDF header".to_string(),
+                elapsed: timeout,
+                limit: timeout,
+            },
+        ]
+    }
+
+    /// Which variant `error` is, numbered in the order of the enum.
+    fn limit_error_variant(error: &pdfextractor_limits::LimitError) -> usize {
+        use pdfextractor_limits::LimitError::*;
+        match error {
+            InputTooLarge { .. } => 0,
+            TooManyPages { .. } => 1,
+            TooManyPdfObjects { .. } => 2,
+            TooManyPdfTokens { .. } => 3,
+            PdfTooDeep { .. } => 4,
+            DecodedStreamTooLarge { .. } => 5,
+            TooManyZipEntries { .. } => 6,
+            ZipEntryTooLarge { .. } => 7,
+            ZipRatioTooHigh { .. } => 8,
+            ZipTotalTooLarge { .. } => 9,
+            Zip { .. } => 10,
+            XmlTooLarge { .. } => 11,
+            XmlTooDeep { .. } => 12,
+            XmlDoctype => 13,
+            XmlMalformed { .. } => 14,
+            ImageDecode { .. } => 15,
+            ImageEmpty => 16,
+            ImageTooWide { .. } => 17,
+            ImageTooManyPixels { .. } => 18,
+            ImageAllocTooLarge { .. } => 19,
+            TooManyImageFrames { .. } => 20,
+            TooManyFlowBlocks { .. } => 21,
+            DocumentTooLarge { .. } => 22,
+            BridgeOutputTooLarge { .. } => 23,
+            Timeout { .. } => 24,
+        }
+    }
+
+    /// Every `LimitError` ends a run the same way: the refusal exit code and the
+    /// `limit` error kind, so a consumer can act on a refusal without parsing the
+    /// sentence it carries.
+    #[test]
+    fn every_limit_error_variant_maps_to_the_refusal_exit_code_and_kind() {
+        // The sample at position `i` must be variant `i`: the indices are dense
+        // and in enum order, so a sample inserted out of order, or one of two
+        // samples of the same variant, fails here. A variant with no sample is a
+        // compile error first — `limit_error_variant` has no wildcard arm.
+        // The flag each sample's refusal names, in variant order: every budget
+        // the command line exposes has one, and the malformed-input and
+        // unexposed-ceiling variants have none.
+        let flags: [Option<&str>; 25] = [
+            Some("--max-input-bytes"),
+            Some("--max-pages"),
+            None, // PDF objects: not a flag
+            None, // PDF tokens: not a flag
+            None, // PDF nesting: not a flag
+            Some("--max-decoded-stream-bytes"),
+            Some("--max-zip-entries"),
+            Some("--max-zip-entry-bytes"),
+            Some("--max-zip-ratio"),
+            Some("--max-zip-total-bytes"),
+            None, // a corrupt package
+            Some("--max-xml-bytes"),
+            Some("--max-xml-depth"),
+            None, // a DOCTYPE is refused outright
+            None, // malformed XML
+            None, // a picture that will not decode
+            None, // an empty picture
+            Some("--max-image-dimension"),
+            Some("--max-image-pixels"),
+            Some("--max-image-alloc-bytes"),
+            Some("--max-image-frames"),
+            Some("--max-flow-blocks"),
+            Some("--max-document-bytes"),
+            None, // the bridge's output ceiling: not a flag
+            Some("--timeout"),
+        ];
+
+        for (position, sample) in limit_error_samples().into_iter().enumerate() {
+            assert_eq!(
+                limit_error_variant(&sample),
+                position,
+                "sample {position} is not its variant: {sample:?}"
+            );
+            let error = anyhow::Error::new(sample);
+            assert!(is_limit_refusal(&error), "{error:#} is not a refusal");
+            assert_eq!(error_kind(&error), "limit");
+            assert_eq!(
+                raise_flag(&error),
+                flags[position],
+                "the refusal at {position} names the wrong flag"
+            );
+        }
+
+        // The OCR deadline is a different budget from the parser's, and its
+        // stage is what tells the two apart.
+        let ocr = anyhow::Error::new(pdfextractor_limits::LimitError::Timeout {
+            stage: "recognising a page".to_string(),
+            elapsed: std::time::Duration::from_secs(1),
+            limit: std::time::Duration::from_secs(1),
+        });
+        assert_eq!(raise_flag(&ocr), Some("--ocr-timeout"));
+        assert!(flag_hint(&ocr).contains("--ocr-timeout"));
+
+        assert_eq!(EXIT_LIMIT_REFUSED, 3, "the refusal exit code moved");
+        // The other kind: a file that cannot be read is not a refusal, so it
+        // exits through the ordinary error path.
+        let ordinary = anyhow::anyhow!("not a DOCX (ZIP) package");
+        assert_eq!(error_kind(&ordinary), "error");
+        assert!(!is_limit_refusal(&ordinary));
     }
 }

@@ -1,0 +1,14 @@
+[package]
+name = "pdfextractor-limits"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+# ZIP metadata and XML nesting are the two containers every office format
+# shares; the guards live here rather than in six copies inside the readers.
+zip.workspace = true
+quick-xml.workspace = true

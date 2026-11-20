@@ -43,9 +43,26 @@
 
 name: the compare gate
 
+# The gate reads the corpus and the code that converts it, so only those paths
+# run it. Documentation-only pushes spend no minutes. `branches` keeps tag
+# pushes out; a superseded run on the same ref is cancelled.
 on:
   push:
+    branches: ["**"]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "crates/ui/dist/**"
+      - "test-data/**"
+      - ".cargo/**"
+      - "rust-toolchain*"
+      - ".github/workflows/compare-gate.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   corpus:

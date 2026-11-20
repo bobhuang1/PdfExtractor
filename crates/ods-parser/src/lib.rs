@@ -15,4 +15,7 @@
 
 mod parser;
 
-pub use parser::{OdsDocument, SheetAnnotation};
+pub use parser::OdsDocument;
+// A cell's comment is the same remark whichever package wrote it, so the
+// workbook model owns the type both readers return.
+pub use pdfextractor_xlsx_parser::SheetAnnotation;

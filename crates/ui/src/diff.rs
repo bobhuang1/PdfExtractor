@@ -27,17 +27,17 @@
 //!
 //! Where both producers published a box, that box takes part in the score the
 //! alignment picks pairs by, not just in the joining afterwards. The words keep the
-//! gate — a pair is a link at all only if their words clear [`LINK_THRESHOLD`], and
+//! gate — a pair is a link at all only if their words clear `LINK_THRESHOLD`, and
 //! no box can invent one or unmake one — but the boxes decide *which* of two links
 //! the alignment takes: a pair both producers put in the same place on the same page
-//! is worth [`PLACE_BONUS`] more, which is what tells apart two pairs the words
+//! is worth `PLACE_BONUS` more, which is what tells apart two pairs the words
 //! cannot (a picture a document lists twice, in one order on each side: only the box
 //! says which copy is which), and a pair they put in different places loses
-//! [`PLACE_COST`], which is what makes two such pairs lose to the one pair the boxes
+//! `PLACE_COST`, which is what makes two such pairs lose to the one pair the boxes
 //! agree about. A pair the boxes contradict is never hidden by any of this: it is a
 //! row like any other, which then says where each reading put the block. Nothing of
 //! it happens for a pair of equations (their text is a rendering, not words, so the
-//! boxes have nothing to add to what [`EQUATION_SIMILARITY`] already does) nor for a
+//! boxes have nothing to add to what `EQUATION_SIMILARITY` already does) nor for a
 //! document without geometry, which is every flow format — a DOCX is compared by
 //! content exactly as before.
 //!
@@ -135,14 +135,14 @@
 //! are collected the other way round as well — every one of them, grouped by the page it
 //! lies on ([`PlacedPage`]) — and the panel draws each page once, with all of its boxes at
 //! once, so a form's leader pattern is one picture rather than one thumbnail per row. It
-//! is built before the rows are cut to [`MAX_ROWS`], so a long form's page is whole even
+//! is built before the rows are cut to `MAX_ROWS`, so a long form's page is whole even
 //! where its rows are not, and it holds *items* rather than rows: the picture is of what
 //! the reference wrote, dot run by dot run, not of the lines the rows were grouped into.
 //!
 //! The work is bounded, because a window must not hang on a pathological
-//! document: at most [`MAX_BLOCKS`] blocks a side are aligned (the alignment is
-//! quadratic in that), at most [`MAX_ROWS`] rows are sent to the page, and every
-//! text is clipped to [`MAX_TEXT`] characters. What was left out is counted in
+//! document: at most `MAX_BLOCKS` blocks a side are aligned (the alignment is
+//! quadratic in that), at most `MAX_ROWS` rows are sent to the page, and every
+//! text is clipped to `MAX_TEXT` characters. What was left out is counted in
 //! [`Summary::truncated`], so a truncated view never claims to be the whole one.
 //!
 //! A comparison can also be held against a **memory**: the numbers a previous run
@@ -178,7 +178,7 @@ const LINK_THRESHOLD: f64 = 0.5;
 ///
 /// The alignment maximises its total, so this only has to beat leaving the item
 /// alone, which is worth nothing; and it must not outbid a block that really
-/// matches another, which clears [`LINK_THRESHOLD`] — a single contained item ties
+/// matches another, which clears `LINK_THRESHOLD` — a single contained item ties
 /// that at worst. Being per item is what makes a run one row rather than a row for
 /// the first item and a one-sided row for each of the rest.
 const CONTAINED_SCORE: f64 = LINK_THRESHOLD;
@@ -250,10 +250,10 @@ const PLACE_BONUS: f64 = LINK_THRESHOLD / 10.0;
 
 /// What a pairing the boxes contradict loses to one they agree about.
 ///
-/// As much as a link needs at all ([`LINK_THRESHOLD`]). The size is not a taste:
+/// As much as a link needs at all (`LINK_THRESHOLD`). The size is not a taste:
 /// two identical pictures listed in opposite orders are offered to the alignment as
 /// two pairs, each worth the full similarity, while the one pairing the boxes do
-/// agree about is worth one such pair plus [`PLACE_BONUS`]. Losing this much apiece
+/// agree about is worth one such pair plus `PLACE_BONUS`. Losing this much apiece
 /// is what makes those two pairs (worth `2 - 2 * PLACE_COST`) lose to the one right
 /// one, so the alignment takes the pair the boxes point at and leaves the other two
 /// blocks to be joined in the same place afterwards.
@@ -294,6 +294,11 @@ pub struct Block {
     /// picture's media type and size. A picture with no image says so — that is
     /// a reading worth seeing.
     pub text: String,
+    /// A table's cells as the document laid them out, when this is a table.
+    /// The page paints a block from `text`; the redline report uses this grid
+    /// so a cell boundary and its merges survive a narrow viewport.
+    #[serde(skip)]
+    pub table: Option<TableGrid>,
     /// The page it sits on. Flow formats (DOCX, `.doc`, Markdown) publish no
     /// geometry, so this is absent for them.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -304,6 +309,74 @@ pub struct Block {
     /// bytes of every row of every document.
     #[serde(skip)]
     pub(crate) place: Option<Place>,
+}
+
+impl Block {
+    /// The block's box as a page preview needs it, in fractions of its page.
+    ///
+    /// The comparison keeps `place` private because raw page coordinates are not
+    /// useful to a reader; a report still needs the same box in the form the
+    /// panel draws. This is that view of the block, and it is absent exactly
+    /// when the block has no geometry or its page never stated a size.
+    pub fn placement(&self) -> Option<Placement> {
+        self.place.and_then(placement_of)
+    }
+}
+
+/// A table's cells laid out on its grid, with merged cells kept as spans.
+///
+/// The outer vector is the row, the inner vector the column. A cell appears
+/// once, at the slot where its span starts; the slots it covers are `None`.
+/// A genuinely blank cell is an empty `TableGridCell`, so the renderer can
+/// tell it from a slot a merge has taken.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableGrid {
+    /// The number of columns every row has, including trailing blank ones.
+    pub columns: usize,
+    pub rows: Vec<Vec<Option<TableGridCell>>>,
+}
+
+impl TableGrid {
+    /// Lay out plain rows with no merges, for a table that only publishes text.
+    pub fn from_rows(rows: &[Vec<String>]) -> Self {
+        let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+        TableGrid {
+            columns,
+            rows: rows
+                .iter()
+                .map(|row| {
+                    (0..columns)
+                        .map(|column| {
+                            Some(TableGridCell {
+                                text: row.get(column).cloned().unwrap_or_default(),
+                                row_span: 1,
+                                col_span: 1,
+                            })
+                        })
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether the grid has no drawable cells.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty() || self.columns == 0
+    }
+
+    /// The cell starting at a grid position, or `None` when a merge covers it.
+    pub fn cell(&self, row: usize, column: usize) -> Option<&TableGridCell> {
+        self.rows.get(row)?.get(column)?.as_ref()
+    }
+}
+
+/// One cell of a [`TableGrid`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableGridCell {
+    pub text: String,
+    /// Rows and columns the cell covers, at least one each.
+    pub row_span: usize,
+    pub col_span: usize,
 }
 
 /// Where a block sits on its page.
@@ -414,7 +487,7 @@ pub struct Placement {
 ///
 /// The rows say *what* was placed, one line of a form at a time; this says where every
 /// one of those items lies, together, on the shape of the page they share. It is built
-/// from the rows *before* they are cut to [`MAX_ROWS`], so a long form's page is whole
+/// from the rows *before* they are cut to `MAX_ROWS`, so a long form's page is whole
 /// even where its rows are not — the drawing is a picture of the document, not of the
 /// part of it the panel had room to list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -673,7 +746,7 @@ impl Numbers {
     /// The placed items are counted from the *rows* rather than from [`Summary`]: the
     /// items of one line of a form are placed as one row, and the row is what names how
     /// many of the reference's items it stands for. The boxes and the pictures come from
-    /// [`Report::placed_pages`], which is built before the rows are cut to [`MAX_ROWS`], so
+    /// [`Report::placed_pages`], which is built before the rows are cut to `MAX_ROWS`, so
     /// a long form's page is counted whole even where its rows are not.
     pub fn of(report: &Report) -> Numbers {
         let summary = &report.summary;
@@ -1238,10 +1311,13 @@ fn block_of_ref(document: &Value, child: &Value, seen: &mut [bool]) -> Option<Bl
 
 /// One item of a document, as a comparable block.
 fn block_of(kind: Kind, item: &Value, document: &Value) -> Block {
-    let text = match kind {
-        Kind::Text => item["text"].as_str().unwrap_or_default().to_string(),
-        Kind::Table => table_text(item),
-        Kind::Picture => picture_text(item),
+    let (text, table) = match kind {
+        Kind::Text => (item["text"].as_str().unwrap_or_default().to_string(), None),
+        Kind::Table => {
+            let grid = table_grid(item);
+            (table_text(item), (!grid.is_empty()).then_some(grid))
+        }
+        Kind::Picture => (picture_text(item), None),
     };
     Block {
         kind,
@@ -1254,9 +1330,119 @@ fn block_of(kind: Kind, item: &Value, document: &Value) -> Block {
             })
             .to_string(),
         text,
+        table,
         page: page_of(item),
         place: place_of(item, document),
     }
+}
+
+/// A table's cells placed in the rows and columns the document states.
+///
+/// A row can begin at a later column (a merged cell on its left) and a cell can
+/// span columns, so the cells are not a rectangular array in source order. The
+/// grid keeps each merged cell once, at its starting slot, and leaves the slots
+/// it covers empty; the redline's table renderer needs the spans rather than a
+/// padded copy of the cell's words. A grid larger than this is not worth
+/// materialising for a report; the redline falls back to the text form rather
+/// than allocating an attacker-sized rectangle from declared row/column counts.
+const MAX_TABLE_GRID_CELLS: usize = 1_000_000;
+
+fn table_grid(table: &Value) -> TableGrid {
+    let cells = table["data"]["table_cells"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if cells.is_empty() {
+        return TableGrid {
+            columns: 0,
+            rows: Vec::new(),
+        };
+    }
+    let declared_rows = table["data"]["num_rows"]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    let declared_columns = table["data"]["num_cols"]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    let mut row_count = declared_rows;
+    let mut column_count = declared_columns;
+    let mut placed = Vec::with_capacity(cells.len());
+    for (position, cell) in cells.iter().enumerate() {
+        let row = cell["start_row_offset_idx"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(position);
+        let column = cell["start_col_offset_idx"]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(0);
+        let row_span = table_span(cell, "end_row_offset_idx", "row_span", row);
+        let col_span = table_span(cell, "end_col_offset_idx", "col_span", column);
+        row_count = row_count.max(row.saturating_add(row_span));
+        column_count = column_count.max(column.saturating_add(col_span));
+        placed.push((
+            row,
+            column,
+            row_span,
+            col_span,
+            cell["text"].as_str().unwrap_or_default().to_string(),
+        ));
+    }
+    // The offsets are untrusted input, so the rectangle is checked before it is
+    // allocated. A table too large to draw falls back to the text form.
+    if row_count == 0
+        || column_count == 0
+        || row_count.saturating_mul(column_count) > MAX_TABLE_GRID_CELLS
+    {
+        return TableGrid {
+            columns: 0,
+            rows: Vec::new(),
+        };
+    }
+    let blank = TableGridCell {
+        text: String::new(),
+        row_span: 1,
+        col_span: 1,
+    };
+    let mut rows = vec![vec![Some(blank); column_count]; row_count];
+    for (row, column, row_span, col_span, text) in placed {
+        let row_end = row.saturating_add(row_span).min(row_count);
+        let column_end = column.saturating_add(col_span).min(column_count);
+        for covered in &mut rows[row..row_end] {
+            for slot in &mut covered[column..column_end] {
+                *slot = None;
+            }
+        }
+        rows[row][column] = Some(TableGridCell {
+            text,
+            row_span,
+            col_span,
+        });
+    }
+    TableGrid {
+        columns: column_count,
+        rows,
+    }
+}
+
+/// A cell's span from its exclusive end offset, or from its explicit span when
+/// an older producer never wrote the end offsets.
+fn table_span(cell: &Value, end_key: &str, span_key: &str, start: usize) -> usize {
+    cell[end_key]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|end| *end > start)
+        .map(|end| end - start)
+        .or_else(|| {
+            cell[span_key]
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|span| *span > 0)
+        })
+        .unwrap_or(1)
 }
 
 /// A table's cells, one row a line and one cell an interval.
@@ -1390,7 +1576,7 @@ fn align(ours: &[Block], theirs: &[Block]) -> Vec<Row> {
     // theirs[j-1], which is what the walk back follows. `grouped[i][j]`: how many
     // reference items it ends with beside ours[i-1] instead, all of them inside it.
     // (`u16` is enough: a run cannot be longer than the reference's own blocks, and
-    // only [`MAX_BLOCKS`] of those are ever aligned.)
+    // only `MAX_BLOCKS` of those are ever aligned.)
     let mut score = vec![vec![0.0f64; m + 1]; n + 1];
     let mut paired = vec![vec![false; m + 1]; n + 1];
     let mut grouped = vec![vec![0u16; m + 1]; n + 1];
@@ -1541,12 +1727,14 @@ fn one_to_one(ours: &Block, theirs: &Block) -> (Verdict, Option<String>) {
         return (Verdict::Notation, None);
     }
     let label_agrees = same_label(&ours.label, &theirs.label);
+    let text_agrees = same_text(ours, theirs);
+    let layout_agrees = same_table_layout(ours, theirs);
     // Where the block sits is part of what the row has to say. Two readings that
     // found the same words in different parts of the page have not found the same
     // block, and the row is a difference that names where each of them put it —
     // whether or not the *words* also differ.
     let moved = place_agreement(ours, theirs) == Some(false);
-    if label_agrees && same_text(ours, theirs) && !moved {
+    if label_agrees && text_agrees && layout_agrees && !moved {
         return (Verdict::Same, None);
     }
     let ours_key = Key::of(ours);
@@ -1565,8 +1753,11 @@ fn one_to_one(ours: &Block, theirs: &Block) -> (Verdict, Option<String>) {
         // is a run of nothing).
         let by_place = usize::from(letterless_in_place(ours, theirs, &theirs_key));
         reasons.push(containment_reason(1 - by_place, by_place));
-    } else if !same_text(ours, theirs) {
+    } else if !text_agrees {
         reasons.push("text differs".to_string());
+    }
+    if !layout_agrees {
+        reasons.push("table layout differs".to_string());
     }
     // Only where the words sitting inside ours is the *whole* disagreement is the
     // row a pure containment: a label the readings disagree about is a finding of
@@ -2330,6 +2521,33 @@ fn same_text(one: &Block, other: &Block) -> bool {
     normalised(&one.text) == normalised(&other.text)
 }
 
+/// Whether two table blocks occupy the same grid.
+///
+/// The joined text cannot see a merge: `Region | Revenue` is the same words
+/// whether `Revenue` covers one column or two. The grid keeps the spans and the
+/// covered slots, so a layout-only change is still a changed row. A block with
+/// no grid (the pipe-delimited fallback) has nothing more to compare.
+fn same_table_layout(one: &Block, other: &Block) -> bool {
+    let (Some(one), Some(other)) = (&one.table, &other.table) else {
+        return true;
+    };
+    one.columns == other.columns
+        && one.rows.len() == other.rows.len()
+        && one.rows.iter().zip(&other.rows).all(|(one, other)| {
+            one.len() == other.len()
+                && one
+                    .iter()
+                    .zip(other)
+                    .all(|(one, other)| match (one, other) {
+                        (None, None) => true,
+                        (Some(one), Some(other)) => {
+                            one.row_span == other.row_span && one.col_span == other.col_span
+                        }
+                        _ => false,
+                    })
+        })
+}
+
 /// Text with its whitespace collapsed, for comparison.
 fn normalised(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -2529,11 +2747,11 @@ fn picture_similarity(ours: &Block, theirs: &Block, dice: f64) -> f64 {
 /// What the alignment asks of a pair of blocks: whether their words make them a
 /// link at all, and what that link is worth once the boxes have had their say.
 ///
-/// `None` is the words saying no: two blocks that do not clear [`LINK_THRESHOLD`]
+/// `None` is the words saying no: two blocks that do not clear `LINK_THRESHOLD`
 /// are two rows, and no box changes that. What the boxes change is *which* link the
 /// alignment takes where the words offer it more than one: a pair both producers
-/// put in the same place is worth [`PLACE_BONUS`] more, one they put in different
-/// places [`PLACE_COST`] less. Two pairs are left out of that: two equations, whose
+/// put in the same place is worth `PLACE_BONUS` more, one they put in different
+/// places `PLACE_COST` less. Two pairs are left out of that: two equations, whose
 /// text is a rendering rather than words, so that a pair of them is a pair for
 /// reasons that have nothing to do with where either sits.
 fn link_score(ours: &Block, ours_key: &Key, theirs: &Block, theirs_key: &Key) -> Option<f64> {
@@ -2587,7 +2805,7 @@ fn clip(row: &mut Row) {
     }
 }
 
-/// Text clipped to [`MAX_TEXT`] characters, with the clipping made visible.
+/// Text clipped to `MAX_TEXT` characters, with the clipping made visible.
 fn clip_text(text: &str) -> String {
     if text.chars().count() <= MAX_TEXT {
         return text.to_string();
@@ -5101,6 +5319,46 @@ mod tests {
     }
 
     #[test]
+    fn a_table_grid_keeps_merged_cells_as_spans() {
+        let table = json!({ "data": {
+            "num_rows": 3,
+            "num_cols": 3,
+            "table_cells": [
+                { "text": "Region", "start_row_offset_idx": 0, "end_row_offset_idx": 1,
+                  "start_col_offset_idx": 0, "end_col_offset_idx": 1 },
+                { "text": "Revenue", "start_row_offset_idx": 0, "end_row_offset_idx": 1,
+                  "start_col_offset_idx": 1, "end_col_offset_idx": 3 },
+                { "text": "North South", "start_row_offset_idx": 1, "end_row_offset_idx": 3,
+                  "start_col_offset_idx": 0, "end_col_offset_idx": 1 },
+                { "text": "42", "start_row_offset_idx": 1, "end_row_offset_idx": 2,
+                  "start_col_offset_idx": 1, "end_col_offset_idx": 2 },
+                { "text": "7", "start_row_offset_idx": 1, "end_row_offset_idx": 2,
+                  "start_col_offset_idx": 2, "end_col_offset_idx": 3 },
+                { "text": "18", "start_row_offset_idx": 2, "end_row_offset_idx": 3,
+                  "start_col_offset_idx": 1, "end_col_offset_idx": 2 },
+                { "text": "3", "start_row_offset_idx": 2, "end_row_offset_idx": 3,
+                  "start_col_offset_idx": 2, "end_col_offset_idx": 3 },
+            ]
+        } });
+        let grid = table_grid(&table);
+        assert_eq!(grid.rows.len(), 3);
+        assert_eq!(grid.columns, 3);
+        let revenue = grid.cell(0, 1).expect("the merged header cell");
+        assert_eq!(revenue.text, "Revenue");
+        assert_eq!(revenue.col_span, 2);
+        assert!(
+            grid.cell(0, 2).is_none(),
+            "the covered slot was still a cell"
+        );
+        let north = grid.cell(1, 0).expect("the vertically merged cell");
+        assert_eq!(north.row_span, 2);
+        assert!(
+            grid.cell(2, 0).is_none(),
+            "the covered slot was still a cell"
+        );
+    }
+
+    #[test]
     fn an_extra_shape_of_reading_is_counted_one_side_only() {
         let ours = document(&[
             text("paragraph", "Here is the figure:"),
@@ -5436,6 +5694,7 @@ mod tests {
                             kind: Kind::Text,
                             label: "text".to_string(),
                             text: ". . . .".to_string(),
+                            table: None,
                             page: Some(1),
                             place: None,
                         })
@@ -5575,6 +5834,7 @@ mod tests {
                     kind: Kind::Text,
                     label: "paragraph".to_string(),
                     text: "one reading of the sentence".to_string(),
+                    table: None,
                     page: Some(1),
                     place: None,
                 }],
@@ -5582,6 +5842,7 @@ mod tests {
                     kind: Kind::Text,
                     label: "paragraph".to_string(),
                     text: "the other reading of it".to_string(),
+                    table: None,
                     page: Some(1),
                     place: None,
                 }],

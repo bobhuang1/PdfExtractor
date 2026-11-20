@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# A bridged read hands a small file to LibreOffice and can be given a huge one
+# back; the shared budgets cap what one conversion may write and how long it
+# may run.
+pdfextractor-limits = { path = "../limits" }
 # A picture's own bytes name its encoding, so a file called `scan.dat` is still
 # read as the image it is: the format question is about the bytes, not the name.
 pdfextractor-image-parser = { path = "../image-parser" }

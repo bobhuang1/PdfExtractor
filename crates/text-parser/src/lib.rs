@@ -302,6 +302,22 @@ impl Default for TextDocument {
     }
 }
 
+/// What a parsed flow document costs against [`Limits::max_flow_blocks`].
+///
+/// A prose item is one block; a table is one block per cell, because what a
+/// grid costs the model is what it holds rather than the one item it becomes.
+/// The command line reads untrusted files through the budgeted entry points
+/// (`parse_with_limits` in each module) and holds them to this count.
+pub(crate) fn flow_units(items: &[Block]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Block::Table { grid } => grid.cells.len().max(1),
+            _ => 1,
+        })
+        .sum()
+}
+
 /// Decode bytes to text, honouring a byte-order mark and guessing UTF-16 when
 /// the bytes are full of NULs. Anything that is not UTF-8 falls back to CP1252
 /// rather than producing replacement characters for accented letters.

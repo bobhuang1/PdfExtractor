@@ -6,6 +6,7 @@
 //! it is read as the numbers behind it — the same [`ChartShape`] the XLSX
 //! reader produces — and placed by the frame that anchored it.
 
+use anyhow::{bail, Result};
 use pdfextractor_chart::{ChartKind, ChartSeries, ChartShape};
 use pdfextractor_xlsx_parser::Sheet;
 use quick_xml::events::{BytesStart, Event};
@@ -16,43 +17,55 @@ use std::io::Cursor;
 ///
 /// `sheet_name` is the sheet the chart is anchored on; a range with no sheet of
 /// its own names that sheet. A chart with no `chart` or no `plot-area` is not a
-/// chart that can be read, and answers `None`.
-pub(crate) fn read_chart(bytes: &[u8], sheet_name: &str, sheets: &[Sheet]) -> Option<ChartShape> {
-    let root = Node::parse(bytes)?;
+/// chart that can be read, and answers `None`. A range naming a sheet the
+/// workbook does not have is an error, not an empty series.
+pub(crate) fn read_chart(
+    bytes: &[u8],
+    sheet_name: &str,
+    sheets: &[Sheet],
+) -> Result<Option<ChartShape>> {
+    let Some(root) = Node::parse(bytes) else {
+        return Ok(None);
+    };
     // The XML root is `office:chart`; the chart itself is its `chart:chart`
     // child, not the wrapper that carries it.
-    let office_chart = root.find("chart")?;
+    let Some(office_chart) = root.find("chart") else {
+        return Ok(None);
+    };
     let chart = office_chart.child("chart").unwrap_or(office_chart);
-    let plot_area = chart.child("plot-area")?;
-
-    let categories = plot_area
+    let Some(plot_area) = chart.child("plot-area") else {
+        return Ok(None);
+    };
+    let categories = match plot_area
         .children_named("axis")
         .find(|axis| axis.attr("dimension") == Some("x"))
         .and_then(|axis| axis.child("categories"))
         .and_then(|categories| categories.attr("cell-range-address"))
-        .map(|range| resolve(range, sheet_name, sheets))
-        .unwrap_or_default();
+    {
+        Some(range) => resolve(range, sheet_name, sheets)?,
+        None => Vec::new(),
+    };
 
-    let series = plot_area
-        .children_named("series")
-        .map(|series| {
-            let values = series
-                .attr("values-cell-range-address")
-                .map(|range| resolve(range, sheet_name, sheets))
-                .unwrap_or_default();
-            let name = series
-                .attr("label-cell-address")
-                .map(|range| resolve(range, sheet_name, sheets))
-                .and_then(|cells| cells.into_iter().next())
-                .unwrap_or_default();
-            ChartSeries {
-                name,
-                values: values.iter().map(|text| number(text)).collect(),
-            }
-        })
-        .collect();
+    let mut series = Vec::new();
+    for series_node in plot_area.children_named("series") {
+        let values = match series_node.attr("values-cell-range-address") {
+            Some(range) => resolve(range, sheet_name, sheets)?,
+            None => Vec::new(),
+        };
+        let name = match series_node.attr("label-cell-address") {
+            Some(range) => resolve(range, sheet_name, sheets)?
+                .into_iter()
+                .next()
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        series.push(ChartSeries {
+            name,
+            values: values.iter().map(|text| number(text)).collect(),
+        });
+    }
 
-    Some(ChartShape {
+    Ok(Some(ChartShape {
         // The frame that anchors the object supplies the box.
         bbox: [0.0; 4],
         title: chart
@@ -63,7 +76,7 @@ pub(crate) fn read_chart(bytes: &[u8], sheet_name: &str, sheets: &[Sheet]) -> Op
         kind: chart_kind(chart.attr("class").unwrap_or_default()),
         categories,
         series,
-    })
+    }))
 }
 
 fn chart_kind(class: &str) -> ChartKind {
@@ -84,9 +97,11 @@ fn number(text: &str) -> Option<f64> {
 ///
 /// A reference is `Sheet.A1:B2` — the sheet name and a range of cells — or a
 /// range alone, which names the chart's own sheet. A range with a quoted sheet
-/// name (`'Quarterly Totals'.A1:B2`) is read too. A reference this cannot parse,
-/// or a sheet it does not find, answers no cells rather than invented ones.
-fn resolve(reference: &str, default_sheet: &str, sheets: &[Sheet]) -> Vec<String> {
+/// name (`'Quarterly Totals'.A1:B2`) is read too. A reference naming a sheet the
+/// workbook does not have is an error, named by both the range and the sheet;
+/// a reference this cannot otherwise parse answers no cells rather than invented
+/// ones.
+fn resolve(reference: &str, default_sheet: &str, sheets: &[Sheet]) -> Result<Vec<String>> {
     let reference = reference.trim();
     let (sheet, cells) = match reference.split_once('.') {
         Some((sheet, cells)) => (unquote_sheet(sheet), cells),
@@ -96,7 +111,7 @@ fn resolve(reference: &str, default_sheet: &str, sheets: &[Sheet]) -> Vec<String
         .iter()
         .find(|candidate| candidate.name.eq_ignore_ascii_case(&sheet))
     else {
-        return Vec::new();
+        bail!("chart range {reference:?} names sheet {sheet:?}, which the workbook does not have");
     };
     let (start, end) = match cells.split_once(':') {
         Some((start, end)) => (start, end),
@@ -112,7 +127,7 @@ fn resolve(reference: &str, default_sheet: &str, sheets: &[Sheet]) -> Vec<String
     let (Some((start_row, start_col)), Some((end_row, end_col))) =
         (cell_address(start), cell_address(end))
     else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let (min_row, max_row) = (start_row.min(end_row), start_row.max(end_row));
     let (min_col, max_col) = (start_col.min(end_col), start_col.max(end_col));
@@ -123,7 +138,7 @@ fn resolve(reference: &str, default_sheet: &str, sheets: &[Sheet]) -> Vec<String
             values.push(cell_text(sheet, row, col));
         }
     }
-    values
+    Ok(values)
 }
 
 fn unquote_sheet(sheet: &str) -> String {
@@ -283,4 +298,253 @@ fn attributes(element: &BytesStart<'_>) -> Vec<(String, String)> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfextractor_xlsx_parser::{SheetCell, SheetTable};
+
+    const CHART: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+    xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"
+    xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+    xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body>
+    <office:chart>
+      <chart:chart chart:class="chart:bar">
+        <chart:title><text:p>Cross-sheet revenue</text:p></chart:title>
+        <chart:plot-area>
+          <chart:axis chart:dimension="x">
+            <chart:categories table:cell-range-address="Data.A2:Data.A4"/>
+          </chart:axis>
+          <chart:series
+              chart:values-cell-range-address="Data.B2:Data.B4"
+              chart:label-cell-address="Data.B1:Data.B1"/>
+          <chart:series
+              chart:values-cell-range-address="Data.C2:Data.C4"
+              chart:label-cell-address="Data.C1:Data.C1"/>
+        </chart:plot-area>
+      </chart:chart>
+    </office:chart>
+  </office:body>
+</office:document-content>"#;
+
+    fn sheet(name: &str, rows: &[&[&str]]) -> Sheet {
+        let num_rows = rows.len();
+        let num_cols = rows.first().map_or(0, |row| row.len());
+        let cells = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(row, values)| {
+                values.iter().enumerate().map(move |(col, text)| SheetCell {
+                    row,
+                    col,
+                    text: text.to_string(),
+                    row_span: 1,
+                    col_span: 1,
+                })
+            })
+            .collect();
+        Sheet {
+            name: name.to_string(),
+            hidden: false,
+            tables: vec![SheetTable {
+                anchor: (0, 0),
+                num_rows,
+                num_cols,
+                cells,
+            }],
+            pictures: Vec::new(),
+            charts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn chart_ranges_read_categories_and_values_from_the_sheet_they_name() {
+        // The chart is anchored on Charts, whose cells are deliberately wrong:
+        // every range below names Data, so only Data's cells can answer this.
+        let sheets = vec![
+            sheet(
+                "Data",
+                &[
+                    &["Region", "Q1", "Q2"],
+                    &["North", "120", "140"],
+                    &["South", "90", "95"],
+                    &["West", "60", "80"],
+                ],
+            ),
+            sheet(
+                "Charts",
+                &[
+                    &["Wrong", "Wrong", "Wrong"],
+                    &["Wrong", "999", "999"],
+                    &["Wrong", "999", "999"],
+                    &["Wrong", "999", "999"],
+                ],
+            ),
+        ];
+
+        let chart = read_chart(CHART.as_bytes(), "Charts", &sheets)
+            .expect("read the chart")
+            .expect("a readable chart");
+        assert_eq!(chart.title.as_deref(), Some("Cross-sheet revenue"));
+        assert_eq!(chart.kind, ChartKind::Bar);
+        assert_eq!(chart.categories, ["North", "South", "West"]);
+        assert_eq!(chart.series.len(), 2);
+        assert_eq!(chart.series[0].name, "Q1");
+        assert_eq!(
+            chart.series[0].values,
+            [Some(120.0), Some(90.0), Some(60.0)]
+        );
+        assert_eq!(chart.series[1].name, "Q2");
+        assert_eq!(
+            chart.series[1].values,
+            [Some(140.0), Some(95.0), Some(80.0)]
+        );
+    }
+
+    /// A sheet whose name holds a space is written quoted, and ODF escapes an
+    /// apostrophe inside the quotes by doubling it. Both names still reach the
+    /// sheet they name rather than the sheet the chart is anchored on.
+    #[test]
+    fn chart_ranges_read_quoted_sheet_names() {
+        const QUOTED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+    xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"
+    xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+    xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body>
+    <office:chart>
+      <chart:chart chart:class="chart:line">
+        <chart:title><text:p>Quoted sheets</text:p></chart:title>
+        <chart:plot-area>
+          <chart:axis chart:dimension="x">
+            <chart:categories table:cell-range-address="'Quarterly Totals'.A2:'Quarterly Totals'.A4"/>
+          </chart:axis>
+          <chart:series
+              chart:values-cell-range-address="'Quarterly Totals'.B2:'Quarterly Totals'.B4"
+              chart:label-cell-address="'Quarterly Totals'.B1:'Quarterly Totals'.B1"/>
+          <chart:series
+              chart:values-cell-range-address="'Bob''s Data'.B2:'Bob''s Data'.B4"
+              chart:label-cell-address="'Bob''s Data'.B1:'Bob''s Data'.B1"/>
+        </chart:plot-area>
+      </chart:chart>
+    </office:chart>
+  </office:body>
+</office:document-content>"#;
+
+        // The chart's own sheet is deliberately wrong: only the quoted sheets can
+        // answer the ranges.
+        let sheets = vec![
+            sheet(
+                "Charts",
+                &[
+                    &["Wrong", "Wrong", "Wrong"],
+                    &["Wrong", "999", "999"],
+                    &["Wrong", "999", "999"],
+                    &["Wrong", "999", "999"],
+                ],
+            ),
+            sheet(
+                "Quarterly Totals",
+                &[
+                    &["Region", "Q1"],
+                    &["North", "120"],
+                    &["South", "90"],
+                    &["West", "60"],
+                ],
+            ),
+            sheet(
+                "Bob's Data",
+                &[
+                    &["Region", "Q2"],
+                    &["North", "140"],
+                    &["South", "95"],
+                    &["West", "80"],
+                ],
+            ),
+        ];
+
+        let chart = read_chart(QUOTED.as_bytes(), "Charts", &sheets)
+            .expect("read the chart")
+            .expect("a readable chart");
+        assert_eq!(chart.title.as_deref(), Some("Quoted sheets"));
+        assert_eq!(chart.kind, ChartKind::Line);
+        assert_eq!(chart.categories, ["North", "South", "West"]);
+        assert_eq!(chart.series.len(), 2);
+        assert_eq!(chart.series[0].name, "Q1");
+        assert_eq!(
+            chart.series[0].values,
+            [Some(120.0), Some(90.0), Some(60.0)]
+        );
+        assert_eq!(chart.series[1].name, "Q2");
+        assert_eq!(
+            chart.series[1].values,
+            [Some(140.0), Some(95.0), Some(80.0)]
+        );
+    }
+
+    /// A range that names no sheet in the workbook is refused with both the
+    /// range and the missing sheet named, rather than silently answering no
+    /// cells or falling back to the sheet the chart is anchored on.
+    #[test]
+    fn chart_ranges_naming_a_missing_sheet_fail_with_its_name() {
+        const MISSING: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+    xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"
+    xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+    xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body>
+    <office:chart>
+      <chart:chart chart:class="chart:bar">
+        <chart:title><text:p>Missing sheets</text:p></chart:title>
+        <chart:plot-area>
+          <chart:axis chart:dimension="x">
+            <chart:categories table:cell-range-address="Nowhere.A2:Nowhere.A4"/>
+          </chart:axis>
+          <chart:series
+              chart:values-cell-range-address="Gone.B2:Gone.B4"
+              chart:label-cell-address="Gone.B1:Gone.B1"/>
+          <chart:series
+              chart:values-cell-range-address="Data.B2:Data.B4"
+              chart:label-cell-address="Data.B1:Data.B1"/>
+        </chart:plot-area>
+      </chart:chart>
+    </office:chart>
+  </office:body>
+</office:document-content>"#;
+
+        let sheets = vec![
+            sheet("Charts", &[&["Wrong"], &["999"], &["999"], &["999"]]),
+            sheet(
+                "Data",
+                &[
+                    &["Region", "Q1"],
+                    &["North", "120"],
+                    &["South", "90"],
+                    &["West", "60"],
+                ],
+            ),
+        ];
+
+        let error = read_chart(MISSING.as_bytes(), "Charts", &sheets)
+            .expect_err("a chart naming a missing sheet was accepted");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("Nowhere.A2:Nowhere.A4"),
+            "the diagnostic does not name the range: {message}"
+        );
+        assert!(
+            message.contains("Nowhere"),
+            "the diagnostic does not name the missing sheet: {message}"
+        );
+        assert!(
+            message.contains("which the workbook does not have"),
+            "the diagnostic does not say what is missing: {message}"
+        );
+    }
 }

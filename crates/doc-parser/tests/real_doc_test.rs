@@ -5,7 +5,9 @@
 //! the character-stream control codes at once.
 
 use pdfextractor_doc_parser::{DocDocument, DocItem};
+use pdfextractor_limits::Limits;
 use std::path::PathBuf;
+use std::time::Duration;
 
 fn real(name: &str) -> Vec<u8> {
     let path = PathBuf::from("../../test-data/real").join(name);
@@ -29,6 +31,48 @@ fn body_text(doc: &DocDocument) -> String {
 
 fn pictures(doc: &DocDocument) -> usize {
     doc.items.iter().filter(|i| **i == DocItem::Picture).count()
+}
+
+/// A budget is checked before the container is opened, so a file over it is
+/// refused by name rather than walked.
+#[test]
+fn a_custom_input_budget_is_enforced() {
+    let data = real("equation.doc");
+    let budget = Limits {
+        max_input_bytes: 8,
+        ..Limits::default()
+    };
+    let error = DocDocument::parse_bytes_with_limits(&data, budget)
+        .expect_err("the file is longer than eight bytes");
+    assert!(error.to_string().contains("limit is 8 bytes"), "{error}");
+}
+
+/// The walk is timed, so a spent deadline refuses the document before its words
+/// are read.
+#[test]
+fn a_spent_deadline_is_enforced() {
+    let data = real("equation.doc");
+    let budget = Limits {
+        timeout: Duration::ZERO,
+        ..Limits::default()
+    };
+    let error =
+        DocDocument::parse_bytes_with_limits(&data, budget).expect_err("the deadline is spent");
+    assert!(error.to_string().contains("timed out"), "{error}");
+}
+
+/// The blocks the document produces are held to the budget, so a caller that
+/// lowers it is not handed more than it asked for.
+#[test]
+fn a_custom_block_budget_is_enforced() {
+    let data = real("two_images.doc");
+    let budget = Limits {
+        max_flow_blocks: 0,
+        ..Limits::default()
+    };
+    let error =
+        DocDocument::parse_bytes_with_limits(&data, budget).expect_err("the document has blocks");
+    assert!(error.to_string().contains("limit is 0"), "{error}");
 }
 
 /// Every fixture must open: the container, the Fib and the piece table all have

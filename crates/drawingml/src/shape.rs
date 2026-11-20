@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use pdfextractor_limits::Limits;
 use pdfextractor_metafile as metafile;
 use pdfextractor_metafile::Color;
 
@@ -217,6 +218,16 @@ pub fn paints_a_picture_fill(drawing: &[u8]) -> bool {
 pub trait Media {
     /// The bytes and media type of the picture a relationship id names.
     fn picture(&self, id: &str) -> Option<(String, Vec<u8>)>;
+
+    /// The image budgets a picture fill is decoded under.
+    ///
+    /// A reader that was given a policy passes it on, so a lowered ceiling — a
+    /// fuzz run's `FUZZ_MAX_IMAGE_PIXELS`, a service's smaller allowance —
+    /// reaches a picture painted into a shape, not only one in the flow. A
+    /// handle with no policy keeps the production defaults.
+    fn limits(&self) -> Limits {
+        Limits::default()
+    }
 }
 
 /// A drawing whose fills name no media: the painter then draws a fill only
@@ -2525,7 +2536,7 @@ fn picture_fill(fill: &Node, frame: Frame, media: &dyn Media) -> Option<paint::I
     let (mime, data) = drawing
         .and_then(|id| media.picture(id))
         .or_else(|| blip.attr("embed").and_then(|id| media.picture(id)))?;
-    let mut image = decode(&mime, &data, frame)?;
+    let mut image = decode(&mime, &data, frame, &media.limits())?;
     image.crop = crop(fill);
     Some(image)
 }
@@ -2552,8 +2563,17 @@ fn crop(fill: &Node) -> [f64; 4] {
 /// the 144 dpi every other drawing in a package is played at. A raster is
 /// decoded, and one the image crate has no decoder for — WebP, JPEG 2000 — is
 /// transcoded to PNG first, exactly as a picture in the document's flow is.
-/// `None` when the picture cannot be read at all.
-fn decode(mime: &str, data: &[u8], frame: Frame) -> Option<paint::Image> {
+/// `None` when the picture cannot be read at all, or when its grid or working
+/// set passes the image budgets.
+///
+/// The budgets are the [`Media`] handle's: a reader that was given a policy
+/// passes it on through [`Media::limits`], so `--max-image-pixels` and a fuzz
+/// run's `FUZZ_MAX_IMAGE_PIXELS` reach a picture painted into a shape as well as
+/// one in the flow. A handle with no policy keeps the production defaults. An
+/// SVG fill is the exception, because it is not decoded: it is rasterised at the
+/// frame the fill gives it, and `pdfextractor_svg::Options` carries no pixel
+/// budget to lower.
+fn decode(mime: &str, data: &[u8], frame: Frame, limits: &Limits) -> Option<paint::Image> {
     if mime.starts_with("image/svg") {
         let raster = pdfextractor_svg::rasterize(
             data,
@@ -2567,14 +2587,13 @@ fn decode(mime: &str, data: &[u8], frame: Frame) -> Option<paint::Image> {
             crop: [0.0; 4],
         });
     }
-    let bitmap = match image::load_from_memory(data) {
-        Ok(bitmap) => bitmap,
-        Err(_) => {
-            let png = pdfextractor_image_parser::transcode_to_png(data)?;
-            image::load_from_memory(&png.data).ok()?
-        }
-    }
-    .to_rgba8();
+    let bitmap = pdfextractor_image_parser::decode_checked(data, limits)
+        .or_else(|_| {
+            let png = pdfextractor_image_parser::transcode_to_png_checked(data, limits)?;
+            pdfextractor_image_parser::decode_checked(&png.data, limits)
+        })
+        .ok()?
+        .to_rgba8();
     Some(paint::Image {
         width: bitmap.width(),
         height: bitmap.height(),
@@ -3127,6 +3146,47 @@ mod tests {
                 .find(|(named, _, _)| *named == id)
                 .map(|(_, mime, data)| ((*mime).to_string(), data.clone()))
         }
+    }
+
+    /// A caller's budget reaches a picture painted into a shape: the fill the
+    /// defaults draw is refused under a ceiling below its grid, so a lowered
+    /// `FUZZ_MAX_IMAGE_PIXELS` is not spent only on the pictures in the flow.
+    #[test]
+    fn a_picture_fill_is_decoded_under_the_callers_image_budget() {
+        struct Budgeted(Pictures, Limits);
+
+        impl Media for Budgeted {
+            fn picture(&self, id: &str) -> Option<(String, Vec<u8>)> {
+                self.0.picture(id)
+            }
+
+            fn limits(&self) -> Limits {
+                self.1.clone()
+            }
+        }
+
+        let shape = r##"<wps:wsp><wps:spPr>
+              <a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="635000"/></a:xfrm>
+              <a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
+              <a:blipFill><a:blip r:embed="rId7"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>
+            </wps:spPr></wps:wsp>"##;
+        let pictures = Pictures(vec![(
+            "rId7",
+            "image/png",
+            solid_png((60, 36), [224, 140, 40, 255]),
+        )]);
+        assert!(
+            render_with(&drawing(shape), &theme(), &pictures).is_some(),
+            "the defaults paint the fill"
+        );
+        let tight = Limits {
+            max_image_pixels: 1,
+            ..Limits::default()
+        };
+        assert!(
+            render_with(&drawing(shape), &theme(), &Budgeted(pictures, tight)).is_none(),
+            "the fill's grid is past the caller's ceiling"
+        );
     }
 
     /// A shape can be filled with a picture, and the fill belongs to the shape:

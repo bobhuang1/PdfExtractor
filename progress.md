@@ -2,7 +2,7 @@
 
 *Started 2026-11-19 on branch `finish-plan-2026-11` (cut from `origin/main` at
 `e8e8267`). The history before this plan — every verified-status row, the bug list,
-the known limitations — is [docs/history/progress-2026-11-09.md](docs/history/progress-2026-11-09.md).*
+the known limitations — is [docs/history/progress-2026-11-19.md](docs/history/progress-2026-11-19.md).*
 
 ## Workstreams
 

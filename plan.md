@@ -2,8 +2,8 @@
 
 *Rewritten 2026-11-19. The plan this replaces — the full roadmap with Phases 1–11 and
 workstreams W1–W7, every ticked box and its evidence — is kept unchanged in
-[docs/history/plan-2026-11-09.md](docs/history/plan-2026-11-09.md); the 13,700-line
-progress log it pointed at is [docs/history/progress-2026-11-09.md](docs/history/progress-2026-11-09.md).
+[docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md); the 13,700-line
+progress log it pointed at is [docs/history/progress-2026-11-19.md](docs/history/progress-2026-11-19.md).
 The monitor for this plan is [progress.md](progress.md).*
 
 ## Where the project stands
@@ -102,10 +102,10 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,105 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
-There are 128 end-to-end tests in `cli_test` that run the built binary as a child process.
-The golden binary `docling_golden_test` has thirty-five tests in the binary: the corpus-wide conformance check, eleven fixture checks, a version check, twenty comparison units and two acceptance tests.
-49 real Docling conversions are committed under `test-data/golden/docling/`.
+The workspace builds with zero warnings, and the suite holds 1,282 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+There are 130 end-to-end tests in `cli_test` that run the built binary as a child process.
+The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
+58 real Docling conversions are committed under `test-data/golden/docling/`.
 
 ## Blocked — needs a decision only the owner can make
 
@@ -121,7 +121,7 @@ The golden binary `docling_golden_test` has thirty-five tests in the binary: the
 
 Each is real work that is larger than a finishing pass, or needs measurement on the
 Linux OCR floors, or ML; the old plan's text for each is in
-[docs/history/plan-2026-11-09.md](docs/history/plan-2026-11-09.md).
+[docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md).
 
 - OCR: deskew/despeckle preprocessing; CCITT G3/G4 and JBIG2 decoding; full-page OCR
   of vector-only pages (rasteriser); non-English and fax fixtures.

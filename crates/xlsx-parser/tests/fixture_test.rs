@@ -210,6 +210,49 @@ fn each_sheet_draws_the_pictures_its_own_drawing_part_anchors() {
 }
 
 #[test]
+fn each_sheets_cell_comments_are_read_with_their_authors() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data/annotations.xlsx");
+    let data = std::fs::read(&path).unwrap_or_else(|e| panic!("missing {}: {e}", path.display()));
+    let document = XlsxDocument::parse_bytes(&data).expect("parse");
+
+    let comments: Vec<(usize, usize, usize, Option<&str>, &str)> = document
+        .annotations
+        .iter()
+        .map(|comment| {
+            (
+                comment.sheet,
+                comment.row,
+                comment.col,
+                comment.author.as_deref(),
+                comment.text.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        comments,
+        vec![
+            (
+                1,
+                1,
+                1,
+                Some("Ada Lovelace"),
+                "Checked against the invoice."
+            ),
+            (1, 3, 2, Some("Grace Hopper"), "An empty cell's remark."),
+            (2, 0, 0, Some("Ada Lovelace"), "A remark on another sheet."),
+        ]
+    );
+
+    // A comment on an empty cell is a remark, not content: the sheet's cells
+    // still end at the last value.
+    assert_eq!(document.sheets[0].tables.len(), 1);
+    assert!(document.sheets[0].tables[0]
+        .cells
+        .iter()
+        .all(|cell| !cell.text.contains("Checked against the invoice.")));
+}
+
+#[test]
 fn a_date_is_the_text_a_reader_sees() {
     let document = XlsxDocument::parse_bytes(&fixture()).expect("parse");
     let notes = &document.sheets[1].tables[0];

@@ -300,10 +300,27 @@
           return program();
         }
         if (command === "tokenizer_format") {
+          // The real command answers with the loader's description: format,
+          // and the vocabulary size (with a tiktoken family when applicable).
+          // The run summary reads the badge, so the stand-in must carry the
+          // same label rather than only the format's name.
           const name = String(args.path).toLowerCase();
-          if (name.endsWith(".model") || name.endsWith(".spm")) return "SentencePiece";
-          if (name.endsWith(".tiktoken")) return "tiktoken";
-          return "Hugging Face";
+          if (name.endsWith(".model") || name.endsWith(".spm")) {
+            return "SentencePiece · 13 tokens";
+          }
+          if (name.endsWith(".tiktoken")) {
+            const family =
+              args.encoding ||
+              (name.includes("o200k")
+                ? "o200k_base"
+                : name.includes("p50k")
+                  ? "p50k_base"
+                  : name.includes("r50k")
+                    ? "r50k_base"
+                    : "cl100k_base");
+            return `tiktoken · ${family} · 257 tokens`;
+          }
+          return "Hugging Face · 10 tokens";
         }
         if (command === "pick_path") {
           if (args.kind === "folder") return "/golden/docling";

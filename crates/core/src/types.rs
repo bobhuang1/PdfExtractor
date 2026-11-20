@@ -153,7 +153,7 @@ const REPRESENTABLE_MEDIA_TYPES: [&str; 6] = [
 ];
 
 /// Whether `mimetype` can be written in an image reference (see
-/// [`REPRESENTABLE_MEDIA_TYPES`]).
+/// `REPRESENTABLE_MEDIA_TYPES`).
 pub fn is_representable_media_type(mimetype: &str) -> bool {
     REPRESENTABLE_MEDIA_TYPES.contains(&mimetype)
 }

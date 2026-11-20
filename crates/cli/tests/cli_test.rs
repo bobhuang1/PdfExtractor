@@ -64,10 +64,16 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// Run the CLI with `args` and return the completed process.
+///
+/// `OMP_THREAD_LIMIT=1` keeps each test's Tesseract from starting a worker per
+/// CPU. The harness runs several children at once, so the default pool is
+/// oversubscribed: on a 4-CPU machine a one-page OCR test took 27 s uncapped
+/// and 1.2 s capped.
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
         .args(args)
         .env("RUST_LOG", "info")
+        .env("OMP_THREAD_LIMIT", "1")
         .output()
         .expect("spawn the CLI binary")
 }
@@ -1828,6 +1834,74 @@ fn a_rotated_scan_is_read_upright() {
                 l >= 0.0 && t >= 0.0 && r <= 792.5 && b <= 612.5,
                 "box outside the page: {bbox}"
             );
+        }
+    }
+}
+
+/// CCITT G3/G4 and JBIG2 scans reach OCR: the codecs real faxes and scanners
+/// use, none of which an image library opens as a file. All fixtures are the
+/// same invoice; `ccitt_scan.pdf` has a G3 one-dimensional page and a G4 page,
+/// `ccitt_g3_2d_scan.pdf` is G3 two-dimensional (`/K 1`), and `jbig2_scan.pdf`
+/// carries its symbol dictionary in `/JBIG2Globals`.
+#[test]
+fn a_ccitt_or_jbig2_scan_is_read_end_to_end() {
+    for (name, pages) in [
+        ("ccitt_scan.pdf", 2),
+        ("ccitt_g3_2d_scan.pdf", 1),
+        ("jbig2_scan.pdf", 1),
+    ] {
+        let ws = Workspace::new("scan-codec");
+        let input = repository_root().join("test-data").join(name);
+        let output = ws.join("scan.json");
+
+        run_ok(&[
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--ocr",
+            "auto",
+        ]);
+
+        let doc = json_of(&output);
+        let page_map = doc["pages"].as_object().expect("a page map");
+        assert_eq!(page_map.len(), pages, "{name}: page count");
+        for page in page_map.values() {
+            assert_eq!(page["size"]["width"], 620.0, "{name}: page width");
+            assert_eq!(page["size"]["height"], 350.0, "{name}: page height");
+        }
+
+        let text = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .map(|t| t["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for needle in ["ACME", "12345", "Total Due"] {
+            assert!(
+                text.contains(needle),
+                "{name}: missing {needle:?} in: {text}"
+            );
+        }
+
+        // The boxes are in the 620 x 350 page's space, not the encoded grid's
+        // raw coordinates: a codec that decoded to the wrong row width would
+        // put them outside it.
+        for text in doc["texts"].as_array().expect("a text list") {
+            for prov in text["prov"].as_array().expect("provenance") {
+                let bbox = &prov["bbox"];
+                let (l, t, r, b) = (
+                    bbox["l"].as_f64().unwrap(),
+                    bbox["t"].as_f64().unwrap(),
+                    bbox["r"].as_f64().unwrap(),
+                    bbox["b"].as_f64().unwrap(),
+                );
+                assert!(
+                    l >= 0.0 && t >= 0.0 && r <= 620.5 && b <= 350.5,
+                    "{name}: box outside the page: {bbox}"
+                );
+            }
         }
     }
 }
@@ -8274,6 +8348,107 @@ fn a_workbook_becomes_pages_groups_and_tables() {
     }
 }
 
+/// A cell's comment is about the sheet rather than part of its grid: the
+/// workbook's comments land on the notes layer, one `comment_section` group per
+/// cell, named for the cell, and the cell keeps only its text. A reading that
+/// did not ask for notes never sees a comment pretending to be a cell.
+#[test]
+fn a_workbooks_cell_comments_land_on_the_notes_layer() {
+    let ws = Workspace::new("xlsx-comments");
+    let bytes = fixture("annotations.xlsx");
+    let input = ws.write("annotations.xlsx", &bytes);
+    let output = ws.join("annotations.json");
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+    ]);
+    let doc = json_of(&output);
+
+    let notes: Vec<&str> = doc["texts"]
+        .as_array()
+        .expect("a text list")
+        .iter()
+        .filter(|item| item["content_layer"] == "notes")
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "[author: Ada Lovelace]: Checked against the invoice.",
+            "[author: Grace Hopper]: An empty cell's remark.",
+            "[author: Ada Lovelace]: A remark on another sheet.",
+        ],
+        "the cell comments are on the notes layer, with the authors the file states"
+    );
+
+    // A comment is not a cell: the tables hold the sheet's values only.
+    for table in doc["tables"].as_array().expect("a table list") {
+        for cell in table["data"]["table_cells"].as_array().expect("cells") {
+            let text = cell["text"].as_str().unwrap_or_default();
+            assert!(
+                !text.contains("Checked against the invoice.")
+                    && !text.contains("An empty cell's remark.")
+                    && !text.contains("A remark on another sheet."),
+                "a comment was written as a cell's text: {text:?}"
+            );
+        }
+    }
+
+    let comments: Vec<(&str, &str)> = doc["groups"]
+        .as_array()
+        .expect("a group list")
+        .iter()
+        .filter(|group| group["label"] == "comment_section")
+        .map(|group| {
+            (
+                group["name"].as_str().expect("a comment name"),
+                group["content_layer"].as_str().expect("a layer"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            ("comment-sheet1-1-1", "notes"),
+            ("comment-sheet1-3-2", "notes"),
+            ("comment-sheet2-0-0", "notes"),
+        ],
+        "each comment has its own notes-layer group, named for the cell"
+    );
+
+    // A reading that leaves the notes layer out does not show the remarks; one
+    // that asks for it writes each as a comment, not as a cell of the sheet.
+    let markdown =
+        std::fs::read_to_string(ws.join("annotations.md")).expect("the Markdown without notes");
+    assert!(
+        !markdown.contains("Checked against the invoice."),
+        "a comment was read without --include-notes: {markdown}"
+    );
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        ws.join("with_notes.md").to_str().unwrap(),
+        "--to",
+        "md",
+        "--include-notes",
+    ]);
+    let with_notes =
+        std::fs::read_to_string(ws.join("with_notes.md")).expect("the Markdown with notes");
+    assert!(
+        with_notes.contains("> **Comment:** [author: Ada Lovelace]: Checked against the invoice."),
+        "the comment is not written as a remark: {with_notes}"
+    );
+}
+
 /// A workbook's pictures are handed on the way a Word or PowerPoint package's
 /// are: a PNG and a JPEG travel untouched, and a BMP, a GIF and both spellings of
 /// a JPEG 2000 — the bare `.jpc` codestream and the `.jp2` container around one —
@@ -11650,6 +11825,7 @@ fn run_without_libreoffice(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
         .args(args)
         .env("RUST_LOG", "info")
+        .env("OMP_THREAD_LIMIT", "1")
         .env("PDFE_SOFFICE", "/definitely/not/a/soffice")
         .output()
         .expect("spawn the CLI binary")

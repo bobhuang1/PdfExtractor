@@ -80,11 +80,42 @@ static SELFTEST_CHUNKS: OnceLock<bool> = OnceLock::new();
 /// The page reports the rendered label and exits; no conversion is started.
 static SELFTEST_TOKENIZER: OnceLock<Option<String>> = OnceLock::new();
 
+/// `--selftest-clear-tokenizer`: with `--selftest-tokenizer`, clear the field
+/// after its badge is painted, so a smoke test checks that the label and its
+/// tooltip are gone.
+static SELFTEST_CLEAR_TOKENIZER: OnceLock<bool> = OnceLock::new();
+
+/// `--selftest-tokenizer-encoding VALUE`: with `--selftest-tokenizer`, choose
+/// the tiktoken family in the encoding selector. With an input and
+/// `--selftest-chunks`, the page runs the conversion, so the smoke test checks
+/// that the chosen family reaches the CLI's command line.
+static SELFTEST_TOKENIZER_ENCODING: OnceLock<Option<String>> = OnceLock::new();
+
 /// `--selftest-bad-range RANGE`: with `--selftest`, fill the page-range box with
 /// a range the CLI refuses, press Convert, and report what the page drew. The
 /// refusal must arrive through the same command the button uses, before a
 /// conversion process exists.
 static SELFTEST_BAD_RANGE: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-bad-budget VALUE`: with `--selftest`, tick Retrieval chunks, choose
+/// hybrid, type VALUE into the token budget and press Convert, so a malformed
+/// budget is refused in the window a person would see the refusal in.
+static SELFTEST_BAD_BUDGET: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-bad-overlap VALUE`: the same for the overlap box.
+static SELFTEST_BAD_OVERLAP: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-bad-encoding VALUE`: with `--selftest`, tick Retrieval chunks,
+/// choose hybrid, choose VALUE in the encoding selector with no tokenizer file,
+/// and press Convert. The form must refuse the orphaned encoding before a
+/// conversion process exists.
+static SELFTEST_BAD_ENCODING: OnceLock<Option<String>> = OnceLock::new();
+
+/// `--selftest-reveal`: with `--selftest`, press the result pane's action once a
+/// run finishes and print the path it asks to reveal. The command reports that
+/// path instead of opening a file manager, so a test can check what the window
+/// would reveal without a desktop window appearing over it.
+static SELFTEST_REVEAL: OnceLock<bool> = OnceLock::new();
 
 /// The conversion in flight, if any.
 #[derive(Default)]
@@ -149,12 +180,32 @@ fn cli_program(formats: State<'_, AcceptedFormats>) -> String {
 }
 
 /// The format of the chosen `--chunks-tokenizer` file and its vocabulary size
-/// or tiktoken family, for the page to name beside it. The chunker's own loader
-/// answers, so an extensionless file is recognized by its bytes and the number
-/// is the one a run will use.
+/// or effective tiktoken family, for the page to name beside it. The chunker's
+/// own loader answers, so an extensionless file is recognized by its bytes, an
+/// explicit encoding overrides the filename's family, and the number is the one
+/// a run will use.
 #[tauri::command]
-fn tokenizer_format(path: String) -> Result<String, String> {
-    pdfextractor_md_exporter::chunks::Tokenizer::from_file(&path)
+fn tokenizer_format(path: String, encoding: Option<String>) -> Result<String, String> {
+    let path = Path::new(&path);
+    // A missing or unreadable path is an I/O error, not an unrecognized format:
+    // report the loader's own reason so the badge can say why the file could not
+    // be read instead of implying its contents named no tokenizer.
+    if let Err(error) = std::fs::read(path) {
+        return Err(format!("{}: {error}", path.display()));
+    }
+    // A file whose name and bytes name no format gets its own label: it is not
+    // a malformed tokenizer of a known kind, and the loader's detailed message
+    // would imply a format the file never claimed.
+    if pdfextractor_md_exporter::chunks::detect_tokenizer_format(path).is_err() {
+        return Err("Unknown format".to_string());
+    }
+    let encoding = encoding
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::parse::<pdfextractor_md_exporter::chunks::TiktokenEncoding>)
+        .transpose()?;
+    pdfextractor_md_exporter::chunks::Tokenizer::from_file_with_tiktoken_encoding(path, encoding)
         .map(|tokenizer| tokenizer.description().to_string())
         .map_err(|error| error.to_string())
 }
@@ -198,6 +249,12 @@ async fn ask(
 /// that is not there is refused rather than handed to an opener.
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
+    if SELFTEST_REVEAL.get().copied().unwrap_or(false) {
+        // The self-test checks what the action would reveal; opening the desktop's
+        // file manager would put a window on top of the test.
+        println!("selftest-reveal path={path}");
+        return Ok(());
+    }
     let target = PathBuf::from(&path);
     if !target.exists() {
         return Err(format!("There is nothing at {path}."));
@@ -305,12 +362,18 @@ fn start_conversion(
     let program = locate_cli();
     let args = settings.to_args();
     let (job, stdout, stderr) = Job::spawn_with_env(&program, &args, &settings.child_env())?;
-    // A bad-range self-test is the one case that must not get here. Say so on
-    // the process's own output, so the test does not have to infer it from an
-    // event that may still be in flight when the page reports back.
+    // A bad-form self-test must not get here. Say so on the process's own
+    // output, so the test does not have to infer it from an event that may
+    // still be in flight when the page reports back.
     if SELFTEST_BAD_RANGE
         .get()
         .is_some_and(|range| range.is_some())
+        || SELFTEST_BAD_BUDGET
+            .get()
+            .is_some_and(|value| value.is_some())
+        || SELFTEST_BAD_OVERLAP
+            .get()
+            .is_some_and(|value| value.is_some())
     {
         println!("selftest-conversion-started");
     }
@@ -333,6 +396,18 @@ fn start_conversion(
         program,
         command,
     };
+
+    // The tokenizer self-test is driven by the page, so this is where its run's
+    // command line is printed; `frontend_ready` prints the Rust-driven one.
+    if SELFTEST_TOKENIZER
+        .get()
+        .is_some_and(|tokenizer| tokenizer.is_some())
+    {
+        println!(
+            "selftest-started run={} command={}",
+            started.run, started.command
+        );
+    }
 
     // Announced before either reader thread exists, so the page has the run set
     // up before its first document can arrive. The id is in every event, which
@@ -479,6 +554,20 @@ fn frontend_ready(app: tauri::AppHandle) {
         return;
     };
     let tokenizer = SELFTEST_TOKENIZER.get().cloned().flatten();
+    let tokenizer_encoding = SELFTEST_TOKENIZER_ENCODING.get().cloned().flatten();
+    let clear_tokenizer = SELFTEST_CLEAR_TOKENIZER.get().copied().unwrap_or(false);
+    let reference = SELFTEST_REFERENCE
+        .get()
+        .cloned()
+        .flatten()
+        .unwrap_or_default();
+    // The page drives a tokenizer run itself, so it needs the same scratch output
+    // a Rust-driven self-test would use rather than writing beside the corpus.
+    let output = if selftest_input.is_empty() {
+        String::new()
+    } else {
+        Settings::selftest(&selftest_input, &reference).output
+    };
 
     if selftest_input.is_empty() && tokenizer.is_none() {
         app.exit(0);
@@ -490,13 +579,24 @@ fn frontend_ready(app: tauri::AppHandle) {
     // `--selftest-tokenizer` which file's badge to show.
     let chunks = SELFTEST_CHUNKS.get().copied().unwrap_or(false);
     let bad_range = SELFTEST_BAD_RANGE.get().cloned().flatten();
+    let bad_budget = SELFTEST_BAD_BUDGET.get().cloned().flatten();
+    let bad_overlap = SELFTEST_BAD_OVERLAP.get().cloned().flatten();
+    let bad_encoding = SELFTEST_BAD_ENCODING.get().cloned().flatten();
+    let reveal = SELFTEST_REVEAL.get().copied().unwrap_or(false);
     let _ = app.emit(
         SELFTEST_ON,
         serde_json::json!({
             "chunks": chunks,
             "badRange": bad_range.clone(),
+            "badBudget": bad_budget.clone(),
+            "badOverlap": bad_overlap.clone(),
+            "badEncoding": bad_encoding.clone(),
+            "reveal": reveal,
             "input": selftest_input.clone(),
+            "output": output,
             "tokenizer": tokenizer.clone(),
+            "tokenizerEncoding": tokenizer_encoding.clone(),
+            "clearTokenizer": clear_tokenizer,
         }),
     );
 
@@ -514,16 +614,20 @@ fn frontend_ready(app: tauri::AppHandle) {
         return;
     }
 
+    // A malformed count is refused either by the page (a fraction or a typo) or
+    // by `start_conversion` (a zero budget, an overlap as large as the budget);
+    // an encoding with no tokenizer is refused by the form's own `problem`. In
+    // every case the page presses Convert and reports the refusal, so nothing is
+    // started here.
+    if bad_budget.is_some() || bad_overlap.is_some() || bad_encoding.is_some() {
+        return;
+    }
+
     // `Settings::selftest` rather than the form as typed: a smoke test is pointed at
     // the corpus itself, so it writes what it converts into a temporary directory of
     // its own instead of beside the documents and the committed references it read.
     // The chunking row is the page's, not the form's, so the one the page ticks and
     // the one the run uses are made here to be the same reading.
-    let reference = SELFTEST_REFERENCE
-        .get()
-        .cloned()
-        .flatten()
-        .unwrap_or_default();
     let mut settings = Settings::selftest(&selftest_input, &reference);
     if chunks {
         settings.to.push(OutputFormat::Chunks);
@@ -590,9 +694,47 @@ fn selftest_tokenizer(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// Parse `--selftest-tokenizer-encoding VALUE`, the tiktoken family a smoke test
+/// chooses for that file.
+fn selftest_tokenizer_encoding(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-tokenizer-encoding")
+}
+
+/// Parse `--selftest-clear-tokenizer`: clear the badge check's field after its
+/// label is painted.
+fn selftest_clear_tokenizer(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--selftest-clear-tokenizer")
+}
+
 /// Parse `--selftest-bad-range RANGE`, the malformed range a smoke test types.
 fn selftest_bad_range(args: &[String]) -> Option<String> {
-    let position = args.iter().position(|arg| arg == "--selftest-bad-range")?;
+    selftest_value(args, "--selftest-bad-range")
+}
+
+/// Parse `--selftest-bad-budget VALUE`, the malformed budget a smoke test types.
+fn selftest_bad_budget(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-budget")
+}
+
+/// Parse `--selftest-bad-overlap VALUE`, the malformed overlap a smoke test types.
+fn selftest_bad_overlap(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-overlap")
+}
+
+/// Parse `--selftest-bad-encoding VALUE`, the encoding a smoke test chooses
+/// without a tokenizer file.
+fn selftest_bad_encoding(args: &[String]) -> Option<String> {
+    selftest_value(args, "--selftest-bad-encoding")
+}
+
+/// Parse `--selftest-reveal`: press the result pane's action after a run.
+fn selftest_reveal(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--selftest-reveal")
+}
+
+/// The value after `flag`, when the flag is present and a value follows it.
+fn selftest_value(args: &[String], flag: &str) -> Option<String> {
+    let position = args.iter().position(|arg| arg == flag)?;
     args.get(position + 1)
         .filter(|value| !value.starts_with("--"))
         .cloned()
@@ -614,7 +756,13 @@ fn main() {
              Usage: pdfextractor-ui [--selftest [INPUT]] [--selftest-stop MILLIS]\n\
                                    [--selftest-ref PATH] [--selftest-chunks]\n\
                                    [--selftest-tokenizer PATH]\n\
-                                   [--selftest-bad-range RANGE] [-h]\n\n\
+                                   [--selftest-tokenizer-encoding VALUE]\n\
+                                   [--selftest-clear-tokenizer]\n\
+                                   [--selftest-bad-range RANGE]\n\
+                                   [--selftest-bad-budget VALUE]\n\
+                                   [--selftest-bad-overlap VALUE]\n\
+                                   [--selftest-bad-encoding VALUE]\n\
+                                   [--selftest-reveal] [-h]\n\n\
              With no options the window opens and waits for you. A conversion\n\
              runs in the background and can be stopped at any time, and the\n\
              Compare mode shows each document beside a Docling reference.\n\
@@ -624,8 +772,17 @@ fn main() {
              chunker before it, so that row is checked too;\n\
              --selftest-tokenizer names a tokenizer file and reports the badge\n\
              the window renders for it, without starting a run;\n\
+             --selftest-tokenizer-encoding chooses the tiktoken family for that\n\
+             file and, with an input and --selftest-chunks, runs the conversion;\n\
+             --selftest-clear-tokenizer clears the field after painting the badge,\n\
+             so the test checks the label and tooltip are removed;\n\
              --selftest-bad-range fills an unreadable page range and presses\n\
-             Convert, so the page's refusal is checked instead of a run. What such a run\n\
+             Convert, so the page's refusal is checked instead of a run;\n\
+             --selftest-bad-budget VALUE and --selftest-bad-overlap VALUE check a\n\
+             malformed chunk count the same way; --selftest-bad-encoding VALUE\n\
+             chooses an encoding with no tokenizer and checks that refusal;\n\
+             --selftest-reveal presses the\n\
+             result pane's action after a run. What such a run\n\
              converts is written into a temporary\n\
              directory of its own — named on the command line it prints — so\n\
              smoke-testing the corpus never writes beside it. Set\n\
@@ -639,7 +796,13 @@ fn main() {
     let _ = SELFTEST_REFERENCE.set(selftest_reference(&args));
     let _ = SELFTEST_CHUNKS.set(selftest_chunks(&args));
     let _ = SELFTEST_TOKENIZER.set(selftest_tokenizer(&args));
+    let _ = SELFTEST_TOKENIZER_ENCODING.set(selftest_tokenizer_encoding(&args));
+    let _ = SELFTEST_CLEAR_TOKENIZER.set(selftest_clear_tokenizer(&args));
     let _ = SELFTEST_BAD_RANGE.set(selftest_bad_range(&args));
+    let _ = SELFTEST_BAD_BUDGET.set(selftest_bad_budget(&args));
+    let _ = SELFTEST_BAD_OVERLAP.set(selftest_bad_overlap(&args));
+    let _ = SELFTEST_BAD_ENCODING.set(selftest_bad_encoding(&args));
+    let _ = SELFTEST_REVEAL.set(selftest_reveal(&args));
 
     tauri::Builder::default()
         .manage(ActiveRun::default())

@@ -1,0 +1,326 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  - $ref: '#/groups/1'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/tables/0'
+  - $ref: '#/tables/1'
+  - $ref: '#/pictures/0'
+  - $ref: '#/pictures/1'
+  - $ref: '#/pictures/2'
+  - $ref: '#/pictures/3'
+  content_layer: body
+  label: sheet
+  name: Pictures
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+- children:
+  - $ref: '#/tables/2'
+  - $ref: '#/pictures/4'
+  content_layer: body
+  label: sheet
+  name: Summary
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/1'
+key_value_items: []
+name: worksheet_pictures_calc
+origin:
+  binary_hash: 1491804793778921870
+  filename: worksheet_pictures_calc.ods
+  mimetype: application/vnd.oasis.opendocument.spreadsheet
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 33.19888
+      width: 11.96855
+  '2':
+    page_no: 2
+    size:
+      height: 3.79904
+      width: 1.0
+pictures:
+- children: []
+  content_layer: body
+  image:
+    dpi: 72
+    mimetype: image/png
+    size:
+      height: 36.0
+      width: 60.0
+    uri: worksheet_pictures_calc_images/sheet1_1.png
+  label: picture
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 9.79904
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 0.9372
+      t: 8.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/0'
+- children: []
+  content_layer: body
+  image:
+    dpi: 72
+    mimetype: image/png
+    size:
+      height: 36.0
+      width: 60.0
+    uri: worksheet_pictures_calc_images/sheet1_2.png
+  label: picture
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 9.79904
+      coord_origin: TOPLEFT
+      l: 2.0
+      r: 2.9372
+      t: 8.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/1'
+- children: []
+  content_layer: body
+  image:
+    dpi: 72
+    mimetype: image/png
+    size:
+      height: 350.0
+      width: 620.0
+    uri: worksheet_pictures_calc_images/sheet1_3.png
+  label: picture
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 19.19696
+      coord_origin: TOPLEFT
+      l: 5.0
+      r: 11.96795
+      t: 8.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/2'
+- children: []
+  content_layer: body
+  image:
+    dpi: 72
+    mimetype: image/jpeg
+    size:
+      height: 350.0
+      width: 620.0
+    uri: worksheet_pictures_calc_images/sheet1_4.jpg
+  label: picture
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 33.19888
+      coord_origin: TOPLEFT
+      l: 5.0
+      r: 11.96855
+      t: 22.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/pictures/3'
+- children: []
+  content_layer: body
+  image:
+    dpi: 72
+    mimetype: image/png
+    size:
+      height: 36.0
+      width: 60.0
+    uri: worksheet_pictures_calc_images/sheet2_5.png
+  label: picture
+  parent:
+    $ref: '#/groups/1'
+  prov:
+  - bbox:
+      b: 3.79904
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 0.9372
+      t: 2.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/pictures/4'
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 1
+    num_rows: 1
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: A workbook with pictures.
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 1.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 1.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/0'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 4
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: The table the pictures sit under.
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: Item
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: Qty
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: Widget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '12'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 3
+      text: Gadget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 4
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 3
+      text: '7'
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 6.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 2.0
+      t: 2.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/1'
+- children: []
+  content_layer: body
+  data:
+    num_cols: 1
+    num_rows: 1
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: A second sheet, with a picture of its own.
+  label: table
+  parent:
+    $ref: '#/groups/1'
+  prov:
+  - bbox:
+      b: 1.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 1.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 2
+  self_ref: '#/tables/2'
+texts: []
+version: 1.10.0

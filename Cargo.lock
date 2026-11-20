@@ -1928,6 +1928,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hayro-ccitt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbed896e99325bc312778bb9c9c289d795d51c12775c44dd5e4352f679c7e46"
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb5c7f3a4eb551c2bb7fa16e268f728d4bc2a5c9b090554b8dc0ee2503fb5840"
+dependencies = [
+ "hayro-ccitt",
+]
+
+[[package]]
 name = "hayro-jpeg2000"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3454,6 +3469,7 @@ dependencies = [
  "pdfextractor-image-parser",
  "pdfextractor-json-exporter",
  "pdfextractor-layout",
+ "pdfextractor-limits",
  "pdfextractor-md-exporter",
  "pdfextractor-ocr-engine",
  "pdfextractor-odp-parser",
@@ -3491,6 +3507,7 @@ name = "pdfextractor-doc-parser"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "pdfextractor-limits",
 ]
 
 [[package]]
@@ -3502,6 +3519,7 @@ dependencies = [
  "pdfextractor-core",
  "pdfextractor-drawingml",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
@@ -3516,6 +3534,7 @@ version = "0.2.0"
 dependencies = [
  "image",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-svg",
  "quick-xml 0.36.2",
@@ -3528,6 +3547,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
 ]
 
@@ -3538,6 +3558,7 @@ dependencies = [
  "anyhow",
  "hayro-jpeg2000",
  "image",
+ "pdfextractor-limits",
  "tiff",
 ]
 
@@ -3561,6 +3582,15 @@ dependencies = [
  "pdfextractor-core",
  "pdfextractor-pdf-parser",
  "tracing",
+]
+
+[[package]]
+name = "pdfextractor-limits"
+version = "0.2.0"
+dependencies = [
+ "quick-xml 0.36.2",
+ "thiserror 1.0.69",
+ "zip",
 ]
 
 [[package]]
@@ -3595,6 +3625,7 @@ dependencies = [
  "image",
  "leptess",
  "pdfextractor-core",
+ "pdfextractor-image-parser",
  "pdfextractor-pdf-parser",
  "tracing",
 ]
@@ -3606,6 +3637,7 @@ dependencies = [
  "anyhow",
  "pdfextractor-chart",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",
@@ -3617,6 +3649,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-chart",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "pdfextractor-xlsx-parser",
  "quick-xml 0.36.2",
@@ -3629,6 +3662,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",
@@ -3641,10 +3675,13 @@ dependencies = [
  "aes",
  "anyhow",
  "flate2",
+ "hayro-ccitt",
+ "hayro-jbig2",
  "image",
  "md-5",
  "pdfextractor-core",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "sha2",
  "thiserror 1.0.69",
  "tracing",
@@ -3663,6 +3700,7 @@ dependencies = [
  "pdfextractor-chart",
  "pdfextractor-drawingml",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "tracing",
@@ -3685,6 +3723,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "pdfextractor-limits",
  "pdfextractor-metafile",
  "pdfextractor-picture-formats",
  "serde_yaml",
@@ -3711,6 +3750,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "pdfextractor-chart",
+ "pdfextractor-limits",
  "pdfextractor-picture-formats",
  "quick-xml 0.36.2",
  "zip",

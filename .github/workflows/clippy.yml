@@ -32,9 +32,25 @@
 
 name: the clippy gate
 
+# Lint only what a lint can change: Rust sources and manifests, lint config, or
+# this workflow. Documentation-only pushes spend no minutes. `branches` excludes
+# tag pushes; releases have their own workflow.
 on:
   push:
+    branches: ["**"]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "clippy.toml"
+      - ".cargo/**"
+      - "rust-toolchain*"
+      - ".github/workflows/clippy.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   clippy:

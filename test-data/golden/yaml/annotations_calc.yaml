@@ -1,0 +1,150 @@
+body:
+  children:
+  - $ref: '#/groups/0'
+  - $ref: '#/groups/1'
+  - $ref: '#/groups/2'
+  content_layer: body
+  label: unspecified
+  name: _root_
+  self_ref: '#/body'
+groups:
+- children:
+  - $ref: '#/tables/0'
+  content_layer: body
+  label: sheet
+  name: Review
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/0'
+- children:
+  - $ref: '#/texts/0'
+  content_layer: notes
+  label: comment_section
+  name: comment-sheet1-1-1
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/1'
+- children:
+  - $ref: '#/texts/1'
+  content_layer: notes
+  label: comment_section
+  name: comment-sheet1-3-2
+  parent:
+    $ref: '#/body'
+  self_ref: '#/groups/2'
+key_value_items: []
+name: annotations_calc
+origin:
+  binary_hash: 4834860420275259741
+  filename: annotations_calc.ods
+  mimetype: application/vnd.oasis.opendocument.spreadsheet
+pages:
+  '1':
+    page_no: 1
+    size:
+      height: 3.0
+      width: 2.0
+pictures: []
+schema_name: DoclingDocument
+tables:
+- children: []
+  content_layer: body
+  data:
+    num_cols: 2
+    num_rows: 3
+    table_cells:
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 1
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 0
+      text: Item
+    - col_span: 1
+      column_header: true
+      end_col_offset_idx: 2
+      end_row_offset_idx: 1
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 0
+      text: Qty
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 1
+      text: Widget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 2
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 1
+      text: '2'
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 1
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 0
+      start_row_offset_idx: 2
+      text: Gadget
+    - col_span: 1
+      column_header: false
+      end_col_offset_idx: 2
+      end_row_offset_idx: 3
+      row_header: false
+      row_section: false
+      row_span: 1
+      start_col_offset_idx: 1
+      start_row_offset_idx: 2
+      text: '1'
+  label: table
+  parent:
+    $ref: '#/groups/0'
+  prov:
+  - bbox:
+      b: 3.0
+      coord_origin: TOPLEFT
+      l: 0.0
+      r: 2.0
+      t: 0.0
+    charspan:
+    - 0
+    - 0
+    page_no: 1
+  self_ref: '#/tables/0'
+texts:
+- children: []
+  content_layer: notes
+  label: text
+  orig: '[author: Ada Lovelace, time: 2024-03-05T00:00:00]: Checked against the invoice.'
+  parent:
+    $ref: '#/groups/1'
+  prov: []
+  self_ref: '#/texts/0'
+  text: '[author: Ada Lovelace, time: 2024-03-05T00:00:00]: Checked against the invoice.'
+- children: []
+  content_layer: notes
+  label: text
+  orig: '[author: Grace Hopper, time: 2024-03-06T00:00:00]: An empty cell''s remark.'
+  parent:
+    $ref: '#/groups/2'
+  prov: []
+  self_ref: '#/texts/1'
+  text: '[author: Grace Hopper, time: 2024-03-06T00:00:00]: An empty cell''s remark.'
+version: 1.10.0

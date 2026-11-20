@@ -21,15 +21,15 @@ layout analysis, Docling export — is implemented here.
 | Area | State |
 |---|---|
 | PDF text extraction | ✅ works — Flate/ASCII85/LZW/RunLength/ASCIIHex, object streams, linearized files, font encodings (cp1252, `/Differences`, `/ToUnicode`, Identity-H, **and the encoding an embedded Type 1 program carries itself**, which is where a TeX symbol font keeps `∗`/`†`/`‡`), **real glyph advances from `/Widths`**. An **encrypted** PDF is decrypted by the standard security handler — RC4 40–128 bit, AES-128 and AES-256 (revisions 2–6), with the user or the owner password: a file that asks nothing of its reader opens without a password, as in any reader, and one that needs a password is read with `--pdf-password` (or `PDFE_PDF_PASSWORD`). A wrong or missing password, or a handler this build does not implement (public-key), is refused by name with nothing written. A **damaged** file — a `startxref` that points nowhere, no xref table or trailer, offsets that lie, a truncated tail — is read from its object declarations, which is the parser's normal path rather than a fallback |
-| PDF pictures | ✅ raster images extracted with their true placement box; **vector-only figures** detected for papers that contain no image at all |
+| PDF pictures | ✅ raster images extracted with their true placement box — Flate, DCT/JPEG, JPEG 2000, **CCITT Group 3/G4 fax** and **JBIG2** image XObjects, the last two decoded to grayscale PNGs for OCR (including a `/JBIG2Globals` dictionary and filters wrapped around either codec); **vector-only figures** detected for papers that contain no image at all |
 | **OCR for scanned pages** | ✅ works (Tesseract, wired into the pipeline) — languages chosen with `--ocr-lang`, page segmentation with `--psm`, and a page's own **`/Rotate` honoured**: the bitmap is turned with the page before recognition, so a scan captured sideways comes back upright, with its boxes in the displayed page's space. A scan with **nothing saying which way up it is** — no `/Rotate`, no EXIF tag, merely pixels on their side — is **found and turned upright before recognition**: Tesseract reads the page in its stored, half and (when the stored reading is weak) quarter turns, and the page is turned only when the other reading is clearly better |
 | **Plain images** | ✅ works — one image is one page, in PNG, JPEG, TIFF, BMP, WebP, GIF or JPEG 2000. The page is the upright pixel grid at the resolution the file declares (PNG `pHYs`, JPEG JFIF/EXIF, TIFF `XResolution`, BMP pixels per metre; 72 dpi — one pixel per point — when it declares none, which is what a WebP gets, having no resolution field at all, and what a GIF gets, its descriptor stating a pixel aspect ratio rather than a density; a JP2 states its own in a capture-resolution box (`resc`, in samples per metre), and one that states none gets the same default; a bare JPEG 2000 codestream (`.j2c`, `.j2k`, `.jpc`, `.jpf`) has no container to hold one, so its page is the grid its `SIZ` marker states at that same 72 dpi default — and which spelling a JPEG 2000 is comes from its first bytes, a signature box or the codestream's start marker, so a `.jpf` holding a container is placed by the container's boxes), and `origin.mimetype` is the image's own type rather than a PDF's. A **GIF** or an **animated WebP** is a page per frame: the logical screen its descriptor states, or the `ANIM` canvas a WebP states, is the page's size, and every frame of an animation is a page a reader turns — a hundred-frame animation is a hundred pages, each frame decoded by this reader (composited on the screen the way a player shows it, and laid on white where it leaves the screen untouched) and recognised on its own. A **TIFF** is a page per image file directory, which is how a scanner writes a batch: a three-sheet scan is three pages, each measured from its own grid at the file's declared resolution — the sheets need not be the same size — turned upright by its own directory's orientation tag, so one sideways sheet does not turn the batch with it, and recognised on its own pixels. A camera's **EXIF orientation** is honoured: the page is the grid the tag describes and the pixels are turned before recognition, so a phone held sideways is read upright. A file with **no tag at all** is read to find its own orientation: a sideways or upside-down page is detected from the pixels and turned upright before recognition, and the page size and every line box are measured on the upright grid. An image has no text layer, so the page goes straight into OCR: Tesseract's lines are mapped from pixels into points and grouped by the same layout pass a scanned PDF uses. **A photographed-page corpus scores the reading** — eight synthetic photos (skew, uneven light, softness, one tagged sideways, one sideways and one upside down with no tag) with ground truth, scored by character and word accuracy and held to floors: see [OCR quality](#ocr-quality-on-photographed-pages) |
 | **DOCX** | ✅ works — paragraphs, headings, lists with their real bullet/number and level (`numbering.xml`, incl. `w:lvlOverride` restarts and relabels), table grids, embedded images (incl. headers/footers, and a picture inside a table cell, which the cell holds: the cell becomes a Docling `RichTableCell` referencing a group under the table, and the group's picture is the cell's rather than an item standing beside the table, and a table written inside a cell, which is that cell's content the same way — read inside the outer cell instead of as a table of the body beside it) — a PNG or a JPEG arriving as itself, and every other raster encoding a package can carry (BMP, TIFF, GIF, WebP, JPEG 2000) decoded and written out as PNG, which is the one type Docling's own Word reader ever leaves a picture in, an SVG **drawn into a PNG** at the frame the picture is placed in, because a drawing is not an encoding anyone downstream can show — fitted by the drawing's own `preserveAspectRatio` (by default `xMidYMid meet`, so a frame of other proportions keeps the drawing's shape with transparent margins rather than squashing it; `none` stretches, `slice` covers and crops, and every alignment is honoured) — and a picture Word states as an SVG beside a PNG fallback is taken from its `asvg:svgBlip` drawing, not the raster — a shape whose fill is a picture is that picture too, the drawing when its fill states one — **picture bullets** (`w:numPicBullet` named by `w:lvlPicBulletId`) are pictures of their own, ahead of the item they open and at the frame the list draws them in, the drawing played when the bullet states an SVG, and the item's words carry no glyph — with their **EXIF orientation** applied, **Office Math equations** (one item per equation), **chart titles as captions**, footnotes and endnotes, tabs, **vector EMF/WMF drawings played into PNGs** (Word's own metafiles and the previews of embedded objects), and **shapes painted into PNGs** — an autoshape, a group of them, a WordArt or a `wps:wsp` becomes a picture at the size the file gives it, whether the file states it in VML (`w:pict`) or in DrawingML (`w:drawing`), where the drawing has no image part behind it; a shape's colours come from the package's theme where it names a theme slot, its gradient fill is ramped across it (VML's `v:fill type="gradient"` or DrawingML's `a:gradFill`), its shadow lands under it, and a line's arrowheads are drawn at its ends |
-| **XLSX** | ✅ works — a worksheet is a page whose units are cells, the shape Docling's own XLSX backend produces: a `sheet` group per worksheet holding the worksheet's tables (one per connected block of cells, an empty row or column separating two), **merged ranges** as `row_span`/`col_span` with the covered slots not written at all, shared and inline strings, numbers, booleans, cached formula results, and **dates as the text a reader sees** (a serial with a date format is `2024-03-05 00:00:00`, not `45356`) — plus the **pictures the sheet draws**: each worksheet's own drawing part is followed through its relationships to the media parts, and every picture is placed on the cells its anchor names and written beside the JSON under the same rule a Word or PowerPoint package's is (a PNG or a JPEG as itself, anything else re-encoded as PNG), and **the charts the sheet draws**: a chart's frame names a chart part, not a media part, so each chart is read as the data it plots — its family, the categories and series numbers, the title as a caption and no image — through the same reader a deck's charts go through, with a reference that carries no cache resolved against the workbook's own cells. A hidden worksheet stays on the `invisible` content layer |
+| **XLSX** | ✅ works — a worksheet is a page whose units are cells, the shape Docling's own XLSX backend produces: a `sheet` group per worksheet holding the worksheet's tables (one per connected block of cells, an empty row or column separating two), **merged ranges** as `row_span`/`col_span` with the covered slots not written at all, shared and inline strings, numbers, booleans, cached formula results, and **dates as the text a reader sees** (a serial with a date format is `2024-03-05 00:00:00`, not `45356`) — plus the **pictures the sheet draws**: each worksheet's own drawing part is followed through its relationships to the media parts, and every picture is placed on the cells its anchor names and written beside the JSON under the same rule a Word or PowerPoint package's is (a PNG or a JPEG as itself, anything else re-encoded as PNG), and **the charts the sheet draws**: a chart's frame names a chart part, not a media part, so each chart is read as the data it plots — its family, the categories and series numbers, the title as a caption and no image — through the same reader a deck's charts go through, with a reference that carries no cache resolved against the workbook's own cells. **Cell comments** are read from each worksheet's comments relationship, with their author and words, and kept off the grid: the CLI places each on the notes layer as a `comment_section` group named for its cell. A hidden worksheet stays on the `invisible` content layer |
 | **PPTX** | ✅ works — a slide is a page, measured in EMU at the deck's own size (`p:sldSz`), the shape Docling's own PPTX backend produces: a `chapter` group per slide holding the slide's items, each with the box its shape occupies — including **the shapes PowerPoint paints itself**: an autoshape, a connector or a group has no image part behind it, so it is drawn into a PNG at its own box, in the fill, line and theme colour the slide states (a text box with no fill and no line puts no ink down and is no picture, and a group is one picture rather than one per shape). The presets are the format's own library rather than a handful of boxes: the rounded and snipped rectangles, rings and frames, flowchart symbols, cylinders and cubes, arcs and brackets, and the bent and curved connectors are drawn from their stated geometry, with a **gradient fill** ramped across the shape, a **soft shadow** under it and an **arrowhead** of each kind at a line's ends. A text body is read paragraph by paragraph with its **runs** (bold, italic, underline, size), and a paragraph's bullet or number is resolved the way PowerPoint resolves it — paragraph, then shape, then layout, then master — so a body placeholder's lines are list items without anything being written on the slide, and an auto-numbered list counts itself. `graphicFrame` tables keep `gridSpan`/`rowSpan` with the covered slots not written at all, and a picture is the media part its slide's **relationship** names (not a guessed `image1.png`), written beside the JSON with its **EXIF orientation** applied, as PNG unless it is already a PNG or a JPEG — a BMP, a TIFF, a GIF, a WebP or a JPEG 2000 is decoded and re-encoded, and an SVG is drawn into a PNG at its frame — fitted by the drawing's own `preserveAspectRatio`, so the default `xMidYMid meet` letterboxes a frame of other proportions instead of stretching it, `none` stretches it, `slice` covers and crops it, and any alignment pins it — the `asvg:svgBlip` drawing when the picture carries one, which is how PowerPoint 2016 and later state it, rather than the PNG fallback beside it — and a shape **filled** with a picture is that picture too, at the shape's own frame, the drawing when its fill states one. A paragraph's **picture bullet** (`a:buBlip`) is a picture too: a square of the item's type size at the corner its words start from — a slide states no line boxes — with the drawing played when the bullet states one. A slide's **picture background** (`p:cSld/p:bg/p:bgPr/a:blipFill`) is not a shape in the tree and not a picture item: it is the page's `image`, written beside the JSON under the slide's name and covering the page, so a photographic backdrop is not lost with the shape tree. A hidden slide stays on the `invisible` content layer. A deck's own remarks are read too, on the **notes** layer rather than the slide's: its **speaker notes**, from the notes part the slide's relationship names (the body placeholder, read the way python-pptx reads a text frame), and its **comments**, each in a `comment_section` group of its own with the author, time and words the file records — the time read at PowerPoint's millisecond precision, so a bridged legacy deck and its native original state the same remark. A **chart** is read as the data it is: the chart part's caches are reconstructed into the picture's `tabular_chart` — series across the header row, categories down the first column, an omitted point left as a gap — classified by its family (`bar_chart`, `line_chart`, `pie_chart`, `scatter_chart`, `other_chart`), with the chart's title as its `caption` and no image, because a chart is a drawing of data rather than a picture file |
-| **OpenDocument text** (`.odt`) | ✅ works — a Writer package read by its own reader: paragraphs and headings (a `text:h`'s own `text:outline-level`, or the level a named style gives, with `styles.xml`'s common styles read beside `content.xml`'s automatic ones), Writer's `Title` style as the document's title, lists and their nesting, hyperlinks, **tables with real spans** (`table:number-columns-spanned`/`number-rows-spanned`, with the `covered-table-cell` Writer writes after a horizontal span taken as part of that span), pictures at the size the frame places them (a PNG or a JPEG as itself, every other encoding decoded and written as PNG, an SVG drawn into one), and footnotes. Flow-based like DOCX: the page style's rectangle is a parser fact, and no page is published. The fixture is Writer's own `brief_odt.odt` (`test-data/make_brief_odt.py` converts `brief.docx` into it) and carries a real Docling reference: 0 pages, 14 text items, one table and one picture, with **text agreement 1.000** against our reading, so the corpus ratchet covers ODT too. Not read yet: headers and footers, a numbered list's printed marker (it lives in the list style's counters), ODF comments and tracked changes, and formula objects |
-| **OpenDocument presentations** (`.odp`) | ✅ works — an Impress package read by its own reader (`crates/odp-parser`): every `draw:page` is a slide and a page, in the deck's order, at the size its master page's page layout states. A slide is a `chapter` group holding its title and outline text (`title` and nested `list_item`s), other text as `paragraph`s, its table with `table:number-columns-spanned`/`number-rows-spanned` kept as real spans, its picture — the `Pictures/` part the frame names, a PNG or a JPEG as itself and every other encoding re-encoded as PNG — its `presentation:notes` as one notes-layer item, and its `officeooo:annotation` comments as notes-layer `comment_section` groups carrying their author, time and words. An embedded chart object (`draw:object` → `Object N/content.xml`) is read from its own `local-table` as a chart picture whose title is a `caption` and whose numbers are a tabular-chart grid, instead of being skipped for having no media part. A slide hidden with `show="false"` stays on the `invisible` layer, and `--page-range` names slides. The fixture is Impress's conversion of `q3_review.pptx` (`test-data/make_q3_review_odp.py`): three slides, a title and outline, a 4×3 table, a picture, speaker notes, three comments and a bar chart. A slide also inherits its master page's regular (non-placeholder) background shapes unless its page or the drawing-page style it names states `presentation:background-objects-visible="false"`, and its `anim:` timing tree is read effect by effect, each effect becoming a notes-layer item naming the target shape, property and timing; `master_animations_impress.odp` (`test-data/make_master_animations_odp.py`) pins both. Not read yet: slide transitions |
-| **OpenDocument spreadsheets** (`.ods`) | ✅ works — a Calc workbook read by its own reader (`crates/ods-parser`): every `table:table` is a sheet and a page, in the workbook's order, with its cells' text the way a reader sees it — strings, numbers, booleans (`True`/`False`, the value in Docling's spelling rather than the `TRUE` a Calc file displays), cached formula results (the displayed `text:p`, or the typed value when a producer writes none) — and each sheet cut into the tables its cells form the way a worksheet is: a connected block of cells, an empty row or column leaving two, and a row ending at its last cell — the empty slots Calc pads it with after that are not cells. **Merged cells** keep `row_span`/`col_span` with the `covered-table-cell` slots not written as cells; `table:number-rows-repeated`/`number-columns-repeated` repeats content while the filler a producer writes for the rest of a sheet is left out; a sheet hidden by `table:display="false"` (on the table or in the table style it names) stays on the `invisible` layer rather than being dropped. `--page-range` names sheets, and the output is the shape the XLSX reader produces — a `sheet` group per worksheet with its tables beneath it and provenance boxes in cell indices. The fixture is Calc's conversion of `inventory.xlsx` (`test-data/make_inventory_ods.py`). **Pictures and charts** are read too: a cell's `draw:frame` holds either a `draw:image` — written beside the JSON at its anchoring cell, a PNG or JPEG as itself and every other encoding re-encoded as PNG — or an embedded `draw:object` chart, read from its own `content.xml` as the same data table a worksheet's chart is, with its title as a caption and no image. The picture fixture is Calc's `worksheet_pictures_calc.ods` (from `worksheet_pictures.xlsx`) and the chart fixture is `chart_sheet_calc.ods` (from `chart_sheet.xlsx`), both written by `test-data/make_sheet_drawings_ods.py`. A cell's **comment** is read as the remark it is: its author and time, from the `office:annotation` Calc writes beside the cell, become a notes-layer `comment_section` group of the cell's own, and the cell keeps only its text. Not read yet: tracked changes, and the formula itself (only the value it displays) |
+| **OpenDocument text** (`.odt`) | ✅ works — a Writer package read by its own reader: paragraphs and headings (a `text:h`'s own `text:outline-level`, or the level a named style gives, with `styles.xml`'s common styles read beside `content.xml`'s automatic ones), Writer's `Title` style as the document's title, lists and their nesting, hyperlinks, **tables with real spans** (`table:number-columns-spanned`/`number-rows-spanned`, with the `covered-table-cell` Writer writes after a horizontal span taken as part of that span), pictures at the size the frame places them (a PNG or a JPEG as itself, every other encoding decoded and written as PNG, an SVG drawn into one), and footnotes. Flow-based like DOCX: the page style's rectangle is a parser fact, and no page is published. The fixture is Writer's own `brief_odt.odt` (`test-data/make_brief_odt.py` converts `brief.docx` into it) and carries a real Docling reference: 0 pages, 14 text items, one table and one picture, with **text agreement 1.000** against our reading, so the corpus ratchet covers ODT too. `header_footer_odt.odt` (`test-data/make_header_footer_odt.py`) adds a master page's running header and page footer around three body items; neither our reader nor Docling's OpenDocument backend publishes them, so its reference and the ratchet hold the body and record the omission on both sides. Not read yet: headers and footers, a numbered list's printed marker (it lives in the list style's counters), ODF comments and tracked changes, and formula objects |
+| **OpenDocument presentations** (`.odp`) | ✅ works — an Impress package read by its own reader (`crates/odp-parser`): every `draw:page` is a slide and a page, in the deck's order, at the size its master page's page layout states. A slide is a `chapter` group holding its title and outline text (`title` and nested `list_item`s), other text as `paragraph`s, its table with `table:number-columns-spanned`/`number-rows-spanned` kept as real spans, its picture — the `Pictures/` part the frame names, a PNG or a JPEG as itself and every other encoding re-encoded as PNG — its `presentation:notes` as one notes-layer item, and its `officeooo:annotation` comments as notes-layer `comment_section` groups carrying their author, time and words. An embedded chart object (`draw:object` → `Object N/content.xml`) is read from its own `local-table` as a chart picture whose title is a `caption` and whose numbers are a tabular-chart grid, instead of being skipped for having no media part. A slide hidden with `show="false"` stays on the `invisible` layer, and `--page-range` names slides. The fixtures are Impress's conversion of `q3_review.pptx` (`test-data/make_q3_review_odp.py`): three slides, a title and outline, a 4×3 table, a picture, speaker notes, three comments and a bar chart; and `chart_types_impress.odp` (`test-data/make_chart_types_odp.py`), a deck whose chart objects isolate a pie, a line with two series, a scatter with x-values in its domain, and a chart with no `local-table`; and `master_animations_impress.odp` (`test-data/make_master_animations_odp.py`, authored through LibreOffice's animation model), whose master page carries a regular background text shape, whose first slide runs a two-second bar-wipe transition and animates two shapes, and whose second hides background objects. A slide inherits its master page's regular (non-placeholder) shapes unless its page or the drawing-page style it names states `presentation:background-objects-visible="false"`. Its whole-page transition is read from its `anim:transitionFilter` — or from the drawing-page style's `smil:type`/`presentation:transition-speed` when no timing is present — and becomes a `Transition:` notes-layer item before its `anim:` timing tree's effects, each of which becomes another notes-layer item naming the target shape, property and timing, because Docling has no transition or animation item. |
+| **OpenDocument spreadsheets** (`.ods`) | ✅ works — a Calc workbook read by its own reader (`crates/ods-parser`): every `table:table` is a sheet and a page, in the workbook's order, with its cells' text the way a reader sees it — strings, numbers, booleans (`True`/`False`, the value in Docling's spelling rather than the `TRUE` a Calc file displays), cached formula results (the displayed `text:p`, or the typed value when a producer writes none) — and each sheet cut into the tables its cells form the way a worksheet is: a connected block of cells, an empty row or column leaving two, and a row ending at its last cell — the empty slots Calc pads it with after that are not cells. **Merged cells** keep `row_span`/`col_span` with the `covered-table-cell` slots not written as cells; `table:number-rows-repeated`/`number-columns-repeated` repeats content while the filler a producer writes for the rest of a sheet is left out; a sheet hidden by `table:display="false"` (on the table or in the table style it names) stays on the `invisible` layer rather than being dropped. `--page-range` names sheets, and the output is the shape the XLSX reader produces — a `sheet` group per worksheet with its tables beneath it and provenance boxes in cell indices. The fixture is Calc's conversion of `inventory.xlsx` (`test-data/make_inventory_ods.py`). The dedicated `booleans_calc.ods` (`test-data/make_booleans_ods.py`) isolates TRUE/FALSE-displayed booleans and rows with trailing empty cells; its Docling reference holds the same 4×4 table with **text agreement 1.000**. `filler_rows_over_cap_calc.ods` (`test-data/make_filler_rows_over_cap_ods.py`) puts a 2,000-row empty run between two data blocks, past the reader's 1,024-row materialization cap; the run is skipped whole, so the following block keeps row 2,002. **Pictures and charts** are read too: a cell's `draw:frame` holds either a `draw:image` — written beside the JSON at its anchoring cell, a PNG or JPEG as itself and every other encoding re-encoded as PNG — or an embedded `draw:object` chart, read from its own `content.xml` as the same data table a worksheet's chart is, with its title as a caption and no image. The picture fixture is Calc's `worksheet_pictures_calc.ods` (from `worksheet_pictures.xlsx`) and the chart fixture is `chart_sheet_calc.ods` (from `chart_sheet.xlsx`), both written by `test-data/make_sheet_drawings_ods.py`. The cross-sheet chart fixture, `chart_cross_sheet_calc.ods` (from `chart_cross_sheet.xlsx`, written by `test-data/make_chart_cross_sheet_xlsx.py`), anchors its chart on `Charts` while every category and series names cells on `Figures`, with `999` decoys on the chart's own sheet; the chart's data table is the `Figures` cells and the run writes no image for it. A cell's **comment** is read as the remark it is: its author and time, from the `office:annotation` Calc writes beside the cell, become a notes-layer `comment_section` group of the cell's own, and the cell keeps only its text. The comment fixture, `annotations_calc.ods`, joins the golden corpus with a real Docling reference: Docling reads the empty-cell comment as a one-cell table of its own and drops the one beside a value, while our sheet stays one six-cell table and both comments stay on the notes layer; **text agreement 1.000** (our notes carry every annotation character the reference holds), so the fixture holds the reading and pins the difference. `filler_rows_calc.ods` (`test-data/make_filler_rows_ods.py`) adds an empty sheet and a run of 1,000 repeated filler rows between two data blocks; both readings publish the same two pages and the same two tables, with **text agreement 1.000**, so the fixture pins that an empty sheet is still a page and that Calc's filler is skipped without becoming rows. Not read yet: tracked changes, and the formula itself (only the value it displays) |
 | **Microsoft Works, WordPerfect, legacy Excel, legacy PowerPoint** (`.wps`, `.wp`, `.wks`, `.wdb`, `.wpd`, `.xls`, `.ppt`) | ✅ works when **LibreOffice** is installed — there is no published specification for the Works formats, so LibreOffice's own importer (libwps, libwpd) reads them and this tool reads what it writes (`.docx`/`.xlsx`/`.csv`/`.pptx`) with its own readers. A legacy `.ppt` is a compound file whose record stream nothing here reads; Impress writes the package the PPTX reader reads, so a legacy deck comes out as **slides, text, tables, pictures, speaker notes and comments**, with its media extracted beside the JSON like a native deck's and its comments saying exactly what the native deck's do (Impress writes their times with more fractional digits; the notes text does not notice). The fixture is the same deck as the native `q3_review.pptx`, and the test holds the **whole converted document** to the native one — pages, groups, every item, label, layer, word, table cell and picture, with only the package's own identity, Impress's re-laid-out boxes and its comment ids excluded, each for a stated reason. A second, one-slide pair (`comment_times.pptx` and `comment_times.ppt`) gives its comments **non-zero milliseconds**, so the notes layer's cut of a comment's time to PowerPoint's three fractional digits is proven through the bridge — the converted deck spells `09:15:12.125000000`, the native one `09:15:12.125`, and both must read the same — and that pair is held to the **same whole-document comparison**, by the same view: it is the second deck carried across the bridge field by field, so a difference the millisecond case would not notice (a title, a paragraph, a layer) fails there too. Either document keeps the **original file's name, MIME type and hash**: the conversion is how its words were reached, not what they are. A legacy `.xls` is bridged the same way, into the XLSX reader, and its pair (`ledger.xls` and `ledger.xlsx`, one workbook written as both) is held to the **same whole-document comparison**: every sheet, its layer, every table, cell, row and column span, cached formula result and date has to agree, with only the package's identity excluded — a workbook's geometry *is* its content, so the view removes nothing else. The hidden sheet crosses on the `invisible` layer, the merged ranges keep their spans with the slots they cover absent, and the formula's cached `15` is what a reader sees on both sides. Measured on libwps' own sample corpus: **38/40 Writer files, 24/26 spreadsheets, 2/2 databases**. Without LibreOffice the run stops with a message naming it and offering the re-save route |
 | **Format detection by content** | ✅ works — the bytes decide which reader runs; the extension is only a promise the run accepts. A DOCX called `report.wps` or a Word 97 file called `letter.wps` is read as what it is, and a Works file under any name is recognised as Works. `.wps` alone names three unrelated formats, so this is the only honest way to read it |
 | **Layout analysis** | ✅ works — rows and runs, column gutters, reading order, paragraph merging, `title`/`section_header`/`list_item`/`caption` labels, rotated margin stamps kept in their own box, **PDF table detection**, pictures placed in reading order |
@@ -38,7 +38,7 @@ layout analysis, Docling export — is implemented here.
 | **Markdown export** (`--to md`) | ✅ works — the same tree rendered as Markdown: headings at their depth, list markers kept, GFM tables (merged cells flattened), formulas as `$$` blocks, pictures referenced beside the document (or carried in the page as a base64 `data:` URI, or left as `<!-- image -->` where one stood, with `--image-export-mode`, that mark read back as the picture it stood for), `hyperlink`s as `[text](url)`, an ordinary block quote as `> …`, furniture omitted — and the **notes layer omitted unless `--include-notes`**, which puts a slide's notes after its content and a deck's comments beside the slide they discuss, a speaker note's paragraph as a blockquote line headed `**Notes:**` and a comment's as one headed `**Comment:**`, so remarks are never mistaken for slides, a reviewer's comment is never mistaken for the presenter, and paragraph breaks survive. A slide's `chapter` group, a comment's `comment_section` group and a workbook's `sheet` group are marked with HTML comments that render as nothing (`<!-- pdfextractor:group chapter body slide-0 -->`, `<!-- pdfextractor:group sheet body Inventory -->`), so reading the file back rebuilds the grouping — each slide's words and notes inside its own group, each comment in its own section, each worksheet's tables under their sheet, names and layers intact — instead of leaving one flat list. Golden-tested byte for byte; `pictures.md`'s picture is pinned in the two modes the goldens do not use — `embedded` carries the JPEG's own bytes, decoded from the page and compared with `test-data/images/scan.jpg` byte for byte (a re-encode would still decode, so the bytes are the assertion), and `placeholder` writes `<!-- image -->` where the picture stood, between the same two sentences; the reader reads those links back into `hyperlink`, those pictures back into picture items (a local source — or an embedded `data:` URI, which is decoded instead — is copied beside the output), those `> **Notes:**` blockquotes back onto the **notes** layer rather than into the body — so a deck's remarks stay remarks instead of becoming slides on the next pass, and a remark's own `[words](url)` comes back as its `hyperlink` rather than as brackets — and reads `$$` blocks back as formula items — both the fenced form and a formula written on one line (`$$E = mc^2$$`) — and headings the inverse of the writer the way Docling's Markdown backend does, so a round trip keeps them all — every committed golden is generated with `--include-notes`, re-read with the notes layer, and must re-render byte for byte under `every_markdown_golden_is_a_fixed_point` |
 | **HTML / text / YAML export** (`--to html` / `--to text` / `--to yaml`) | ✅ works — one shared walk, three more readings: HTML keeps merged cells as native `rowspan`/`colspan` where Markdown must flatten, links as `<a href>` and a block quote as `<blockquote>`, text is reading order with line-end hyphens joined (`--text-dehyphenate false` is the off switch), YAML is the whole document model listed in reading order. The notes layer joins HTML and text with `--include-notes`, as it does Markdown — HTML marks a speaker note as `<aside class="notes">` with a bold `Notes:` label and a comment as `<aside class="notes comment">` with `Comment:`, text leaves both unmarked, and reading the HTML back puts those asides on the **notes** layer again, keeping the comment's kind (with an `<a href>` around a remark's first paragraph kept as the note's link) and an `<img>` back into a picture item — a `<picture>`'s `<source srcset>` or an `img`'s own `srcset` choosing its first *usable* candidate before falling back to `src` — a source whose `media` query asks about a viewport, colour scheme or pointer a document does not have, or whose `type` names a format it cannot carry (an AVIF, a non-image), is passed over for the next candidate — its file, or its own embedded `data:` URI, read back into the picture and copied like a Markdown one, and a bare `<!-- image -->` back into a picture the page marked but did not carry; YAML always carries it. Groups use the same invisible `<!-- pdfextractor:group … -->` markers as Markdown. Formulas are typeset as MathML — the LaTeX as a `<math>` the browser draws, with its own TeX in a `<semantics>`/`<annotation encoding="application/x-tex">` — and a formula the LaTeX reader cannot set is drawn instead: the writer lays the equation out itself and carries it as an SVG `data:` URI whose `alt` text is that LaTeX, so the equation is seen and still reads back as the formula item it came from. The reader is the writer's inverse for the rest of the same constructs — `h1` back to `title`, `h2` to a level-1 header, `<pre><code>` to `code`, an equation back out of its MathML annotation (a `<math>` with none at all falls back to its tokens), `rowspan`/`colspan` back into placed cells — one spanning cell over the slots it covers, not an empty slot beside it — and a printed list marker `<ol>` cannot spell (`1.1.`) kept in `data-marker` — and `every_golden_round_trips_through_html_with_notes` holds it there: each golden document is written as HTML with its notes, read back, and must render the same Markdown written directly from the document (pictures' run-specific file names and HTML's collapsed cell spacing excepted), then settle when that Markdown is read again. Each golden-tested byte for byte. HTML has a byte fixed point of its own as well: `every_html_golden_is_a_fixed_point` reads every committed HTML golden back with the real binary and requires the page it re-renders to be **its own bytes**, which is what makes two page-level facts true rather than merely claimed — a flow page's own picture keeps the path the page gave it (`images/scan.jpg` stays `images/scan.jpg`, so the page written from the document names the file it came with, and a name holding a space or a character HTML escapes — `&`, a quote, `<` — is written escaped in the attribute and read back whole), and a table cell is written with every run of whitespace made one space, the one spacing a page can hold and a reading give back. Text is held to the same fixed point Markdown is: `every_text_golden_is_a_fixed_point` reads every committed text golden back with the real binary, renders it again, and requires its own bytes, twice over. YAML's fixed point is the model's rather than a reading's: `every_yaml_golden_is_a_fixed_point` parses each YAML golden into a `DoclingDocument` and renders it again, which is where a key out of order, a `self_ref` written twice or a `pages` map in another order would show. Pictures follow the same `--image-export-mode` choice as Markdown |
 | **RAG chunks** (`--to chunks`) | ✅ works — the document as JSON Lines, one record a line in Docling's `DocChunk` shape. `hierarchical` (the default) makes one chunk per body item, a run of list items together, each chunk carrying its **heading path**, its picture's captions, and the `self_ref`/`label`/page-and-box provenance of the items it holds, so a hit can be cited back to the page. `hybrid` packs the same sentences to `--chunks-max-tokens` (512 by default), carrying `--chunks-overlap-tokens` into the next chunk, never cutting a sentence (one longer than the whole budget is its own chunk rather than truncated) and opening a new chunk at each section heading. Tokens are counted by a documented approximation by default — whitespace words, one token per four characters — so a budget means the same number on every machine; `--chunks-tokenizer <FILE>` instead loads a Hugging Face `tokenizer.json`, a SentencePiece `.model`, or a tiktoken `.tiktoken` vocabulary and counts hybrid budgets in that model's own tokens (encoded without special tokens, matching Docling's tokenizer). Tables are the same pipe grid the Markdown writer writes; a picture with no caption makes no chunk, there being no words to retrieve it by; the notes layer joins only with `--include-notes` |
-| **Docling compatibility (golden tests)** | ✅ **verified against real Docling**: every corpus document — and the fixtures beside it — passes `docling-core`'s own model validation and tree check, and agrees with a real Docling conversion of **all 49 comparable references** (37 corpus documents and the XLSX, ODS, two ODT, three slide decks (PPTX and two ODP), image, RTF, two HTML and nested-table DOCX fixtures) |
+| **Docling compatibility (golden tests)** | ✅ **verified against real Docling**: every corpus document — and the fixtures beside it — passes `docling-core`'s own model validation and tree check, and agrees with a real Docling conversion of **all 58 comparable references** (37 corpus documents and the XLSX, eight ODS, three ODT, four slide decks (PPTX and three ODP), image, RTF, two HTML and nested-table DOCX fixtures) |
 | **Box overlay preview** (`--preview`) | ✅ works — HTML page render with every text/OCR/figure box and every **layout block** drawn on it |
 | CLI (file/dir, parallel, output rules, `--ocr`, `--preview`) | ✅ works |
 | **Legacy `.doc`** (OLE compound file) | ✅ works — read through **LibreOffice** when it is installed, the way the Works family is: Writer reads the binary document and writes the package the DOCX reader reads whole, so headings, list markers, tables with their merges and pictures all come through — including the VML copy of a shape or a WordArt, painted when its DrawingML carries no picture — under the original file's name, `application/msword` and hash. Without LibreOffice the built-in reader still opens the file — container, Fib and piece table read directly; paragraphs, page breaks, pictures as placeholders; field instructions dropped. The fixture is a pair (`legacy_brief.doc` and `brief.docx`, by `make_legacy_doc.py`) and the test holds the **whole converted document** to the native one — every item, label, marker, level, word, link, table cell, span and picture, with only the container's identity and the image directory excluded — so the Writer side of the bridge is gated the way the deck and workbook sides are |
@@ -48,8 +48,9 @@ layout analysis, Docling export — is implemented here.
 | Legacy `.doc` styles, tables, raster images | ⚠️ without LibreOffice, the built-in reader needs character formatting (`PAPX`/`CHPX`), which it does not read: no headings, tables flatten to tabs, images are placeholders. With LibreOffice the bridge carries all of them, so this is the no-LibreOffice reading only |
 | Flow formats (DOCX/RTF/HTML/`.doc`) page geometry | ⚠️ none — no page is reported at all (Word repaginates; Docling publishes none either); `--preview` is not produced |
 | Images beyond the page | ⚠️ an image's text is OCR — `--ocr never` writes the pages with no text on them. `--preview` is not produced for an image, and a later GIF frame or TIFF sheet whose colour type this reader cannot convert is left out rather than guessed at |
-| XLSX beyond cells | ⚠️ cells, merges, dates, **pictures** and **charts** (read as the data they plot) — cell comments are not read, a vector metafile picture (EMF/WMF) is placed with its box and no image, and a merged label row above a header is kept in the table instead of split out as a text item (Docling splits it) |
+| XLSX beyond cells | ⚠️ cells, merges, dates, **pictures**, **charts** (read as the data they plot) and **cell comments** in the classic comments part (on the notes layer; threaded comments are not read) — a vector metafile picture (EMF/WMF) is placed with its box and no image, and a merged label row above a header is kept in the table instead of split out as a text item (Docling splits it) |
 | PPTX beyond slides | ⚠️ slides, text bodies, tables, pictures, **charts** (their plotted data, family and title) and **the shapes a slide paints itself** (an autoshape, a connector or a group of them, drawn into a PNG at the shape's own box with the fill — including a **picture fill**, painted through the shape's outline — line, **gradient**, **soft shadow** and **arrowhead** the slide states and its theme colour — patterns, 3-D and a shape's *text* are not drawn, and a text box with no fill and no line puts no ink down and is no picture), plus **speaker notes and comments on the notes layer** — the rest is not read: **SmartArt and equations**, a comment's *anchor* (the position PowerPoint stores, which names no shape and has nowhere to go in the document model), a linked (not embedded) picture has no bytes to show, and a vector metafile (EMF/WMF) picture is placed with its box and no image; PNG, JPEG, GIF, BMP, TIFF, WebP and SVG are extracted (every picture that is not a PNG or a JPEG is written out as PNG, and an SVG is drawn into one at the frame the picture is placed in, fitted by the drawing's own `preserveAspectRatio` — letterboxed by default when that frame's proportions differ, and stretched, cropped or cornered when the drawing asks for it). Legacy `.ppt` has no reader here: it needs LibreOffice, and the deck it hands back is only as faithful as Impress' own conversion — a text box Impress re-lays out is the re-laid-out box |
+| **Redline mode** (`--redline`, PDF/DOCX) | ✅ works — `--input new.pdf --redline old.pdf` converts both versions and compares them through the same block alignment as Compare, then writes one self-contained HTML report: rows are grouped by the page each side published (a moved row is headed `Page 3 → 5`; a removed or added page is named as such), pages with no changes are kept as context, and a changed row shows the old and new words side by side with removals in `<del>` and additions in `<ins>`. PDF pages also carry before/after SVG placement previews, so a moved or resized block or picture is visible without a PDF renderer, and picture rows get their own compact before/after box pair. Changed, added, removed, placed, unchanged and character-agreement counts head the report, structural notes from the comparison follow, and the unchanged rows on each page are folded into a `<details>` block so a long document stays readable. DOCX is flow-based and publishes no fixed pagination, so it is reported as one **Document flow** section rather than an invented page. Only two versions of the same family are accepted; a PDF against a DOCX is refused before conversion, and the report may not overwrite either input |
 | **Compare mode** (UI) | ✅ works — a reference (a file, or a folder of them — `test-data/golden/docling/`) puts every converted document beside Docling's reading of the same one: what agrees, what differs by label or wording, what only one side has, equations marked as notation, **what the reference cut finer than we did** (a reference item wholly inside one of our blocks — by its words, or, for an item with no letters in it at all, by lying among the words of a line we hold — drawn as the run it is, with the items a broken run leaves behind taken onto the row of the block that holds them, leaders and all), and the share of the reference's characters we also hold. An item with no letters in it that nothing of ours answers is **placed** — named, one line of a form per row, and **drawn page by page**: each page that carries places is drawn once above the rows with all of its items at once, so a form's leader pattern is one picture rather than one thumbnail per row. Rows content cannot pair are joined by **page and box**, so a drawing the two readings ordered differently is one row rather than one a side — where the producers publish boxes (PDFs), with the overlap that joined the row on the row itself |
 | **UI** (`crates/ui`) | ✅ works — Tauri window with a file/folder picker and a settings panel. A conversion runs in the background and is **streamed**: the window lists every document as it finishes, shows a progress bar and the CLI's own log, and can **stop** the run at any time. Cross-platform, no JavaScript toolchain needed. |
 
@@ -116,15 +117,91 @@ on it.
 
 ```bash
 cargo build --workspace      # 0 warnings
-cargo test  --workspace      # the whole suite
+cargo test  --workspace      # the whole suite (`DOCLING_PY` or `DOCLING_SKIP_ORACLE=1`)
 cargo clippy --workspace --all-targets -- -D warnings   # no warnings
 cargo fmt --all --check      # formatted as rustfmt reads it
 
 # The compatibility suite, held to real Docling. The schema layer always runs;
 # pointing DOCLING_PY at a Python with docling-core installed adds the layer that
-# loads every document with Docling's own model.
+# loads every document with Docling's own model. Without it that layer fails
+# rather than passing unvalidated, so a run that only wants the schema layer
+# opts out in so many words: DOCLING_SKIP_ORACLE=1. test-data/golden/README.md
+# says how to build that Python, the venv below included, on a machine whose
+# python3 has no python3-venv.
 DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python \
   cargo test -p pdfextractor-cli --test docling_golden_test
+```
+
+**Local runs select; the full suite remains the gate.** `scripts/test.sh` maps
+files changed against `HEAD` (or `merge-base(REV, HEAD)` for `--since REV`, so
+upstream-only changes are not selected) to the crates that can observe
+them — including reverse path-dependency closure — and runs those crates' unit,
+binary, integration and doc tests. A changed top-level integration-test file
+selects just that target, `README.md`/`plan.md`/`docs/` select the documentation
+test. Fixtures select only the targets that read them, from
+`scripts/fixture-owners.tsv`; an owner names a declared test target's source
+path (custom test targets are resolved through cargo metadata) or
+`crates/<crate>#lib`. A fixture with no ownership row, and broad inputs
+(root manifest, `Cargo.lock`, or an unknown path), fall back to the full suite.
+A change under `scripts/` selects the runner's focused self-tests instead.
+`--package NAME` selects one crate without dependents; `--changed`
+is the dependency-aware form. Use `--path FILE` from an editor and `--list` to
+inspect a run without executing it. `--explain` adds the changed paths and
+selection notes. `--json` with either mode prints a single JSON object without
+running tests: it carries `mode`, `base`, `changed_paths`, and a `targets` array
+whose records name the selected `package`, target `kind` and `name`,
+`source_path`, `reason`, and `command`. `--jobs N` runs independent selected
+targets concurrently with buffered, selection-ordered logs; it returns the
+first failure's status after the selected targets finish. A failed selected
+run records its target specs in `target/test-runner-failed.tsv`; later normal
+or rerun execution removes only targets that actually ran and passed, keeps
+failures for targets that did not run, and records new failures.
+`--rerun-failed` runs only the recorded targets and clears the file when none
+remain.
+Run the runner's own focused tests with `./scripts/test.sh --self-test`.
+
+```bash
+./scripts/test.sh                         # changed crates only
+./scripts/test.sh --since origin/main    # changes on this branch, not upstream
+./scripts/test.sh --path crates/limits/src/lib.rs
+./scripts/test.sh --path test-data/brief.docx
+./scripts/test.sh --package pdfextractor-limits
+
+# Pass focused cargo test options through the runner. --no-run builds without
+# running (doc targets are skipped because Cargo cannot combine --doc with
+# --no-run); --filter names a test; arguments after -- reach libtest unchanged.
+./scripts/test.sh --package pdfextractor-cli --features some-feature --no-run
+./scripts/test.sh --package pdfextractor-cli --filter redline -- --nocapture
+
+# Opt into batching: selected targets for a package share one cargo process
+# (except doctests, which Cargo requires in their own invocation).
+./scripts/test.sh --package pdfextractor-cli --batch
+
+# Split selected targets across terminals. Shards balance by the runtimes
+# recorded in target/test-runner-timings.tsv with sub-second precision. A
+# target with no recording is estimated from the median recorded runtime;
+# target count is used only when none of the selected targets has a recording.
+# Each target is its own cargo invocation, so feature unification can differ
+# from the unsharded --full gate.
+./scripts/test.sh --shard 1/4
+./scripts/test.sh --full --shard 1/4      # one shard of the full target list
+
+# Run selected targets concurrently instead of opening separate terminals.
+# Each target's output is buffered and printed in selection order; all selected
+# targets run, and the first failing target's status is returned. This does not
+# change the exact --full command without --shard.
+./scripts/test.sh --jobs 4
+
+# Inspect the selected targets and their reasons as machine-readable JSON.
+./scripts/test.sh --list --json --path crates/limits/src/lib.rs
+./scripts/test.sh --explain --json --path test-data/brief.docx
+
+# Retry only the targets that failed on the previous selected run.
+./scripts/test.sh --rerun-failed
+
+# The explicit release check: the full workspace suite, unchanged.
+./scripts/test.sh --full
+# equivalently: cargo test --workspace --locked
 ```
 
 Every push runs that clippy command in CI (`.github/workflows/clippy.yml`) with
@@ -283,11 +360,13 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--chunks-overlap-tokens <N>` | tokens of the previous hybrid chunk repeated at the start of the next, so a passage that straddles a boundary is retrievable from either side (default 0; must be smaller than the budget) |
 | `--chunks-tokenizer <FILE>` | count hybrid chunk budgets with a real Hugging Face `tokenizer.json`, SentencePiece `.model`, or tiktoken `.tiktoken` vocabulary instead of the built-in approximation; the file is loaded and validated before conversion, and the model's tokens (without special tokens) are the budget. A `.tiktoken` file carries ranks but no split pattern, so its name chooses cl100k_base by default, o200k_base for an `o200k` name, and p50k_base/r50k_base for a `p50k`, `r50k` or `gpt2` name; `--chunks-tokenizer-encoding` states the family when the name says none. Omit it for the reproducible approximation |
 | `--chunks-tokenizer-encoding <FAMILY>` | the tiktoken encoding family a `--chunks-tokenizer` `.tiktoken` vocabulary belongs to, for a filename that names none: `cl100k_base`, `o200k_base`, `p50k_base` or `r50k_base` (the short forms `cl100k`, `o200k`, `p50k` and `r50k` are accepted). An explicit family overrides a hint in the filename; it is refused without `--chunks-tokenizer` and for a `tokenizer.json` or SentencePiece `.model` |
+| `--max-*`, `--timeout`, `--ocr-timeout` | per-run overrides for the shared resource budgets, one flag per budget — `--max-input-bytes`, `--max-pages`, the image, ZIP, XML, flow-block and document-total ceilings, the parser's clock and the OCR clock. The full list, with each default, is "Resource flags" below |
 | `--image-export-mode <MODE>` | how the `md` and `html` outputs treat a picture: `referenced` (the default) points at the image files written beside the document, `embedded` carries each picture's bytes in the page as a base64 `data:` URI (under the image's own media type), and `placeholder` writes `<!-- image -->` where each picture stood — the same three names Docling's flag uses. A picture with no file behind it — a chart, vector art, an unnameable media type — has nothing to point at, so `referenced` writes nothing at all for it rather than an image link to nothing, and `embedded` marks the spot, having no bytes to carry; `placeholder` marks it like any other. An `embedded` page reads back as the picture it carried: the URI is decoded with no network access, so the bytes survive a second pass instead of becoming the literal link. A `placeholder` page reads back too — the mark is the picture, an item the model holds with no image behind it, exactly what the page said — so a page written that way re-renders with its pictures in place instead of turning them into the words `<!-- image -->`, and read in the mode it was written in it is its own bytes. `chart_deck.pptx` is the fixture whose only picture is such a drawing, and it is in the goldens so the writers' behaviour for one is pinned. JSON and YAML always keep the extract's own image references, and the image files are written beside the document either way, because the extraction is shared with those formats |
 | `--preview` | also write `<output>.preview.html`, a page overlay of every extracted box |
 | `--preview-dpi <N>` | resolution of the preview's page backdrop (default 110) |
 | `--progress` | stream one JSON record per finished document to stdout (see below) |
 | `--compare <PATH>` | compare every finished document with a Docling reference (a file, or a folder of them) and exit non-zero if any falls below the floor its memory remembers (see "Compare mode") |
+| `--redline <OLD>` | compare two versions of the same PDF or DOCX: `--input` is the newer version, this is the older one, and `--output` names the page-aware HTML report (default `<new>.redline.html`). The comparison reuses the Compare engine's block alignment; changed words are marked `<del>`/`<ins>`, and PDF pages and picture rows carry before/after placement previews. Cannot be combined with `--compare`, `--preview`, `--progress` or `--to` |
 | `--list-input-formats` | print the input formats this build accepts as JSON — `{"input_formats": [".pdf", …], "families": [{"name": "PDF", "input_formats": [".pdf"]}, …]}` — and exit, needing no input path. The list is the one the gate itself reads, which `--help` (grouped by family) and the empty-folder refusal also print, so a window or a script reads it instead of parsing help text. `families` is the same set under the headings `--help` uses, one family per heading in the help's order and every name in exactly one of them, so a UI can build a grouped picker without knowing what a group is called — which is what the desktop window does, grouping its formats line under those headings and offering one **File…** filter per family after **All documents** |
 
 Log records go to **stderr**; stdout is left for the output of the run itself, so
@@ -484,7 +563,7 @@ it (`--to md` alone writes no JSON) or on stdout with `-o -`. The rules:
   `<…>` form; code and formulas stay literal.
 
 The output is pinned byte for byte under `test-data/golden/markdown/` for
-the twenty-one documents the fixtures cover — including a form, a paper, a Markdown file
+the twenty-six documents the fixtures cover — including a form, a paper, a Markdown file
 read back as Markdown, **a Markdown file whose picture is a real file beside it** (the
 picture is copied beside the output and referenced from there), a DOCX whose one table
 merges cells (its spans flattened in Markdown, kept as `rowspan`/`colspan` in HTML —
@@ -629,7 +708,7 @@ stem, and `-o -` with a single format writes that one document to stdout.
   byte-identical.
 
 Each format is pinned byte for byte under `test-data/golden/{html,text,yaml}/` for
-the twenty-one documents they cover, including `social_cards.html`: its committed HTML
+the twenty-four documents they cover, including `social_cards.html`: its committed HTML
 golden pins the description, canonical URL and every Open Graph and Twitter card
 line, escaped and in the head's order, while its text and YAML goldens pin that none
 of those statements becomes body content. A deliberate change regenerates the
@@ -780,7 +859,7 @@ reach for after a change, to see which documents it helped and which it did not:
 cargo test -p pdfextractor-ui --test corpus_report_test -- --nocapture
 ```
 
-That converts all 37 corpus documents (and the ten fixtures beside them) in a single
+That converts all 37 corpus documents (and the twenty-one fixtures beside them) in a single
 CLI run and compares each with its reference, then prints the verdict mix per document, ordered by the share of rows the
 reference does not simply agree with (rows that differ + rows only we have), beside the
 character-agreement figure, the rows paired by position and the rows **placed**. The
@@ -873,7 +952,7 @@ document and what fell, so a fallen panel fails a build and not only a window:
 ```bash
 cargo run -p pdfextractor-cli -- -i test-data/real -o /tmp/out --ocr never \
   --compare test-data/golden/docling
-#   compare: test-data/golden/docling · memory: 48 document(s), measured with --ocr never
+#   compare: test-data/golden/docling · memory: 57 document(s), measured with --ocr never
 #   compare: test-data/real/EquationAsScientificNumbering.docx: 2 row(s), agreement 100.0% · at or above the whole ratchet
 #   … one line per document …
 #   compare: test-data/real/tracemonkey.pdf: 439 row(s), agreement 99.1% · at or above the whole ratchet
@@ -907,6 +986,55 @@ bridge gate above is where those documents are held, with LibreOffice installed.
 is only converting, with no `--compare`, still stops on the missing bridge and names the
 re-save route.
 
+### Redline mode
+
+`--redline` is the two-document use of the same comparison engine. Give it an
+older version and a newer version of one PDF or DOCX; both are converted through
+the normal readers, aligned by the Compare engine, and written as one standalone
+HTML report:
+
+```bash
+cargo run -p pdfextractor-cli -- \
+  -i contract-v2.pdf --redline contract-v1.pdf \
+  -o contract-redline.html --ocr never
+#   redline: contract-v2.pdf against contract-v1.pdf -> contract-redline.html
+```
+
+The report is **page-aware** where the format publishes pages. A PDF's items
+carry provenance, so changes are grouped under `Page 1`, `Page 2`, and so on; a
+change that moved between pages is headed `Page 3 → 5`, a page only the old
+version has is `Page 4 (removed)`, and a page only the new one has is `Page 6
+(added)`. Pages with nothing but unchanged blocks still get a section, so the
+redline shows where in the document it is, and their rows sit folded in a
+`<details>` element. Each PDF page also gets a before/after placement preview:
+the page's own point-sized outline with every block's box drawn on it, coloured
+by the row verdict, and picture boxes outlined separately in violet. Picture
+rows carry a tighter preview of their own boxes, so a picture that moved or
+resized is visible without opening the PDF in a renderer. These previews use
+the placement geometry the comparison already relies on and add no external
+rendering step; a DOCX publishes no such boxes, so its flow report has none. A
+DOCX is flow-based by design (Word repaginates as the text is edited), so it is
+reported as one labelled **Document flow** section; no page numbers are
+invented.
+
+The rows come from `pdfextractor_ui::diff::compare_documents`, the same
+alignment the window's Compare panel and the `--compare` gate use. A changed row
+is then cut into words for display only: the old side keeps the unchanged words
+with the removed ones in `<del>`, and the new side keeps the unchanged words with
+the added ones in `<ins>`. A structured table keeps the document's grid: a
+cell merged across columns or rows is rendered once with its `colspan` or
+`rowspan`, and the slots the merge covers are left out rather than padded with
+empty cells, so a merged header such as `brief.docx`'s Revenue row stays merged.
+Table rows are aligned by their values as well as their order, so inserting or
+removing a row does not shift a later row's changed-cell markers onto its
+neighbour.
+Counts at the top say how many rows changed, were
+added, were removed, were placed, or stayed the same, alongside the share of the
+new version's characters the old version also held. `--redline` refuses a
+cross-family comparison (PDF against DOCX), a directory, an unsupported family,
+or a report path that would overwrite either input, and it refuses to be combined
+with the conversion/output flags that would make its single report ambiguous.
+
 ### Smoke-testing the whole stack without a human
 
 `--selftest [INPUT]` opens the window, proves the webview and IPC round-trip,
@@ -914,6 +1042,9 @@ converts the given path through the CLI, and prints what the page actually drew;
 `--selftest-ref PATH` turns Compare on for that run, so the panel is exercised too.
 `--selftest-chunks` ticks Retrieval chunks and chooses the hybrid chunker before
 that run, so the chunking row the page draws is part of what comes back.
+`--selftest-bad-range RANGE` fills a deliberately unreadable page range, presses
+Convert, and reports the refusal as drawn — `title="Cannot convert"`,
+`convert=enabled` and `started=0` — with no conversion process started.
 
 ```bash
 # Smoke-test the whole stack without a human: the window opens, the webview
@@ -933,7 +1064,14 @@ cargo run -p pdfextractor-ui -- --selftest test-data/real/math-nary.docx \
 # The chunking row, driven the way a person drives it: Retrieval chunks ticked
 # and the hybrid chunker chosen, with the row's own shown state reported back.
 cargo run -p pdfextractor-ui -- --selftest test-data/real/math-nary.docx --selftest-chunks
-#   … chunk-controls=shown chunk-type=hybrid chunk-fields=on|on|on
+#   … chunk-controls-before=hidden chunk-controls=shown chunk-type=hybrid chunk-fields=on|on|on
+
+# A bad page range, caught before the CLI is started: the page must show the
+# parser's message, keep Convert enabled, and leave no run on screen.
+cargo run -p pdfextractor-ui -- --selftest test-data/real/math-nary.docx \
+  --selftest-bad-range 3-1
+#   … title="Cannot convert" verdict="Page range `3-1` runs backwards: pages are
+#   named low to high" run-visible=hidden convert=enabled started=0
 
 # A PDF reference carries the boxes the two readings found each block at, so those
 # boxes take part in the matching, the rows they leave one-sided are joined by page
@@ -963,8 +1101,9 @@ exercises (the page asks on load too) — `families="..."`, the headings those
 formats were drawn under, and `cli="..."`, the binary named beside them, so both
 asks, the IPC, the grouped formats and the binary line are covered by the same
 smoke test as the conversion. The chunking row is reported as the page draws it
-— `chunk-controls=shown|hidden`, `chunk-type=...`, and `chunk-fields=on|off|...`
-for the tokenizer, budget and overlap — so `--selftest-chunks` checks the gating
+— `chunk-controls-before=shown|hidden` and `chunk-controls=shown|hidden`,
+`chunk-type=...`, and `chunk-fields=on|off|...` for the tokenizer, budget and
+overlap — so `--selftest-chunks` checks the gating
 as well as the run behind it.
 
 The self-test converts into a directory of its own under the system temporary
@@ -990,6 +1129,68 @@ placed boxes were actually drawn, how many per-page pictures the panel drew with
 page's placed items on them, how many rows it drew (0 on a document it refused), how many
 documents fell through the floor their memory remembers, and what that floor said — all as
 the page drew them. All of them exit 0 if the stack is healthy.
+
+## Resource limits for untrusted inputs
+
+Every reader treats its input as hostile. The budgets are defined once in
+[`crates/limits`](crates/limits/src/lib.rs) and applied by the PDF, ZIP/office,
+XML, image and flow readers, so a malformed or deliberately expensive file is
+refused with a named limit rather than allowed to exhaust memory, stack or time.
+
+| Budget | Default |
+|---|---|
+| Input bytes | 256 MiB |
+| Pages / sheets / slides / image frames | 10,000 (frames: 1,000) |
+| PDF indirect objects / lexical tokens | 250,000 / 4,000,000 |
+| PDF array/dictionary/page-tree nesting | 64 levels |
+| One decoded PDF stream | 128 MiB (Flate reads are capped while expanding) |
+| ZIP entries | 10,000 |
+| One ZIP entry / whole package | 64 MiB / 512 MiB |
+| ZIP expansion ratio above 1 MiB | 200:1 |
+| XML part / nesting | 64 MiB / 256 levels; `DOCTYPE` declarations are refused |
+| Image grid | 100,000 per side, 100,000,000 pixels; 512 MiB decode allocation |
+| Flow-format blocks | 1,000,000, a table counting one per cell (text, Markdown, CSV, RTF, HTML, DOCX, `.doc`) |
+| One document's decoded total | 1 GiB across every PDF stream and image frame its reader decodes; a stream read again is the same bytes, not new ones |
+| LibreOffice bridge | 512 MiB of output, 120 seconds |
+| Parser wall clock / OCR | 30 seconds, checked between objects, pages, entries and XML events; OCR pages get 600 seconds of their own, recognition being seconds a page |
+
+Each budget has a flag, so a run can raise one without a rebuild, and a refusal
+names the flag that would (`--max-image-pixels`, say) — see "Resource flags"
+below. A PDF's page count is enforced before any page is analysed, and
+extraction has a checked path (`extract_checked`) that reports the refusal
+instead of returning a shortened document.
+
+### Resource flags
+
+| Flag | Budget |
+|---|---|
+| `--max-input-bytes <N>` | the largest input a run will read (256 MiB) |
+| `--max-pages <N>` | pages, sheets, slides or frames one document may have (10,000) |
+| `--max-image-pixels <N>` | pixels in one image grid (100,000,000) |
+| `--max-image-dimension <N>` | the widest side of an image grid (100,000) |
+| `--max-image-alloc-bytes <N>` | what one image decode may allocate (512 MiB) |
+| `--max-image-frames <N>` | frames read from a TIFF, GIF or animated WebP (1,000) |
+| `--max-flow-blocks <N>` | blocks a flow reader may produce (1,000,000) |
+| `--max-decoded-stream-bytes <N>` | what one decoded PDF stream may produce (128 MiB) |
+| `--max-zip-entries <N>` | entries in a ZIP package (10,000) |
+| `--max-zip-entry-bytes <N>` | uncompressed size of one entry (64 MiB) |
+| `--max-zip-total-bytes <N>` | uncompressed size of the whole package (512 MiB) |
+| `--max-zip-ratio <N>` | expansion ratio an entry above 1 MiB may declare (200) |
+| `--max-xml-bytes <N>` | one XML part (64 MiB) |
+| `--max-xml-depth <N>` | XML nesting (256) |
+| `--max-document-bytes <N>` | one document's decoded total (1 GiB) |
+| `--timeout <SECONDS>` | one document's reading (30) |
+| `--ocr-timeout <SECONDS>` | one document's OCR pages (600) |
+
+The PDF object, token and nesting budgets and the LibreOffice bridge's output
+ceiling and clock have no flag yet; they are reachable through the library's
+`pdfextractor_limits::Limits`, which an embedder constructs directly.
+
+Fuzz targets live outside the product workspace in [`fuzz/`](fuzz/README.md):
+`pdf`, `zip`, `xml` and `image`. They compile against the shared limits and are
+run with `cargo +nightly fuzz run <target> -- -max_total_time=60`; the
+deterministic tests build a ZIP bomb, deeply nested XML, a giant image header, an
+over-budget PDF page tree, an over-size Flate stream and a zero-deadline parser.
 
 ## Test documents
 
@@ -1068,6 +1269,7 @@ crates/
 └── ui/            # Tauri window (static frontend in ui/dist) over the CLI
 test-data/
 ├── hello.pdf, compressed.pdf, scanned.pdf   # hand-made fixtures
+├── hello_added_picture.pdf                  # hello.pdf plus a page with a picture
 ├── inventory.xlsx                           # workbook fixture (make_inventory_xlsx.py)
 ├── worksheet_pictures.xlsx                  # workbook that draws pictures (make_pictures_xlsx.py)
 ├── shape_deck.pptx                          # shapes PowerPoint paints itself (make_shape_deck.py)
@@ -1112,6 +1314,10 @@ test-data/
 ├── picture_bullets.docx, .pptx              # list items whose bullets are pictures,
 │                                            #   one of them an SVG (make_picture_bullets.py)
 ├── invoice_scan.png                         # image fixture (make_scan_images.py)
+├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4
+│                                            #   and G3 two-dimensional
+├── jbig2_scan.pdf                           # the same scan in JBIG2
+│                                            #   (make_scan_codec_pdfs.py)
 ├── nested_table.docx                        # a table inside a table's cell
 │                                            #   (make_nested_table_docx.py)
 ├── images/        # the same scan as JPEG, TIFF, BMP, WebP, GIF and JPEG 2000,

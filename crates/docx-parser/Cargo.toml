@@ -22,6 +22,9 @@ pdfextractor-drawingml = { path = "../drawingml" }
 # A picture Word stored the way the camera wrote it is turned the way the EXIF
 # tag says Word displays it, before it leaves the parser.
 pdfextractor-image-parser = { path = "../image-parser" }
+# Every package is opened through the shared ZIP budget: entry count, entry
+# and total expansion, compression ratio, and nesting depth of its XML parts.
+pdfextractor-limits = { path = "../limits" }
 zip.workspace = true
 quick-xml.workspace = true
 tracing.workspace = true

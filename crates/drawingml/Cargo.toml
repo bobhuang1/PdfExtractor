@@ -19,6 +19,9 @@ pdfextractor-metafile = { path = "../metafile" }
 # transcoded first, as every other picture in a package is.
 pdfextractor-svg = { path = "../svg" }
 pdfextractor-image-parser = { path = "../image-parser" }
+# A picture fill is decoded under the reader's image budgets, the same ones the
+# flow's pictures take, so a lowered ceiling reaches a shape as well.
+pdfextractor-limits = { path = "../limits" }
 image.workspace = true
 tracing.workspace = true
 

@@ -28,7 +28,7 @@ use crate::paint::{Bitmap, Color};
 ///
 /// Read by the renderer below and by the RTF reader's byte-for-byte BMP
 /// wrapper, so the two cannot disagree about a header's layout. Only the
-/// layout: whether the pixels can be *drawn* is [`info`]'s question, and
+/// layout: whether the pixels can be *drawn* is `info`'s question, and
 /// whether the payload is long enough to open is the caller's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
@@ -42,7 +42,7 @@ pub struct Header {
     /// Bits per pixel.
     pub bit_count: u16,
     /// `biCompression`: `BI_RGB` (0) and `BI_BITFIELDS` (3) are the ones this
-    /// crate draws; the rest are named by [`info`] when it refuses them.
+    /// crate draws; the rest are named by `info` when it refuses them.
     pub compression: u32,
     /// The header's own length: 12 for a `BITMAPCOREHEADER`, the stated size
     /// for anything newer.

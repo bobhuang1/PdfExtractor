@@ -40,20 +40,36 @@
 
 use crate::{cp1252, Block, TableCell, TableGrid, TextDocument};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use pdfextractor_limits::{Guard, Limits, Result};
 use pdfextractor_metafile as metafile;
 use std::collections::HashMap;
 
 /// Parse an RTF document into blocks.
 pub fn parse(bytes: &[u8]) -> TextDocument {
+    parse_with_guard(bytes, &Guard::unbudgeted()).expect("a guard with no budget refuses nothing")
+}
+
+/// Parse an RTF document under `budget`.
+pub fn parse_with_limits(bytes: &[u8], budget: &Limits) -> Result<TextDocument> {
+    parse_with_guard(bytes, &budget.guard())
+}
+
+fn parse_with_guard(bytes: &[u8], guard: &Guard<'_>) -> Result<TextDocument> {
+    guard.check_input(bytes.len())?;
+    // The stylesheet is walked before the body, so the deadline is checked
+    // before it starts rather than only once the body is reached.
+    guard.check("reading an RTF stylesheet")?;
     let mut state = Reader {
         styles: heading_styles(bytes),
         ..Reader::default()
     };
-    state.run(bytes);
-    TextDocument {
+    state.run(bytes, guard)?;
+    let doc = TextDocument {
         items: state.items,
         ..Default::default()
-    }
+    };
+    guard.check_flow_blocks(crate::flow_units(&doc.items))?;
+    Ok(doc)
 }
 
 /// One open `{` group.
@@ -471,10 +487,13 @@ struct Reader {
 }
 
 impl Reader {
-    fn run(&mut self, bytes: &[u8]) {
+    fn run(&mut self, bytes: &[u8], guard: &Guard<'_>) -> Result<()> {
         self.groups.push(Group::default());
         let mut i = 0usize;
         while i < bytes.len() {
+            if i.is_multiple_of(65536) {
+                guard.check("reading an RTF token")?;
+            }
             match bytes[i] {
                 b'{' => {
                     let uc = self.groups.last().map(|g| g.uc).unwrap_or(1);
@@ -537,6 +556,7 @@ impl Reader {
         // A document that ends inside a table still has one: its last row is
         // closed and the grid emitted like any other.
         self.close_table();
+        Ok(())
     }
 
     /// Handle the control sequence starting at `i` (just past the `\`).
@@ -1187,6 +1207,45 @@ fn matching_brace(bytes: &[u8], open: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A caller-supplied block budget is enforced once the body is read, so a
+    /// document that expands past it is refused rather than returned in part.
+    #[test]
+    fn a_custom_page_budget_is_enforced() {
+        let budget = Limits {
+            max_flow_blocks: 1,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"{\\rtf1 one\\par two\\par}", &budget)
+            .expect_err("the document has two paragraphs");
+        assert!(error.to_string().contains("2 blocks"), "{error}");
+        assert!(error.to_string().contains("limit is 1"), "{error}");
+    }
+
+    /// The size is checked before the stylesheet is read, so a document over
+    /// the input budget is refused by name rather than parsed.
+    #[test]
+    fn a_custom_input_budget_is_enforced() {
+        let budget = Limits {
+            max_input_bytes: 4,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"{\\rtf1 one}", &budget)
+            .expect_err("the document is longer than four bytes");
+        assert!(error.to_string().contains("limit is 4 bytes"), "{error}");
+    }
+
+    /// The token walk checks the clock as it goes, so a spent deadline refuses
+    /// a document however small it is.
+    #[test]
+    fn a_spent_deadline_is_enforced() {
+        let budget = Limits {
+            timeout: std::time::Duration::ZERO,
+            ..Limits::default()
+        };
+        let error = parse_with_limits(b"{\\rtf1 one}", &budget).expect_err("the deadline is spent");
+        assert!(error.to_string().contains("timed out"), "{error}");
+    }
 
     /// A little-endian word of the wrapped file, for reading back what the
     /// wrapper stated.

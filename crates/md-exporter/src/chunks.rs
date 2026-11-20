@@ -5,7 +5,7 @@
 //! carrying enough of the document around it that a hit can be cited. Docling
 //! has two chunkers, and both are here:
 //!
-//! * [`ChunkKind::Hierarchical`] follows the body tree. One visible item is one
+//! * [`ChunkKind::Hierarchical`](crate::chunks::ChunkKind::Hierarchical) follows the body tree. One visible item is one
 //!   chunk — a paragraph, a heading, a formula — with consecutive list items
 //!   written as one chunk (their lines are one list, and splitting a list
 //!   between chunks loses the fact that they belong together). Each chunk
@@ -14,7 +14,7 @@
 //!   document as a whole. An item is never cut: a table is one chunk, its pipe
 //!   grid whole, and a picture with no caption is no chunk at all — there are
 //!   no words to retrieve it by.
-//! * [`ChunkKind::Hybrid`] packs the same items into chunks of at most
+//! * [`ChunkKind::Hybrid`](crate::chunks::ChunkKind::Hybrid) packs the same items into chunks of at most
 //!   `max_tokens`, sentence by sentence, so a chunk is never a sentence broken
 //!   in the middle. A sentence longer than the whole budget is its own chunk
 //!   rather than being truncated. `overlap_tokens` carries the tail sentences
@@ -33,20 +33,24 @@
 //!   share. Docling serialises a table its own way in a chunk; a pipe grid is
 //!   what a reader (and an LLM) can follow, and the two writers already agree on
 //!   which cell holds what.
-//! * **Token counting** defaults to a documented approximation: [`count_tokens`]
+//! * **Token counting** defaults to a documented approximation: [`count_tokens`](crate::chunks::count_tokens)
 //!   splits on whitespace and counts each word as one token per four characters.
 //!   That is stable and identical on every machine, but it is not a model's own
-//!   count. When [`ChunkOptions::tokenizer`] carries a [`Tokenizer`] loaded from
+//!   count. When [`ChunkOptions::tokenizer`](crate::chunks::ChunkOptions::tokenizer)
+//!   carries a [`Tokenizer`](crate::chunks::Tokenizer) loaded from
 //!   a Hugging Face `tokenizer.json`, a SentencePiece `.model`, or a tiktoken
 //!   vocabulary file, hybrid budgets are counted in that model's tokens instead.
 //!   The approximation remains the default, so a budget is reproducible unless
 //!   the caller deliberately supplies the model whose budget it is. A
 //!   `.tiktoken` rank file carries no split pattern, so its filename names the
-//!   encoding family; [`Tokenizer::from_file_with_tiktoken_encoding`] names it
+//!   encoding family;
+//!   [`Tokenizer::from_file_with_tiktoken_encoding`](crate::chunks::Tokenizer::from_file_with_tiktoken_encoding)
+//!   names it
 //!   explicitly for a vocabulary whose filename says nothing.
 //!
 //! A body item on the notes layer (a deck's speaker notes, a comment) is left
-//! out unless [`ChunkOptions::include_notes`] asks for it, exactly as the
+//! out unless [`ChunkOptions::include_notes`](crate::chunks::ChunkOptions::include_notes)
+//! asks for it, exactly as the
 //! Markdown and text writers leave it out; page furniture is always left out,
 //! because a running head repeated on every page is not something to retrieve.
 
@@ -338,6 +342,9 @@ pub struct Tokenizer {
 
 enum TokenizerKind {
     HuggingFace(Box<tokenizers::Tokenizer>),
+    // The SentencePiece processor is much larger than the other variants, and
+    // a tokenizer is built once per run: boxing it keeps every `Tokenizer`
+    // (and every chunk option holding one) small.
     SentencePiece(Box<sentencepiece_rs::SentencePieceProcessor>),
     Tiktoken(tiktoken_rs::CoreBPE),
 }
@@ -382,6 +389,7 @@ impl Tokenizer {
         }
         let tiktoken_family =
             (format == TokenizerFormat::Tiktoken).then(|| tiktoken_encoding(path, encoding));
+        let mut tiktoken_vocab_size = None;
         let inner = match format {
             TokenizerFormat::HuggingFace => TokenizerKind::HuggingFace(Box::new(
                 tokenizers::Tokenizer::from_file(path)
@@ -398,7 +406,9 @@ impl Tokenizer {
             TokenizerFormat::Tiktoken => {
                 let bytes = std::fs::read(path)
                     .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-                TokenizerKind::Tiktoken(load_tiktoken(path, &bytes, tiktoken_family)?)
+                let (tokenizer, vocab_size) = load_tiktoken(path, &bytes, tiktoken_family)?;
+                tiktoken_vocab_size = Some(vocab_size);
+                TokenizerKind::Tiktoken(tokenizer)
             }
         };
         let description = match &inner {
@@ -415,18 +425,19 @@ impl Tokenizer {
                 )
             }
             TokenizerKind::Tiktoken(_) => format!(
-                "{} · {}",
+                "{} · {} · {} tokens",
                 format.label(),
                 tiktoken_family
                     .expect("a tiktoken format has an encoding family")
-                    .name()
+                    .name(),
+                tiktoken_vocab_size.expect("a tiktoken format has a vocabulary size")
             ),
         };
         Ok(Self { inner, description })
     }
 
-    /// What the badge beside the chosen file names: its vocabulary size, or
-    /// the tiktoken encoding family a rank file belongs to.
+    /// What the badge beside the chosen file names: its vocabulary size. A
+    /// tiktoken rank file also names the encoding family it was loaded as.
     pub fn description(&self) -> &str {
         &self.description
     }
@@ -526,7 +537,7 @@ fn load_tiktoken(
     path: &Path,
     bytes: &[u8],
     encoding: Option<TiktokenEncoding>,
-) -> anyhow::Result<tiktoken_rs::CoreBPE> {
+) -> anyhow::Result<(tiktoken_rs::CoreBPE, usize)> {
     let text = std::str::from_utf8(bytes)
         .map_err(|error| anyhow::anyhow!("{}: not UTF-8 text: {error}", path.display()))?;
     let mut ranks = HashMap::new();
@@ -573,8 +584,11 @@ fn load_tiktoken(
         );
     }
     let pattern = tiktoken_pattern(path, encoding);
-    tiktoken_rs::CoreBPE::new(ranks.into_iter().collect(), Default::default(), pattern)
-        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
+    let vocab_size = ranks.len();
+    let tokenizer =
+        tiktoken_rs::CoreBPE::new(ranks.into_iter().collect(), Default::default(), pattern)
+            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+    Ok((tokenizer, vocab_size))
 }
 
 fn tiktoken_encoding(path: &Path, encoding: Option<TiktokenEncoding>) -> TiktokenEncoding {
@@ -1427,7 +1441,10 @@ mod tests {
     #[test]
     fn a_tiktoken_vocabulary_counts_a_hybrid_budget() {
         let tokenizer = tokenizer_fixture("tokenizer-mini.tiktoken");
-        assert_eq!(tokenizer.description(), "tiktoken · cl100k_base");
+        assert_eq!(
+            tokenizer.description(),
+            "tiktoken · cl100k_base · 257 tokens"
+        );
         assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
         assert!(
             tokenizer.count_tokens("abcdefgh") < count_tokens("abcdefgh"),
@@ -1435,11 +1452,12 @@ mod tests {
         );
     }
 
-    /// The extension cannot answer here: each fixture is copied to `.bin`, so
-    /// only the bytes can name the format. The renamed copy must also load and
-    /// count like the file it came from, not merely be classified correctly.
+    /// The extension cannot answer for a `.bin` or extensionless copy, so only
+    /// the bytes can name the format; an uppercase extension is normalized. Each
+    /// renamed copy must also load and count like the file it came from, not
+    /// merely be classified correctly.
     #[test]
-    fn a_tokenizer_with_an_unfamiliar_extension_loads_and_counts_from_its_bytes() {
+    fn a_renamed_tokenizer_loads_and_counts_from_its_bytes() {
         let dir =
             std::env::temp_dir().join(format!("pdfe-tokenizer-format-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1453,31 +1471,86 @@ mod tests {
             let source = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../test-data")
                 .join(fixture);
-            let target = dir.join(format!("{fixture}.bin"));
-            std::fs::copy(&source, &target).unwrap_or_else(|error| {
-                panic!("copy {} to {}: {error}", source.display(), target.display())
-            });
-            assert_eq!(
-                detect_tokenizer_format(&target)
-                    .unwrap_or_else(|error| panic!("detect {}: {error}", target.display())),
-                expected,
-                "{fixture} was not detected from its bytes"
-            );
-
+            let stem = Path::new(fixture)
+                .file_stem()
+                .expect("a fixture stem")
+                .to_string_lossy();
+            let extension = Path::new(fixture)
+                .extension()
+                .expect("a fixture extension")
+                .to_string_lossy();
             let original = tokenizer_fixture(fixture);
-            let renamed = Tokenizer::from_file(&target)
-                .unwrap_or_else(|error| panic!("load {}: {error}", target.display()));
-            assert_eq!(
-                renamed.description(),
-                original.description(),
-                "{fixture} described a different vocabulary when renamed"
-            );
-            assert_eq!(
-                renamed.count_tokens("abcdefgh"),
-                original.count_tokens("abcdefgh"),
-                "{fixture} counted a different number of tokens when renamed"
-            );
+            for (how, name) in [
+                ("an unfamiliar extension", format!("{fixture}.bin")),
+                ("no extension", format!("{stem}-{extension}")),
+                (
+                    "an uppercase extension",
+                    format!("{stem}.{}", extension.to_ascii_uppercase()),
+                ),
+            ] {
+                let target = dir.join(name);
+                std::fs::copy(&source, &target).unwrap_or_else(|error| {
+                    panic!("copy {} to {}: {error}", source.display(), target.display())
+                });
+                assert_eq!(
+                    detect_tokenizer_format(&target)
+                        .unwrap_or_else(|error| panic!("detect {}: {error}", target.display())),
+                    expected,
+                    "{fixture} was not detected when renamed with {how}"
+                );
+
+                let renamed = Tokenizer::from_file(&target)
+                    .unwrap_or_else(|error| panic!("load {}: {error}", target.display()));
+                assert_eq!(
+                    renamed.description(),
+                    original.description(),
+                    "{fixture} described a different vocabulary when renamed with {how}"
+                );
+                assert_eq!(
+                    renamed.count_tokens("abcdefgh"),
+                    original.count_tokens("abcdefgh"),
+                    "{fixture} counted a different number of tokens when renamed with {how}"
+                );
+                let mixed = "Mixed CASE, punctuation — 42 tokens, and 'quotes'!";
+                assert_eq!(
+                    renamed.count_tokens(mixed),
+                    original.count_tokens(mixed),
+                    "{fixture} counted a longer mixed sentence differently when renamed with {how}"
+                );
+                assert!(
+                    renamed.count_tokens(mixed) > renamed.count_tokens("abcdefgh"),
+                    "{fixture} did not count the mixed sentence as more tokens than one word \
+                     when renamed with {how}"
+                );
+            }
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A non-tokenizer file renamed to an unknown extension is rejected by the
+    /// loader with the formats it accepts, rather than being mistaken for one
+    /// and failing later with an opaque parser message.
+    #[test]
+    fn an_unsupported_renamed_tokenizer_is_rejected_with_a_format_error() {
+        let dir =
+            std::env::temp_dir().join(format!("pdfe-tokenizer-unsupported-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let path = dir.join("tokenizer.bin");
+        std::fs::write(&path, b"this is not a tokenizer").expect("write the unsupported file");
+
+        let error = Tokenizer::from_file(&path)
+            .expect_err("an unsupported file must be rejected")
+            .to_string();
+        assert!(
+            error.contains("not a tokenizer.json, SentencePiece .model or tiktoken vocabulary"),
+            "the refusal does not name the accepted formats: {error}"
+        );
+        assert!(
+            error.contains(&path.display().to_string()),
+            "the refusal does not name the file: {error}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1530,7 +1603,10 @@ mod tests {
         ] {
             let tokenizer = Tokenizer::from_file_with_tiktoken_encoding(&path, Some(encoding))
                 .unwrap_or_else(|error| panic!("{encoding} loads: {error}"));
-            assert_eq!(tokenizer.description(), format!("tiktoken · {encoding}"));
+            assert_eq!(
+                tokenizer.description(),
+                format!("tiktoken · {encoding} · 257 tokens")
+            );
             assert_eq!(tokenizer.count_tokens("abcdefgh"), 1);
         }
     }
