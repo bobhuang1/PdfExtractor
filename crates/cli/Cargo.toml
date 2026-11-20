@@ -46,7 +46,10 @@ pdfextractor-svg = { path = "../svg" }
 pdfextractor-picture-formats = { path = "../picture-formats" }
 pdfextractor-text-parser = { path = "../text-parser" }
 pdfextractor-layout = { path = "../layout" }
-pdfextractor-ocr-engine = { path = "../ocr-engine" }
+# OCR is a feature of this binary as it is of the engine: `--no-default-features`
+# builds a command line with no Tesseract (and no libclang) to link, whose OCR
+# calls fail with a clear error, which is what the README promises.
+pdfextractor-ocr-engine = { path = "../ocr-engine", default-features = false }
 pdfextractor-json-exporter = { path = "../json-exporter" }
 pdfextractor-md-exporter = { path = "../md-exporter" }
 # The `--compare` mode holds each finished document to the same comparison, memory
@@ -54,6 +57,10 @@ pdfextractor-md-exporter = { path = "../md-exporter" }
 # two cannot drift apart. Without default features the desktop shell (Tauri, GTK) is
 # left out: the library is the comparison, not the window.
 pdfextractor-ui = { path = "../ui", default-features = false }
+
+[features]
+default = ["ocr"]
+ocr = ["pdfextractor-ocr-engine/tesseract"]
 
 [dev-dependencies]
 # An embedded picture is checked by decoding its `data:` URI and holding the

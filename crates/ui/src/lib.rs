@@ -127,6 +127,9 @@ impl ImageExportMode {
     }
 }
 
+/// The environment variable the CLI reads `--pdf-password` from.
+pub const PDF_PASSWORD_ENV: &str = "PDFE_PDF_PASSWORD";
+
 /// The whole form: one input, one output, one settings panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +145,15 @@ pub struct Settings {
     pub recursive: bool,
     /// `--page-range`: which pages to read. Empty means every page.
     pub page_range: String,
+    /// The password of an encrypted PDF. Empty means none: the CLI then opens an
+    /// encrypted file with the empty user password, as any reader does.
+    ///
+    /// It never reaches the argument vector — a process listing would show it,
+    /// and the result pane prints the command line — but travels in the child's
+    /// environment as `PDFE_PDF_PASSWORD` (see [`Settings::child_env`]). It is
+    /// read from the page and never written back to it.
+    #[serde(default, skip_serializing)]
+    pub pdf_password: String,
     pub ocr: OcrMode,
     /// `--ocr-lang`: comma-separated Tesseract codes; empty means `eng`.
     pub ocr_lang: String,
@@ -198,6 +210,7 @@ impl Default for Settings {
             parallel: 4,
             recursive: true,
             page_range: String::new(),
+            pdf_password: String::new(),
             ocr: OcrMode::Auto,
             ocr_lang: "eng".to_string(),
             psm: None,
@@ -267,6 +280,17 @@ impl Settings {
     /// window does with our output, not something the extractor is told about,
     /// and the CLI has no business knowing which Docling document it is up
     /// against.
+    /// The environment the CLI is started with, beyond the window's own: the
+    /// PDF password, when there is one. Kept out of [`Settings::to_args`] so the
+    /// command line shown and listed never carries it.
+    pub fn child_env(&self) -> Vec<(String, String)> {
+        if self.pdf_password.is_empty() {
+            Vec::new()
+        } else {
+            vec![(PDF_PASSWORD_ENV.to_string(), self.pdf_password.clone())]
+        }
+    }
+
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec!["--input".to_string(), self.input.trim().to_string()];
 
@@ -666,9 +690,21 @@ impl Job {
         program: &str,
         args: &[String],
     ) -> Result<(Job, ChildStdout, ChildStderr), String> {
+        Self::spawn_with_env(program, args, &[])
+    }
+
+    /// [`Job::spawn`], with `env` added to the child's environment — how a
+    /// secret such as the PDF password reaches the CLI without being an
+    /// argument.
+    pub fn spawn_with_env(
+        program: &str,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> Result<(Job, ChildStdout, ChildStderr), String> {
         let mut command = Command::new(program);
         command
             .args(args)
+            .envs(env.iter().map(|(key, value)| (key, value)))
             // No stdin: the CLI never reads it, and an inherited one could
             // swallow the terminal's keystrokes.
             .stdin(Stdio::null())
@@ -1211,6 +1247,54 @@ mod tests {
                 "--progress",
             ]
         );
+    }
+
+    /// The PDF password reaches the CLI through its environment and nowhere
+    /// else: not the argument vector (a process listing shows it, and the
+    /// result pane prints it), not the settings the window echoes back.
+    #[test]
+    fn the_pdf_password_travels_in_the_environment_only() {
+        let form = Settings {
+            pdf_password: "s3cret pass".to_string(),
+            ..settings()
+        };
+        assert_eq!(
+            form.child_env(),
+            vec![(PDF_PASSWORD_ENV.to_string(), "s3cret pass".to_string())]
+        );
+        assert_eq!(PDF_PASSWORD_ENV, "PDFE_PDF_PASSWORD");
+        let args = form.to_args();
+        assert!(!args.iter().any(|arg| arg.contains("s3cret")), "{args:?}");
+        assert!(!args.iter().any(|arg| arg.contains("password")), "{args:?}");
+        assert_eq!(args, settings().to_args());
+        let echoed = serde_json::to_string(&form).unwrap();
+        assert!(!echoed.contains("s3cret"), "{echoed}");
+    }
+
+    #[test]
+    fn no_password_adds_nothing_to_the_environment() {
+        assert!(settings().child_env().is_empty());
+    }
+
+    #[test]
+    fn the_page_sends_the_password_as_pdf_password() {
+        let form: Settings = serde_json::from_value(serde_json::json!({
+            "input": "a.pdf", "output": "", "parallel": 1, "recursive": true,
+            "pageRange": "", "pdfPassword": "pw", "ocr": "auto", "ocrLang": "eng",
+            "psm": null, "to": [], "chunksType": "hierarchical", "chunksTokenizer": "",
+            "preview": false, "reference": ""
+        }))
+        .unwrap();
+        assert_eq!(form.pdf_password, "pw");
+        // An older page that sends no password is still a valid form.
+        let form: Settings = serde_json::from_value(serde_json::json!({
+            "input": "a.pdf", "output": "", "parallel": 1, "recursive": true,
+            "pageRange": "", "ocr": "auto", "ocrLang": "eng",
+            "psm": null, "to": [], "chunksType": "hierarchical", "chunksTokenizer": "",
+            "preview": false, "reference": ""
+        }))
+        .unwrap();
+        assert_eq!(form.pdf_password, "");
     }
 
     /// The window's formats are the CLI's own answer, not a list kept here: the

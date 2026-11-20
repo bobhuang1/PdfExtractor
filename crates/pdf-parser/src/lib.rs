@@ -2,6 +2,7 @@
 //! Following hybrid approach: implement domain logic ourselves.
 
 pub mod content;
+pub mod crypt;
 pub mod encoding;
 pub mod filters;
 pub mod images;

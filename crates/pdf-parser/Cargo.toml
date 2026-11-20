@@ -18,4 +18,7 @@ pdfextractor-core = { path = "../core" }
 pdfextractor-image-parser = { path = "../image-parser" }
 image.workspace = true
 flate2.workspace = true
+md-5.workspace = true
+sha2.workspace = true
+aes.workspace = true
 tracing.workspace = true

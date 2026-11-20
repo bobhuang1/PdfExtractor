@@ -60,9 +60,17 @@ pub struct ExtractedPage {
 #[derive(Debug)]
 pub struct PdfDocument {
     pub version: String,
-    /// Whether the trailer names `/Encrypt`: every string and stream in the file
-    /// is ciphered, and nothing here has been decrypted.
+    /// Whether the trailer (or a cross-reference stream) names `/Encrypt`:
+    /// every string and stream in the file was ciphered.
     pub encrypted: bool,
+    /// Why an encrypted file could not be decrypted — a wrong or missing
+    /// password, or a handler this parser does not implement. `None` for a
+    /// plain file and for an encrypted one that was opened, in which case every
+    /// string and stream below is already plain.
+    pub locked: Option<crate::crypt::CryptError>,
+    /// Which password opened an encrypted file (`"user password"` or
+    /// `"owner password"`), for the log.
+    pub opened_with: Option<&'static str>,
     pub objects: HashMap<ObjId, PdfValue>,
     /// Where each stream's payload begins in the file. Recorded so that
     /// `/Length` can be honoured after the fact: the lexer decides a payload's
@@ -70,10 +78,25 @@ pub struct PdfDocument {
     /// dictionary is understood, and that search is fooled by a payload that
     /// happens to contain those bytes.
     stream_offsets: HashMap<ObjId, usize>,
+    /// The catalog the newest trailer (or cross-reference stream) names as
+    /// `/Root`. A file updated incrementally can carry an older catalog under
+    /// another object number; the page tree is the newest one's.
+    root: Option<ObjId>,
 }
 
 impl PdfDocument {
+    /// Parse a PDF, opening an encrypted one with the empty user password —
+    /// what every reader does with a file that asks nothing of its reader.
     pub fn parse(data: &[u8]) -> anyhow::Result<Self> {
+        Self::parse_with_password(data, None)
+    }
+
+    /// Parse a PDF, opening an encrypted one with `password` (tried as the user
+    /// password and then as the owner password; `None` is the empty password).
+    ///
+    /// A file the password does not open is still returned, with `locked`
+    /// saying why, so the caller decides how to refuse it.
+    pub fn parse_with_password(data: &[u8], password: Option<&[u8]>) -> anyhow::Result<Self> {
         let mut lexer = Lexer::new(data);
         let tokens = lexer.tokenize_spanned();
 
@@ -87,6 +110,11 @@ impl PdfDocument {
         let mut objects: HashMap<ObjId, PdfValue> = HashMap::new();
         let mut stream_offsets: HashMap<ObjId, usize> = HashMap::new();
         let mut encrypted = false;
+        // The last trailer that names `/Encrypt`: its `/Encrypt` and `/ID` are
+        // what the security handler is authenticated against.
+        let mut encrypting_trailer: Option<HashMap<String, PdfValue>> = None;
+        // The `/Root` of the last classic trailer in the file: the newest.
+        let mut root: Option<ObjId> = None;
         let mut i = 0usize;
         while i + 2 < tokens.len() {
             let (num, gen) = match (&tokens[i].token, &tokens[i + 1].token, &tokens[i + 2].token) {
@@ -100,8 +128,14 @@ impl PdfDocument {
                     if matches!(tokens[i].token, Token::Trailer) {
                         let mut j = i + 1;
                         if let Some(trailer) = Self::parse_value(&tokens, &mut j, data) {
+                            if let Some(id) = trailer.get("Root").and_then(PdfValue::as_ref) {
+                                root = Some(id);
+                            }
                             if trailer.get("Encrypt").is_some() {
                                 encrypted = true;
+                                if let PdfValue::Dictionary(dict) = trailer {
+                                    encrypting_trailer = Some(dict);
+                                }
                             }
                         }
                     }
@@ -171,28 +205,91 @@ impl PdfDocument {
         let mut doc = Self {
             version,
             encrypted,
+            locked: None,
+            opened_with: None,
             objects,
             stream_offsets,
+            root,
         };
         doc.honour_stream_lengths(data);
-        doc.expand_object_streams();
+        // A PDF 1.5 file names its catalog in its cross-reference streams; the
+        // one written last in the file is the newest.
+        if doc.root.is_none() {
+            doc.root = doc
+                .stream_offsets
+                .iter()
+                .filter_map(|(id, offset)| {
+                    let dict = doc.objects.get(id)?.as_dict()?;
+                    (dict.get("Type").and_then(PdfValue::as_name) == Some("XRef"))
+                        .then(|| dict.get("Root").and_then(PdfValue::as_ref))
+                        .flatten()
+                        .map(|root| (*offset, root))
+                })
+                .max_by_key(|(offset, _)| *offset)
+                .map(|(_, root)| root);
+        }
 
         // A PDF 1.5 file states its encryption in the cross-reference stream's
         // own dictionary, which is an object and has no classic trailer to say
-        // it in.
-        if !doc.encrypted {
-            let in_xref = doc.objects.values().any(|value| {
-                value.as_dict().is_some_and(|dict| {
-                    dict.get("Type")
-                        .and_then(|t| doc.resolve(t))
-                        .and_then(|t| t.as_name())
-                        == Some("XRef")
+        // it in. Object streams are themselves ciphered, so this — and the
+        // decryption — happens before they are expanded.
+        if encrypting_trailer.is_none() {
+            encrypting_trailer = doc
+                .objects
+                .values()
+                .filter_map(PdfValue::as_dict)
+                .filter(|dict| {
+                    dict.get("Type").and_then(|t| t.as_name()) == Some("XRef")
                         && dict.get("Encrypt").is_some()
                 })
-            });
-            doc.encrypted |= in_xref;
+                .find(|dict| dict.contains_key("ID"))
+                .cloned();
+            doc.encrypted |= encrypting_trailer.is_some();
         }
+        if let Some(trailer) = encrypting_trailer {
+            doc.decrypt(&trailer, password);
+        }
+
+        doc.expand_object_streams();
         Ok(doc)
+    }
+
+    /// Authenticate the password against the trailer's `/Encrypt` and decrypt
+    /// every object in place, or record in `locked` why that was not possible.
+    fn decrypt(&mut self, trailer: &HashMap<String, PdfValue>, password: Option<&[u8]>) {
+        let encrypt_ref = trailer.get("Encrypt").and_then(PdfValue::as_ref);
+        let encrypt = match trailer.get("Encrypt").and_then(|v| self.resolve(v)) {
+            Some(PdfValue::Dictionary(dict)) => dict.clone(),
+            _ => {
+                self.locked = Some(crate::crypt::CryptError::Unsupported(
+                    "/Encrypt names no dictionary".into(),
+                ));
+                return;
+            }
+        };
+        let id0 = match trailer.get("ID") {
+            Some(PdfValue::Array(ids)) => match ids.first() {
+                Some(PdfValue::String(s)) => crate::crypt::latin1_bytes(s),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let handler = match crate::crypt::SecurityHandler::authenticate(&encrypt, &id0, password) {
+            Ok(handler) => handler,
+            Err(error) => {
+                self.locked = Some(error);
+                return;
+            }
+        };
+        self.opened_with = Some(handler.opened_with);
+        for (&(num, gen), value) in self.objects.iter_mut() {
+            // The `/Encrypt` dictionary's own strings (`/O`, `/U`) are never
+            // ciphered.
+            if Some((num, gen)) == encrypt_ref {
+                continue;
+            }
+            handler.decrypt_object(num, gen, value);
+        }
     }
 
     /// Replace a stream's payload with the bytes `/Length` points at.
@@ -580,21 +677,30 @@ impl PdfDocument {
     pub fn extract(&self) -> Vec<ExtractedPage> {
         let mut page_nodes: Vec<&PdfValue> = Vec::new();
 
-        // Prefer the trailer's /Root; fall back to scanning for /Type /Catalog.
-        let mut root: Option<&PdfValue> = None;
-        for v in self.objects.values() {
-            if let Some(dict) = v.as_dict() {
-                let is_catalog = dict
-                    .get("Type")
+        // Prefer the trailer's /Root. A file whose trailer is lost or names no
+        // catalog — a damaged or truncated one — falls back to scanning for
+        // `/Type /Catalog`, taking the highest object number so that the choice
+        // is the same on every run (and is the newer catalog when an update
+        // added one).
+        let is_catalog = |value: &PdfValue| {
+            value.as_dict().is_some_and(|dict| {
+                dict.get("Type")
                     .and_then(|t| self.resolve(t))
                     .and_then(|t| t.as_name())
-                    == Some("Catalog");
-                if is_catalog {
-                    root = Some(v);
-                    break;
-                }
-            }
-        }
+                    == Some("Catalog")
+            })
+        };
+        let named = self
+            .root
+            .and_then(|id| self.objects.get(&id))
+            .filter(|value| is_catalog(value));
+        let root: Option<&PdfValue> = named.or_else(|| {
+            self.objects
+                .iter()
+                .filter(|(_, value)| is_catalog(value))
+                .max_by_key(|(id, _)| **id)
+                .map(|(_, value)| value)
+        });
 
         if let Some(root) = root {
             if let Some(pages) = root.as_dict().and_then(|d| d.get("Pages")) {
@@ -1332,6 +1438,9 @@ impl PdfDocument {
                         }
                     }
                 }
+                // The decryption already happened when the file was opened
+                // (`crate::crypt`); in the chain it is a no-op.
+                "Crypt" => {}
                 other => {
                     tracing::debug!("unsupported stream filter {other}; using raw bytes");
                     return raw.clone();
@@ -1544,8 +1653,11 @@ mod tests {
         PdfDocument {
             version: "1.4".to_string(),
             encrypted: false,
+            locked: None,
+            opened_with: None,
             objects: HashMap::new(),
             stream_offsets: HashMap::new(),
+            root: None,
         }
     }
 
