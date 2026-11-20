@@ -10,7 +10,7 @@ the known limitations — is [docs/history/progress-2026-11-19.md](docs/history/
 |---|---|---|---|
 | WS1 | Baseline on the right history | done | `finish-plan-2026-11` from `origin/main` (`e8e8267`); local `main` untouched |
 | WS2 | Native Windows suite green (`--no-default-features`) | done | `cargo test --workspace --no-default-features --no-fail-fast`: **1,063 passed, 0 failed, 14 ignored** (the OCR tests, ignored without the `ocr` feature); `cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings` clean; `cargo fmt --all --check` clean |
-| WS3 | CI-parity Linux run | done | `ubuntu:24.04` container, rustc 1.98.1, the `test.yml` packages: `cargo test --workspace --locked` **1,105 passed, 0 failed**; clippy `-D warnings` clean with and without default features; `cargo fmt --all --check` clean; `--list` counts **1,105**; compare gate (`--compare test-data/golden/docling`, `--ocr never`) exit 0, every document at or above the ratchet, 4 `.doc` not held (no LibreOffice) |
+| WS3 | CI-parity Linux run | done (re-run after the 2026-11-20 merge: 1,282 passed) | `ubuntu:24.04` container, rustc 1.98.1, the `test.yml` packages: `cargo test --workspace --locked` **1,105 passed, 0 failed**; clippy `-D warnings` clean with and without default features; `cargo fmt --all --check` clean; `--list` counts **1,105**; compare gate (`--compare test-data/golden/docling`, `--ocr never`) exit 0, every document at or above the ratchet, 4 `.doc` not held (no LibreOffice) |
 | WS4 | Encrypted PDFs: `--pdf-password` | done | `crypt_test` 5/5, `crypt` unit tests 4/4, CLI `encrypted_test` 6/6 (empty password, user and owner passwords, env var, missing and wrong password refused with nothing written); fixtures read back by Poppler `pdftotext -upw user` / `-opw owner` and refused with no password |
 | WS5 | Damaged PDFs and the `/Root` fix | done | `repair_test` 5/5: lying `startxref`, no xref/trailer, every offset shifted, truncation at 10/50/90%, an incremental update adding a new catalog read 8× with the same answer |
 | WS6 | The window's password | done | `the_pdf_password_travels_in_the_environment_only`, `no_password_adds_nothing_to_the_environment`, `the_page_sends_the_password_as_pdf_password` pass; field in `dist/index.html`, sent as `PDFE_PDF_PASSWORD` through `Job::spawn_with_env` |
@@ -48,3 +48,47 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   (`87636dd`).
 - Final runs: native 1,063 passed / 14 ignored / 0 failed; Linux 1,105 passed / 0 failed;
   clippy ×2, fmt and the compare gate green.
+
+### 2026-11-20 — merge of `origin/main`
+
+- `origin/main` moved on 2026-11-19 by 50 owner commits (`e8e8267..397168a`: shared
+  resource budgets and fuzz limits, decoded-stream reuse, CCITT G3/G4 and JBIG2 decoding,
+  redline mode, lint clean-up, 178 files). Merged with `git merge` (`1ceaaba`), not a
+  rebase, so the SHAs above stay valid. Local `main` still untouched.
+- Conflicts and how they were resolved (the owner's side wherever both solved the same
+  thing):
+  - `crates/pdf-parser/src/parser.rs`: the owner's `Limits`, deadline, document total and
+    decoded-stream cache kept whole; the password and `/Root` work joined through a new
+    `parse_with_limits_and_password` (with `parse`, `parse_with_password` and
+    `parse_with_limits` delegating to it). Decryption still runs after stream lengths are
+    honoured and before object streams are expanded, so the owner's cache only ever holds
+    plain bytes.
+  - `crates/cli/src/main.rs`: the owner's `read_input` and run budgets, with our password
+    and refusals in place of the old "cannot decrypt" bail.
+  - `crates/ui/src/main.rs`: the owner's start path, spawning through
+    `Job::spawn_with_env` so the password stays out of the argv.
+  - `crates/ods-parser`, `crates/md-exporter/src/chunks.rs`, the golden test tables and
+    `Cargo.lock`: the owner's versions (their own lint and fmt fixes); the lock regains our
+    `md-5`/`sha2`/`aes` entries.
+  - `crates/cli/tests/documentation_test.rs`: the owner's structured counts, plus our
+    feature-aware listing and the non-Unix `dead_code` allowance.
+  - `README.md`: our PDF text row (decryption, damaged files) beside the owner's new PDF
+    pictures row (CCITT, JBIG2).
+  - `plan.md`/`progress.md`: ours kept; the owner's latest versions archived as
+    `docs/history/plan-2026-11-19.md` and `docs/history/progress-2026-11-19.md`. Suite
+    facts updated to the merged suite: 1,282 / 130 / 43 (19 fixture checks) / 58.
+- What the merge broke, and the fix: four new owner tests read text by OCR
+  (`a_ccitt_or_jbig2_scan_is_read_end_to_end` and three animated-frame page-range tests)
+  and failed in a build without Tesseract; gated on the `ocr` feature like the others
+  (`f181351`).
+- Verification after the merge:
+  - Linux (`ubuntu:24.04`, rustc 1.98.1, the `test.yml` packages, a venv with
+    `docling-core==2.101.1` as `DOCLING_PY`, like CI): `cargo test --workspace --locked`
+    **1,282 passed, 0 failed**; `--list` **1,282**; clippy `-D warnings` clean with and
+    without default features; `cargo fmt --all --check` clean; compare gate exit 0, every
+    document at or above the ratchet (4 `.doc` not held, no LibreOffice).
+  - Windows (`--no-default-features`, no Tesseract): workspace run 1,220 passed with only
+    the 4 OCR tests above and `docling_core_accepts_our_documents` (no `DOCLING_PY` set)
+    failing; after the gating, `cargo test -p pdfextractor-cli --no-default-features`
+    with `DOCLING_PY` pointing at the local Python: **325 passed, 0 failed, 18 ignored**.
+    Native clippy (`--no-default-features`, `-D warnings`) and `cargo fmt --check` clean.

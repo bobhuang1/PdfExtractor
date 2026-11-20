@@ -19,6 +19,12 @@ links, footnotes and page furniture, DOCX merged cells and OMML→LaTeX, the win
 with its Compare mode, and a corpus ratchet that fails any document whose agreement
 with Docling falls. Releases build for Linux, Windows and macOS from a `v*` tag.
 
+**Merged 2026-11-20:** `origin/main` moved on 2026-11-19 by 50 owner commits (shared
+resource budgets and fuzz limits, decoded-stream reuse, CCITT G3/G4 and JBIG2 decoding,
+redline mode, lint clean-up). They were merged into this branch (`1ceaaba`, a merge, so
+the SHAs cited here stay valid), conflicts resolved toward the owner's code; see
+progress.md, *2026-11-20 — merge*. CCITT/JBIG2 decoding left the deferred list.
+
 **Found on 2026-11-19, before any change:**
 
 1. **This clone's `main` is stale.** The remote's history was rewritten on
@@ -123,7 +129,7 @@ Each is real work that is larger than a finishing pass, or needs measurement on 
 Linux OCR floors, or ML; the old plan's text for each is in
 [docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md).
 
-- OCR: deskew/despeckle preprocessing; CCITT G3/G4 and JBIG2 decoding; full-page OCR
+- OCR: deskew/despeckle preprocessing; full-page OCR
   of vector-only pages (rasteriser); non-English and fax fixtures.
 - PDF: outlines as a heading signal; table cells and spans; heuristic formula
   regions; a rotation angle on boxes; captions as furniture.
