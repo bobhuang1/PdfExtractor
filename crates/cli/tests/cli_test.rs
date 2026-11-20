@@ -1844,6 +1844,10 @@ fn a_rotated_scan_is_read_upright() {
 /// `ccitt_g3_2d_scan.pdf` is G3 two-dimensional (`/K 1`), and `jbig2_scan.pdf`
 /// carries its symbol dictionary in `/JBIG2Globals`.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_ccitt_or_jbig2_scan_is_read_end_to_end() {
     for (name, pages) in [
         ("ccitt_scan.pdf", 2),
