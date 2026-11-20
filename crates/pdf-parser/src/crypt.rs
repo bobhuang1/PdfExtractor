@@ -111,7 +111,10 @@ impl SecurityHandler {
         let o = bytes_of(encrypt.get("O")).unwrap_or_default();
         let u = bytes_of(encrypt.get("U")).unwrap_or_default();
         let p = int_of(encrypt.get("P")).unwrap_or(0) as i32;
-        let encrypt_metadata = !matches!(encrypt.get("EncryptMetadata"), Some(PdfValue::Boolean(false)));
+        let encrypt_metadata = !matches!(
+            encrypt.get("EncryptMetadata"),
+            Some(PdfValue::Boolean(false))
+        );
         let password = password.unwrap_or(b"");
 
         let (strings, streams, length) = match v {
@@ -149,7 +152,9 @@ impl SecurityHandler {
 
         match r {
             2..=4 => {
-                if let Some(key) = legacy_user(password, &o, &u, p, id0, r, length, encrypt_metadata) {
+                if let Some(key) =
+                    legacy_user(password, &o, &u, p, id0, r, length, encrypt_metadata)
+                {
                     return Ok(handler(key, "user password"));
                 }
                 // As the owner: algorithm 7 recovers the user password from /O.
@@ -180,11 +185,17 @@ impl SecurityHandler {
                 };
                 if hash(password, &u[32..40], b"")[..] == u[..32] {
                     let k = hash(password, &u[40..48], b"");
-                    return Ok(handler(aes256_cbc_no_iv_decrypt(&k, &ue[..32]), "user password"));
+                    return Ok(handler(
+                        aes256_cbc_no_iv_decrypt(&k, &ue[..32]),
+                        "user password",
+                    ));
                 }
                 if hash(password, &o[32..40], &u[..48])[..] == o[..32] {
                     let k = hash(password, &o[40..48], &u[..48]);
-                    return Ok(handler(aes256_cbc_no_iv_decrypt(&k, &oe[..32]), "owner password"));
+                    return Ok(handler(
+                        aes256_cbc_no_iv_decrypt(&k, &oe[..32]),
+                        "owner password",
+                    ));
                 }
                 Err(CryptError::WrongPassword)
             }
@@ -197,7 +208,8 @@ impl SecurityHandler {
     pub fn decrypt_object(&self, num: usize, gen: i32, value: &mut PdfValue) {
         if let PdfValue::Stream(dict, raw) = value {
             let kind = dict.get("Type").and_then(PdfValue::as_name);
-            let exempt = kind == Some("XRef") || (kind == Some("Metadata") && !self.encrypt_metadata);
+            let exempt =
+                kind == Some("XRef") || (kind == Some("Metadata") && !self.encrypt_metadata);
             if !exempt {
                 let method = match stream_crypt_filter(dict) {
                     Some(StreamFilter::Identity) => Method::Identity,
@@ -272,7 +284,9 @@ fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter>
         Some(PdfValue::Array(a)) => a.iter().find_map(PdfValue::as_dict),
         _ => None,
     };
-    let name = parms.and_then(|p| p.get("Name")).and_then(PdfValue::as_name);
+    let name = parms
+        .and_then(|p| p.get("Name"))
+        .and_then(PdfValue::as_name);
     Some(match name {
         None | Some("Identity") => StreamFilter::Identity,
         Some(_) => StreamFilter::Named,
@@ -281,7 +295,10 @@ fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter>
 
 /// The method a `/V 4`/`/V 5` handler names under `/StrF` or `/StmF`.
 fn crypt_filter(encrypt: &HashMap<String, PdfValue>, key: &str) -> Result<Method, CryptError> {
-    let name = encrypt.get(key).and_then(PdfValue::as_name).unwrap_or("Identity");
+    let name = encrypt
+        .get(key)
+        .and_then(PdfValue::as_name)
+        .unwrap_or("Identity");
     if name == "Identity" {
         return Ok(Method::Identity);
     }
@@ -298,7 +315,9 @@ fn crypt_filter(encrypt: &HashMap<String, PdfValue>, key: &str) -> Result<Method
         "V2" => Ok(Method::Rc4),
         "AESV2" => Ok(Method::Aes128),
         "AESV3" => Ok(Method::Aes256),
-        other => Err(CryptError::Unsupported(format!("crypt filter method /{other}"))),
+        other => Err(CryptError::Unsupported(format!(
+            "crypt filter method /{other}"
+        ))),
     }
 }
 
@@ -381,7 +400,12 @@ fn hash_2b(password: &[u8], salt: &[u8], udata: &[u8]) -> Vec<u8> {
     let mut round = 0usize;
     loop {
         let block: Vec<u8> = [password, &k, udata].concat();
-        let k1: Vec<u8> = block.iter().copied().cycle().take(block.len() * 64).collect();
+        let k1: Vec<u8> = block
+            .iter()
+            .copied()
+            .cycle()
+            .take(block.len() * 64)
+            .collect();
         let e = aes128_cbc_encrypt(&k[..16], &k[16..32], &k1);
         let m = e[..16].iter().map(|&b| b as u32).sum::<u32>() % 3;
         k = match m {
@@ -434,7 +458,10 @@ fn aes_cbc_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = cbc_decrypt(key, iv, body);
     if let Some(&n) = out.last() {
         let n = n as usize;
-        if (1..=16).contains(&n) && n <= out.len() && out[out.len() - n..].iter().all(|&b| b as usize == n) {
+        if (1..=16).contains(&n)
+            && n <= out.len()
+            && out[out.len() - n..].iter().all(|&b| b as usize == n)
+        {
             out.truncate(out.len() - n);
         }
     }

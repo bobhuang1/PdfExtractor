@@ -256,8 +256,7 @@ fn a_workbook_is_read_as_the_sheets_named() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("names no sheet")
-            && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
+        stderr.contains("names no sheet") && stderr.contains("(the workbook has 3 sheet(s); 1-3)"),
         "the refusal does not name the sheets there are: {stderr}"
     );
     assert!(!ws.join("none.json").exists(), "a refused run wrote a file");
@@ -286,7 +285,11 @@ fn a_presentation_is_read_as_the_slides_named() {
             "never",
         ]);
         let doc = json_of(&kept);
-        assert_eq!(page_numbers(&doc), vec![2], "{tag}: the range kept more than slide 2");
+        assert_eq!(
+            page_numbers(&doc),
+            vec![2],
+            "{tag}: the range kept more than slide 2"
+        );
         let texts = doc["texts"].as_array().expect("texts");
         assert!(
             texts
@@ -314,8 +317,7 @@ fn a_presentation_is_read_as_the_slides_named() {
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("names no slide")
-                && stderr.contains("(the deck has 3 slide(s); 1-3)"),
+            stderr.contains("names no slide") && stderr.contains("(the deck has 3 slide(s); 1-3)"),
             "{tag}: the refusal does not name the slides there are: {stderr}"
         );
         assert!(!none.exists(), "{tag}: a refused range still wrote a file");
@@ -370,8 +372,7 @@ fn an_out_of_range_frame_names_the_count_and_its_page_unit() {
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("names no page")
-                && stderr.contains("(the file has 3 page(s); 1-3)"),
+            stderr.contains("names no page") && stderr.contains("(the file has 3 page(s); 1-3)"),
             "{tag}: the refusal does not name the pages there are: {stderr}"
         );
         assert!(!output.exists(), "{tag}: a refused range wrote a file");

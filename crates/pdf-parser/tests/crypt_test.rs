@@ -42,7 +42,11 @@ fn an_empty_user_password_opens_without_asking() {
     assert!(doc.encrypted);
     assert_eq!(doc.locked, None);
     assert_eq!(doc.opened_with, Some("user password"));
-    assert!(page_text(&doc).contains("Secret ledger"), "{}", page_text(&doc));
+    assert!(
+        page_text(&doc).contains("Secret ledger"),
+        "{}",
+        page_text(&doc)
+    );
 }
 
 #[test]
@@ -52,8 +56,16 @@ fn every_handler_opens_with_the_user_password() {
         assert!(doc.encrypted, "{name}");
         assert_eq!(doc.locked, None, "{name}");
         assert_eq!(doc.opened_with, Some("user password"), "{name}");
-        assert!(page_text(&doc).contains("Secret ledger"), "{name}: {}", page_text(&doc));
-        assert_eq!(info_title(&doc).as_deref(), Some("Ciphered title"), "{name}: strings");
+        assert!(
+            page_text(&doc).contains("Secret ledger"),
+            "{name}: {}",
+            page_text(&doc)
+        );
+        assert_eq!(
+            info_title(&doc).as_deref(),
+            Some("Ciphered title"),
+            "{name}: strings"
+        );
     }
 }
 
@@ -73,7 +85,11 @@ fn a_missing_or_wrong_password_is_locked_and_reads_no_noise() {
         for password in [None, Some(&b"guess"[..])] {
             let doc = PdfDocument::parse_with_password(&fixture(name), password).expect("parse");
             assert!(doc.encrypted, "{name}");
-            assert_eq!(doc.locked, Some(CryptError::WrongPassword), "{name} {password:?}");
+            assert_eq!(
+                doc.locked,
+                Some(CryptError::WrongPassword),
+                "{name} {password:?}"
+            );
             assert_eq!(doc.opened_with, None);
         }
     }

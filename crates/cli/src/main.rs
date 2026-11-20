@@ -286,7 +286,12 @@ struct Args {
     /// opens one that asks nothing; a file that needs a password is refused by
     /// name. The `PDFE_PDF_PASSWORD` environment variable is read when the flag
     /// is absent, so a password need not appear in a process listing
-    #[arg(long, value_name = "PASSWORD", env = "PDFE_PDF_PASSWORD", hide_env_values = true)]
+    #[arg(
+        long,
+        value_name = "PASSWORD",
+        env = "PDFE_PDF_PASSWORD",
+        hide_env_values = true
+    )]
     pdf_password: Option<String>,
 
     /// When to run OCR on page images
@@ -1612,7 +1617,10 @@ fn convert_pdf(
     match &parsed.locked {
         None => {
             if let Some(opened_with) = parsed.opened_with {
-                tracing::info!("{}: encrypted PDF opened with the {opened_with}", path.display());
+                tracing::info!(
+                    "{}: encrypted PDF opened with the {opened_with}",
+                    path.display()
+                );
             }
         }
         Some(pdfextractor_pdf_parser::crypt::CryptError::WrongPassword) => {

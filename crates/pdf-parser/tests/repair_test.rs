@@ -59,7 +59,10 @@ fn a_file_with_no_xref_and_no_trailer_still_reads() {
         let end = rfind(&original, b"endobj").expect("an object") + b"endobj".len();
         let damaged = original[..end].to_vec();
         let expected = pages_text(&original);
-        assert!(!expected.concat().trim().is_empty(), "{name} has text to compare");
+        assert!(
+            !expected.concat().trim().is_empty(),
+            "{name} has text to compare"
+        );
         assert_eq!(pages_text(&damaged), expected, "{name}");
     }
 }
@@ -79,7 +82,11 @@ fn objects_moved_away_from_their_xref_offsets_still_read() {
 
 #[test]
 fn a_truncated_file_reads_what_it_still_holds_without_panicking() {
-    for name in ["real/basicapi.pdf", "real/tracemonkey.pdf", "real/irs_f1040.pdf"] {
+    for name in [
+        "real/basicapi.pdf",
+        "real/tracemonkey.pdf",
+        "real/irs_f1040.pdf",
+    ] {
         let original = fixture(name);
         for share in [10, 50, 90] {
             let cut = original.len() * share / 100;
@@ -108,7 +115,10 @@ fn the_newest_trailers_root_decides_the_page_tree() {
         ),
         (93, {
             let content = "BT /F1 12 Tf 20 100 Td (Revised page) Tj ET";
-            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            )
         }),
     ];
     let mut offsets = Vec::new();
@@ -133,6 +143,9 @@ fn the_newest_trailers_root_decides_the_page_tree() {
     for _ in 0..8 {
         let text = pages_text(&updated);
         assert_eq!(text.len(), 1, "{text:?}");
-        assert!(text[0].contains("Revised page"), "the old catalog was read: {text:?}");
+        assert!(
+            text[0].contains("Revised page"),
+            "the old catalog was read: {text:?}"
+        );
     }
 }

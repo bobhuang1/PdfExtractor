@@ -51,7 +51,7 @@ const CASES: &[&str] = &[
     "inventory_calc.ods",      // a workbook whose sheets are pages, its merge a span
     "brief_odt.odt",           // a Writer document: a flow with a picture, read as one
     "notes_odt.odt",           // a Writer document with a footnote and a table inside a cell
-    "q3_review_impress.odp",    // the deck as Impress saved it: slides, notes and comments
+    "q3_review_impress.odp",   // the deck as Impress saved it: slides, notes and comments
     "rtf_bitmap.rtf",          // a word processor's own RTF export, control words and all
 ];
 

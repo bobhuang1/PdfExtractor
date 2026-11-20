@@ -368,15 +368,16 @@ fn repeat_cell(
     }
 }
 
+/// An annotation's author (`dc:creator`), time (`dc:date`) and words.
+type AnnotationParts = (Option<String>, Option<String>, String);
+
 /// Read one `office:annotation`: its author, its time and its words.
 ///
 /// Calc writes a cell's comment as an `office:annotation` beside the cell's
 /// paragraphs, with the name in `dc:creator`, the time in `dc:date` and the
 /// words in one or more paragraphs joined by a newline. An annotation with no
 /// words is no remark and is not one.
-fn read_annotation(
-    pull: &mut Pull<'_>,
-) -> Result<Option<(Option<String>, Option<String>, String)>> {
+fn read_annotation(pull: &mut Pull<'_>) -> Result<Option<AnnotationParts>> {
     let mut author = None;
     let mut date = None;
     let mut paragraphs: Vec<String> = Vec::new();

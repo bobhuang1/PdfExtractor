@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-data").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-data")
+        .join(name)
 }
 
 fn out_path(tag: &str) -> PathBuf {
@@ -46,7 +48,10 @@ fn assert_read(name: &str, out: &PathBuf, output: &Output) {
         String::from_utf8_lossy(&output.stderr)
     );
     let json = std::fs::read_to_string(out).expect("a document was written");
-    assert!(json.contains("Secret ledger"), "{name}: the page text is not plain:\n{json}");
+    assert!(
+        json.contains("Secret ledger"),
+        "{name}: the page text is not plain:\n{json}"
+    );
     let _ = std::fs::remove_file(out);
 }
 
@@ -57,8 +62,14 @@ fn assert_refused(name: &str, out: &PathBuf, output: &Output, says: &str) {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("encrypted"), "{name}: {stderr}");
-    assert!(stderr.contains(says), "{name}: expected {says:?} in {stderr}");
-    assert!(!out.exists(), "{name}: a refused run wrote a document anyway");
+    assert!(
+        stderr.contains(says),
+        "{name}: expected {says:?} in {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "{name}: a refused run wrote a document anyway"
+    );
 }
 
 #[test]
@@ -76,7 +87,10 @@ fn the_fixture_is_really_an_encrypted_pdf() {
             text.contains("/Encrypt") && text.contains("/Filter /Standard"),
             "{name}: the fixture states no standard security handler"
         );
-        assert!(!text.contains("Secret ledger"), "{name}: the page text is in the clear");
+        assert!(
+            !text.contains("Secret ledger"),
+            "{name}: the page text is in the clear"
+        );
     }
 }
 
@@ -118,6 +132,11 @@ fn a_missing_password_is_refused_by_name_and_says_how_to_give_one() {
 #[test]
 fn a_wrong_password_is_refused_by_name() {
     let out = out_path("wrong");
-    let output = run("encrypted_rc4_128.pdf", &out, &["--pdf-password", "guess"], None);
+    let output = run(
+        "encrypted_rc4_128.pdf",
+        &out,
+        &["--pdf-password", "guess"],
+        None,
+    );
     assert_refused("encrypted_rc4_128.pdf", &out, &output, "does not open it");
 }

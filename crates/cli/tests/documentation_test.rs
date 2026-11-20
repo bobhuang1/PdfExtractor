@@ -49,6 +49,10 @@ fn listed_tests(root: &Path, args: &[&str]) -> Vec<String> {
     let output = Command::new(cargo)
         .current_dir(root)
         .args(args)
+        // List with the features this test was built with: a build without
+        // Tesseract cannot compile the default (OCR) feature set. The lists are
+        // the same either way — an OCR test is ignored there, not removed.
+        .args((!cfg!(feature = "ocr")).then_some("--no-default-features"))
         .args(["--locked", "--", "--list"])
         .output()
         .unwrap_or_else(|error| {

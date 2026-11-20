@@ -43,7 +43,7 @@ const CASES: &[&str] = &[
     "chart_deck.pptx",   // a deck whose only picture is a chart, so nothing is written for it
     "inventory.xlsx",    // a workbook: a `sheet` group per worksheet, a merge, a hidden sheet
     "inventory_calc.ods", // the same workbook as an OpenDocument package: those sheets again
-    "brief_odt.odt",    // a Writer document: the brief as a package, its flow and picture
+    "brief_odt.odt",     // a Writer document: the brief as a package, its flow and picture
     "notes_odt.odt",     // the same reader's footnote and table inside a cell: notes and nesting
     "q3_review_impress.odp", // the deck as Impress saved it: slides, notes and comments
     "rtf_bitmap.rtf",    // a word processor's own RTF export: a heading, paragraphs, a picture
