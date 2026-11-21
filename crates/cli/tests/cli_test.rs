@@ -1785,6 +1785,10 @@ fn a_missing_input_errors() {
 /// page before Tesseract sees it, so the same invoice comes back upright,
 /// with its boxes in the turned page's space.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_rotated_scan_is_read_upright() {
     let ws = Workspace::new("rotated");
     let input = repository_root().join("test-data/scanned_rotated.pdf");
@@ -1840,6 +1844,10 @@ fn a_rotated_scan_is_read_upright() {
 /// `ccitt_g3_2d_scan.pdf` is G3 two-dimensional (`/K 1`), and `jbig2_scan.pdf`
 /// carries its symbol dictionary in `/JBIG2Globals`.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_ccitt_or_jbig2_scan_is_read_end_to_end() {
     for (name, pages) in [
         ("ccitt_scan.pdf", 2),
@@ -1964,6 +1972,10 @@ fn pdf_of_image(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// text layer at all, so the picture is the page, and turning it upright is the
 /// only way its text can be read.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_sideways_scan_with_no_page_rotation_is_read_upright() {
     let ws = Workspace::new("sideways-scan");
     let jpeg = std::fs::read(repository_root().join("test-data/photos/07_sideways.jpg"))
@@ -2332,6 +2344,10 @@ fn a_picture_bullet_in_a_list_is_a_picture_of_its_drawing() {
 /// and to no other frame's. The pages are all the screen's size, at the 72 dpi
 /// a GIF's missing resolution means.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_animated_gif_is_a_page_per_frame() {
     let ws = Workspace::new("animated-gif");
     let bytes = std::fs::read(repository_root().join("test-data/images/turning.gif"))
@@ -2391,6 +2407,10 @@ fn an_animated_gif_is_a_page_per_frame() {
 /// and to no other frame's. The pages are the canvas's size, at the 72 dpi a
 /// WebP's missing resolution means.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_animated_webp_is_a_page_per_frame() {
     let ws = Workspace::new("animated-webp");
     let bytes = std::fs::read(repository_root().join("test-data/images/turning.webp"))
@@ -2458,6 +2478,10 @@ fn an_animated_webp_is_a_page_per_frame() {
 /// own two lines and no other page's, and to line boxes that are horizontal and
 /// inside the page — which only upright pixels give.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_animated_webps_exif_orientation_turns_every_frame() {
     let ws = Workspace::new("turned-animated-webp");
     let bytes = std::fs::read(repository_root().join("test-data/images/turning_turned.webp"))
@@ -2551,6 +2575,10 @@ fn an_animated_webps_exif_orientation_turns_every_frame() {
 /// shape so a page measured from the first one cannot pass. A one-directory TIFF
 /// is still the one page it always was.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_multiframe_tiff_is_a_page_per_frame() {
     let ws = Workspace::new("multipage-tiff");
     let bytes = std::fs::read(repository_root().join("test-data/images/pages.tiff"))
@@ -2713,6 +2741,10 @@ fn a_tiffs_sheets_are_turned_by_their_own_orientation_tags() {
 ///   if the engine was handed upright pixels — sideways ones give no such
 ///   lines.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_tiffs_turned_sheets_are_read_upright_by_ocr() {
     let ws = Workspace::new("turned-tiff-ocr");
     let bytes = std::fs::read(repository_root().join("test-data/images/pages_turned.tiff"))
@@ -2847,7 +2879,6 @@ fn an_svg_picture_stated_in_an_svg_blip_is_the_drawing_not_its_png_fallback() {
             drawing_xml.contains("svgBlip") && drawing_xml.contains("r:embed"),
             "{fixture}: the drawing does not state an SVG beside its raster"
         );
-        drop(read_part);
         assert!(
             archive.by_name(fallback).is_ok(),
             "{fixture}: the PNG fallback the extension sits beside is gone"
@@ -7998,6 +8029,10 @@ fn a_layouts_colour_background_stops_the_masters_picture() {
 /// `--ocr-lang` and `--psm` are checked before work starts, and a real mode
 /// still recognises a real scan.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn ocr_languages_and_page_segmentation_are_checked() {
     let ws = Workspace::new("ocrflags");
     let hello = ws.copy_from_corpus("../hello.pdf", "hello.pdf");
@@ -11534,6 +11569,10 @@ fn assert_pictures(
 /// pixel grid at the resolution the file declares (150 dpi), not an arbitrary
 /// canvas; the origin names the image's own media type.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_image_becomes_one_page_read_by_ocr() {
     let ws = Workspace::new("image");
     let fixture = repository_root().join("test-data/invoice_scan.png");
@@ -11666,6 +11705,10 @@ fn every_image_encoding_writes_its_own_page() {
 /// `hayro-jpeg2000` has registered itself, and a GIF is not decoded by
 /// Tesseract's loader, so this also proves the OCR path found the pixels.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_jp2_or_a_gif_is_one_page_read_by_ocr_like_a_webp() {
     let ws = Workspace::new("jp2-page");
     let mut documents = Vec::new();

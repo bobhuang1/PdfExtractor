@@ -361,7 +361,7 @@ fn start_conversion(
 
     let program = locate_cli();
     let args = settings.to_args();
-    let (job, stdout, stderr) = Job::spawn(&program, &args)?;
+    let (job, stdout, stderr) = Job::spawn_with_env(&program, &args, &settings.child_env())?;
     // A bad-form self-test must not get here. Say so on the process's own
     // output, so the test does not have to infer it from an event that may
     // still be in flight when the page reports back.

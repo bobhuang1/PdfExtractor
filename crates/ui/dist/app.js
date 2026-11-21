@@ -52,6 +52,9 @@ function readSettings() {
     parallel: Number(el("parallel").value) || 1,
     recursive: el("recursive").checked,
     pageRange: el("page-range").value.trim(),
+    // Sent to the CLI through its environment, never its arguments; not trimmed,
+    // since a space can be part of a password.
+    pdfPassword: el("pdf-password").value,
     textDehyphenate: el("text-dehyphenate").checked,
     includeNotes: el("include-notes").checked,
     imageExportMode: el("image-export-mode").value,
@@ -89,6 +92,7 @@ function describe(settings) {
     `OCR ${settings.ocr}`,
   ];
   if (settings.pageRange) bits.push(`pages ${settings.pageRange}`);
+  if (settings.pdfPassword) bits.push("PDF password set");
   if (settings.ocrLang !== "eng") bits.push(`langs ${settings.ocrLang}`);
   if (settings.psm !== null) bits.push(`PSM ${settings.psm}`);
   if (settings.to.length) bits.push(`also ${settings.to.join("+")}`);
