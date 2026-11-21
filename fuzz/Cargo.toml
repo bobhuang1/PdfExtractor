@@ -50,6 +50,12 @@ path = "fuzz_targets/image.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "budgets"
+path = "fuzz_targets/budgets.rs"
+test = false
+doc = false
+
 [profile.release]
 debug = true
 

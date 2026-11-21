@@ -10,6 +10,7 @@ and libFuzzer, so they live outside the product workspace and are not part of
 | `zip` | The shared ZIP/XML gate, then DOCX, XLSX, PPTX, ODT, ODS or ODP according to the package's own parts. |
 | `xml` | XML size, nesting depth, DOCTYPE/entity rejection and the XML deadline. |
 | `image` | Image header limits, guarded decode, GIF/WebP/TIFF frame budgets and image deadlines. |
+| `budgets` | All four gates above at once, under `Limits` read from the input's own first 16 bytes instead of `FUZZ_*`: ceilings small enough to sit under a real document, so the refusal paths are fuzzed too. |
 
 Seed them with the committed fixtures; the real corpus is useful too:
 
@@ -24,6 +25,11 @@ cp fuzz/artifacts/pdf/* fuzz/corpus/pdf/
 cp test-data/*.docx test-data/*.xlsx test-data/*.pptx test-data/*.odt fuzz/corpus/zip/ 2>/dev/null || true
 cp test-data/*.png test-data/*.jpg test-data/*.tif fuzz/corpus/image/ 2>/dev/null || true
 printf '<a><b/></a>' > fuzz/corpus/xml/basic.xml
+# `budgets` reads its ceilings from the first 16 bytes, so a headered fixture
+# seeds a real document and the widest derived budgets in one input.
+mkdir -p fuzz/corpus/budgets
+{ printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'; cat test-data/hello.pdf; } > fuzz/corpus/budgets/hello.pdf
+{ printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'; cat test-data/brief.docx; } > fuzz/corpus/budgets/brief.docx
 ```
 
 Run one target for a bounded time:
@@ -33,7 +39,26 @@ cargo +nightly fuzz run pdf -- -max_total_time=60
 cargo +nightly fuzz run zip -- -max_total_time=60
 cargo +nightly fuzz run xml -- -max_total_time=60
 cargo +nightly fuzz run image -- -max_total_time=60
+cargo +nightly fuzz run budgets -- -max_total_time=60
 ```
+
+## Budgets read from the input
+
+`budgets` does not read `FUZZ_*`. It takes its `Limits` from the input's own
+first 16 bytes (`pdfextractor_fuzz::limits_from`): each byte is scaled into a
+range that sits under a real document — input 0–64 KiB, PDF objects 0–64, tokens
+0–4096, nesting 0–8, decoded stream 0–1 MiB, ZIP 0–16 entries, XML 0–64 KiB and
+0–16 deep, image 0–65,536 pixels, document total 0–4 MiB, the three clocks 0–100
+ms — and the rest of the input is the document handed to the PDF, ZIP, XML and
+image readers. The totals and the clocks share a header byte with the size they
+bound, because sixteen bytes cannot give each of the twenty-two budgets one.
+
+A run therefore fuzzes the refusal side of every ceiling with no environment set:
+the mutation that grows a document also moves the budget that governs it. A zero
+header is a valid input and refuses everything, which is a boundary the scale is
+meant to reach; an input shorter than the header keeps the product defaults and
+is read whole. The four format targets keep their `FUZZ_*` recipe, where a
+lowered pass is a deliberate, repeatable measurement rather than a mutation.
 
 A finding is written under `fuzz/artifacts/<target>/`; reproduce it with
 `cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`.

@@ -10,7 +10,7 @@ Build a PDF and DOCX/DOC extractor similar to Docling, outputting documents in D
 
 > **Status:** this file is the forward-looking plan. For what is actually built, tested and
 > verified (with commands and results), see [progress.md](progress.md). Current state:
-> the workspace builds with zero warnings, the suite holds 1,261 tests, and PDF, DOCX, legacy `.doc`,
+> the workspace builds with zero warnings, the suite holds 1,263 tests, and PDF, DOCX, legacy `.doc`,
 > RTF, HTML, Markdown, plain text and CSV all convert to Docling JSON end to end.
 > **A Tauri UI wraps the CLI**: one file/folder picker and one settings panel, verified by
 > a `--selftest` that drives window, webview, IPC and a real conversion.
@@ -1126,8 +1126,8 @@ in parallel.
 ### Untrusted input budgets
 - **Done**: `crates/limits` defines the default budgets for input size, page count, PDF objects and nesting, decoded streams, ZIP entries/sizes/ratios, XML size and nesting, image pixels/frames and a 30-second parser deadline. The PDF, all six OOXML/ODF readers, the XML gate and the image reader apply them; `PdfDocument::extract_checked` reports a refusal instead of a short page list.
 - Fuzz targets for PDF, ZIP, XML and images are in `fuzz/` (`cargo-fuzz`, outside the workspace). The two PDF crashes they found are committed under `fuzz/artifacts/pdf/` and replayed by `crates/pdf-parser/tests/fuzz_regressions_test.rs`.
-- **Done**: every budget a run is likely to raise is a flag — `--max-input-bytes`, `--max-pages`, the image, ZIP, XML, flow-block, decoded-stream and document-total ceilings, `--timeout` and `--ocr-timeout` — so a refusal names the flag that would have avoided it, and the README's resource-limits section is the table. OCR time is budgeted apart from parsing (`--ocr-timeout`, 600 seconds) because recognition is seconds a page, which answers the question this line used to leave open.
-- Still open: the PDF object, token and nesting budgets and the LibreOffice bridge's output ceiling and clock are `Limits` fields with no flag yet, and the desktop window offers no budget fields — a run started from it uses the defaults.
+- **Done**: every budget a run is likely to raise is a flag — `--max-input-bytes`, `--max-pages`, the PDF object, token and nesting ceilings, the image, ZIP, XML, flow-block, decoded-stream and document-total ceilings, the bridge's output ceiling and clock, `--timeout` and `--ocr-timeout` — so a refusal names the flag that would have avoided it, and the README's resource-limits section is the table. OCR time is budgeted apart from parsing (`--ocr-timeout`, 600 seconds) because recognition is seconds a page, which answers the question this line used to leave open.
+- Still open: the desktop window offers no budget fields — a run started from it uses the defaults.
 
 ### Cross-Platform
 - Use platform-agnostic APIs (std + crates). wgpu handles GPU differences.

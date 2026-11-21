@@ -63,8 +63,11 @@ pub struct ExtractedPage {
 /// CMaps are all far smaller; a page image is decoded once anyway.
 const DECODED_CACHE_STREAM_BYTES: usize = 1 << 20;
 
-/// The most the reused decodes may hold in total. A document whose streams do
-/// not fit is only slower, never wrong.
+/// The most the reused decodes may hold in total, when the run's document
+/// budget allows more than this. The cache is capped at the smaller of the two:
+/// it is memory held on a document's behalf, so a run that lets a document
+/// expand to a few kilobytes may not keep 64 MiB of decodes for reuse. A
+/// document whose streams do not fit is only slower, never wrong.
 const DECODED_CACHE_BYTES: usize = 64 << 20;
 
 #[derive(Debug)]
@@ -1698,9 +1701,13 @@ impl PdfDocument {
         self.decodes.set(self.decodes.get() + 1);
         self.charge_document(data.len() as u64, key);
         if let Some(key) = key {
+            // Reuse is memory this run holds, so it may not outgrow what the
+            // run let a document expand to: the cap is the document budget
+            // whenever that is the smaller of the two.
+            let budget = usize::try_from(self.limits.max_document_bytes).unwrap_or(usize::MAX);
+            let cap = DECODED_CACHE_BYTES.min(budget);
             let held = self.decoded_bytes.get();
-            if data.len() <= DECODED_CACHE_STREAM_BYTES && held + data.len() <= DECODED_CACHE_BYTES
-            {
+            if data.len() <= DECODED_CACHE_STREAM_BYTES && held + data.len() <= cap {
                 let mut decoded = self.decoded.borrow_mut();
                 if let std::collections::hash_map::Entry::Vacant(entry) = decoded.entry(key) {
                     entry.insert(data.clone());
@@ -2052,6 +2059,25 @@ mod tests {
         assert_eq!(doc.decode_stream(&stream).len(), 64);
         assert_eq!(doc.decode_stream(&stream).len(), 64);
         assert_eq!(doc.decodes.get(), 1, "the second read inflated again");
+    }
+
+    /// The cache is memory the run holds on a document's behalf, so a run that
+    /// allows a document a kilobyte may not keep 64 MiB of decodes: the cap is
+    /// the document budget when that is the smaller of the two.
+    #[test]
+    fn a_small_document_budget_caps_the_reuse_cache() {
+        let mut doc = document();
+        doc.limits.max_document_bytes = 1_000;
+        let first = PdfValue::Stream(HashMap::new(), vec![b'A'; 700]);
+        let second = PdfValue::Stream(HashMap::new(), vec![b'B'; 700]);
+        assert_eq!(doc.decode_stream(&first).len(), 700);
+        assert_eq!(doc.decode_stream(&second).len(), 700);
+        assert_eq!(
+            doc.decoded_bytes.get(),
+            700,
+            "the second decode was kept past the document budget"
+        );
+        assert_eq!(doc.decoded.borrow().len(), 1);
     }
 
     /// Two streams are two expansions: the free re-read is for the same stream

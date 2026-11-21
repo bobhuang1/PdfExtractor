@@ -224,6 +224,20 @@ struct Args {
     #[arg(long, value_name = "N")]
     max_pages: Option<usize>,
 
+    /// The most indirect objects a PDF may hold (default 250000)
+    #[arg(long, value_name = "N")]
+    max_pdf_objects: Option<usize>,
+
+    /// The most lexical tokens a PDF may present (default 4000000); bounds the
+    /// parser's token vector
+    #[arg(long, value_name = "N")]
+    max_pdf_tokens: Option<usize>,
+
+    /// The deepest PDF array, dictionary or page tree the parser will descend
+    /// (default 64)
+    #[arg(long, value_name = "N")]
+    max_pdf_nesting: Option<usize>,
+
     /// The largest image grid a picture may have, in pixels (default 100000000)
     #[arg(long, value_name = "N")]
     max_image_pixels: Option<u64>,
@@ -286,6 +300,17 @@ struct Args {
     /// of them adds up to
     #[arg(long, value_name = "N")]
     max_document_bytes: Option<u64>,
+
+    /// The largest file one LibreOffice bridge conversion may hand back, in
+    /// bytes (default 536870912): the bridge reads a small file and can write a
+    /// huge one, which no check on the original would catch
+    #[arg(long, value_name = "N")]
+    max_bridge_output_bytes: Option<u64>,
+
+    /// The wall-clock budget for one LibreOffice bridge conversion, in seconds
+    /// (default 120). A conversion that outlives it is stopped and refused
+    #[arg(long, value_name = "SECONDS")]
+    bridge_timeout: Option<f64>,
 
     /// The wall-clock budget for one document's reading, in seconds (default
     /// 30). A read that outlives it is refused rather than finished
@@ -435,6 +460,15 @@ fn install_budgets(args: &Args) {
     if let Some(pages) = args.max_pages {
         limits.max_pages = pages;
     }
+    if let Some(objects) = args.max_pdf_objects {
+        limits.max_pdf_objects = objects;
+    }
+    if let Some(tokens) = args.max_pdf_tokens {
+        limits.max_pdf_tokens = tokens;
+    }
+    if let Some(depth) = args.max_pdf_nesting {
+        limits.max_pdf_nesting = depth;
+    }
     if let Some(pixels) = args.max_image_pixels {
         limits.max_image_pixels = pixels;
     }
@@ -474,6 +508,12 @@ fn install_budgets(args: &Args) {
     if let Some(bytes) = args.max_document_bytes {
         limits.max_document_bytes = bytes;
     }
+    if let Some(bytes) = args.max_bridge_output_bytes {
+        limits.max_bridge_output_bytes = bytes;
+    }
+    if let Some(seconds) = args.bridge_timeout {
+        limits.bridge_timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
+    }
     if let Some(seconds) = args.timeout {
         limits.timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
     }
@@ -508,8 +548,7 @@ fn error_kind(error: &anyhow::Error) -> &'static str {
 /// The flag that would raise the budget a refusal ran out of.
 ///
 /// `None` for a refusal no flag here raises: a malformed part, a `DOCTYPE`, an
-/// empty image, and the PDF's object, token and nesting ceilings, which the
-/// command line does not expose.
+/// empty image, and a corrupt package.
 fn raise_flag(error: &anyhow::Error) -> Option<&'static str> {
     use pdfextractor_limits::LimitError;
     let refusal = error
@@ -518,6 +557,9 @@ fn raise_flag(error: &anyhow::Error) -> Option<&'static str> {
     Some(match refusal {
         LimitError::InputTooLarge { .. } => "--max-input-bytes",
         LimitError::TooManyPages { .. } => "--max-pages",
+        LimitError::TooManyPdfObjects { .. } => "--max-pdf-objects",
+        LimitError::TooManyPdfTokens { .. } => "--max-pdf-tokens",
+        LimitError::PdfTooDeep { .. } => "--max-pdf-nesting",
         LimitError::DecodedStreamTooLarge { .. } => "--max-decoded-stream-bytes",
         LimitError::TooManyZipEntries { .. } => "--max-zip-entries",
         LimitError::ZipEntryTooLarge { .. } => "--max-zip-entry-bytes",
@@ -531,9 +573,14 @@ fn raise_flag(error: &anyhow::Error) -> Option<&'static str> {
         LimitError::TooManyImageFrames { .. } => "--max-image-frames",
         LimitError::TooManyFlowBlocks { .. } => "--max-flow-blocks",
         LimitError::DocumentTooLarge { .. } => "--max-document-bytes",
-        // The OCR deadline is checked between pages, so its refusal carries
-        // that stage; every other deadline is the parser's `--timeout`.
+        LimitError::BridgeOutputTooLarge { .. } => "--max-bridge-output-bytes",
+        // Three deadlines share the `Timeout` variant, and the stage is what
+        // tells them apart: recognition between pages, the bridge's conversion,
+        // and everything else, which is the parser's own `--timeout`.
         LimitError::Timeout { stage, .. } if stage == "recognising a page" => "--ocr-timeout",
+        LimitError::Timeout { stage, .. } if stage == "the LibreOffice bridge" => {
+            "--bridge-timeout"
+        }
         LimitError::Timeout { .. } => "--timeout",
         _ => return None,
     })
@@ -2230,9 +2277,9 @@ fn convert_pdf(
                 // page before recognition, so its lines come back upright, in
                 // the displayed space the target box is measured in.
                 let rotated = if page.rotation != 0 {
-                    rotate_for_ocr(data, page.rotation)
+                    rotate_for_ocr(data, page.rotation, &budgets())
                 } else if turn != QuarterTurn::AsStored {
-                    rotate_for_ocr(data, turn.degrees())
+                    rotate_for_ocr(data, turn.degrees(), &budgets())
                 } else {
                     None
                 };
@@ -3960,7 +4007,7 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     if declared == pdfextractor_image_parser::Orientation::Normal
         && detected != QuarterTurn::AsStored
     {
-        match rotate_for_ocr(source, detected.degrees()) {
+        match rotate_for_ocr(source, detected.degrees(), &budgets()) {
             Some((png, _, _)) => {
                 upright = Some(png);
                 applied = detected;
@@ -4027,7 +4074,8 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
                 (None, false)
             } else {
                 (
-                    rotate_for_ocr(&frame.data, applied.degrees()).map(|(png, _, _)| png),
+                    rotate_for_ocr(&frame.data, applied.degrees(), &budgets())
+                        .map(|(png, _, _)| png),
                     applied.swaps_axes(),
                 )
             };
@@ -5254,11 +5302,16 @@ fn picture_is_page(bbox: [f64; 4], page_width: f64, page_height: f64) -> bool {
 /// The same bitmap, turned clockwise by `degrees` — the turn the viewer gives
 /// the page. PNG out, lossless: recognition sees exactly the pixels a reader
 /// would, upright, and the boxes it reports are in the displayed space the
-/// target box is measured in. `None` when the image cannot be decoded at all,
-/// in which case Tesseract's own decoder gets the original bytes and its
-/// error policy applies.
-fn rotate_for_ocr(data: &[u8], degrees: i32) -> Option<(Vec<u8>, u32, u32)> {
-    let bitmap = pdfextractor_image_parser::decode(data)?;
+/// target box is measured in. `None` when the image cannot be decoded, which
+/// includes the run's image budgets refusing it: the turn is one more decode,
+/// so `--max-image-pixels` governs it as it governs every other. Tesseract's
+/// own decoder then gets the original bytes and its error policy applies.
+fn rotate_for_ocr(
+    data: &[u8],
+    degrees: i32,
+    limits: &pdfextractor_limits::Limits,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let bitmap = pdfextractor_image_parser::decode_checked(data, limits).ok()?;
     let turned = match degrees {
         90 => bitmap.rotate90(),
         180 => bitmap.rotate180(),
@@ -6014,14 +6067,14 @@ mod tests {
         // samples of the same variant, fails here. A variant with no sample is a
         // compile error first — `limit_error_variant` has no wildcard arm.
         // The flag each sample's refusal names, in variant order: every budget
-        // the command line exposes has one, and the malformed-input and
-        // unexposed-ceiling variants have none.
+        // the command line exposes has one, and the malformed-input variants
+        // have none.
         let flags: [Option<&str>; 25] = [
             Some("--max-input-bytes"),
             Some("--max-pages"),
-            None, // PDF objects: not a flag
-            None, // PDF tokens: not a flag
-            None, // PDF nesting: not a flag
+            Some("--max-pdf-objects"),
+            Some("--max-pdf-tokens"),
+            Some("--max-pdf-nesting"),
             Some("--max-decoded-stream-bytes"),
             Some("--max-zip-entries"),
             Some("--max-zip-entry-bytes"),
@@ -6040,7 +6093,7 @@ mod tests {
             Some("--max-image-frames"),
             Some("--max-flow-blocks"),
             Some("--max-document-bytes"),
-            None, // the bridge's output ceiling: not a flag
+            Some("--max-bridge-output-bytes"),
             Some("--timeout"),
         ];
 
@@ -6058,6 +6111,15 @@ mod tests {
                 flags[position],
                 "the refusal at {position} names the wrong flag"
             );
+            // The mapping is what the run prints, not just what it returns: a
+            // refusal's suffix has to name the same flag.
+            if let Some(flag) = flags[position] {
+                let hint = flag_hint(&error);
+                assert!(
+                    hint.contains(flag),
+                    "the refusal at {position} does not offer {flag}: {hint}"
+                );
+            }
         }
 
         // The OCR deadline is a different budget from the parser's, and its
@@ -6070,11 +6132,46 @@ mod tests {
         assert_eq!(raise_flag(&ocr), Some("--ocr-timeout"));
         assert!(flag_hint(&ocr).contains("--ocr-timeout"));
 
+        // The bridge's deadline is a third budget behind the same variant.
+        let bridge = anyhow::Error::new(pdfextractor_limits::LimitError::Timeout {
+            stage: "the LibreOffice bridge".to_string(),
+            elapsed: std::time::Duration::from_secs(1),
+            limit: std::time::Duration::from_secs(1),
+        });
+        assert_eq!(raise_flag(&bridge), Some("--bridge-timeout"));
+        assert!(flag_hint(&bridge).contains("--bridge-timeout"));
+
         assert_eq!(EXIT_LIMIT_REFUSED, 3, "the refusal exit code moved");
         // The other kind: a file that cannot be read is not a refusal, so it
         // exits through the ordinary error path.
         let ordinary = anyhow::anyhow!("not a DOCX (ZIP) package");
         assert_eq!(error_kind(&ordinary), "error");
         assert!(!is_limit_refusal(&ordinary));
+    }
+
+    /// The OCR page turn is a decode like any other, so the run's image budgets
+    /// govern it. A ceiling of one pixel refuses a 2x2 page, and the same bytes
+    /// turn at the defaults: the refusal is the budget's, not the picture's.
+    #[test]
+    fn a_one_pixel_ceiling_refuses_the_page_turn() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode the test picture");
+
+        let limits = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        assert!(
+            rotate_for_ocr(&png, 90, &limits).is_none(),
+            "a one-pixel ceiling turned a 2x2 page"
+        );
+
+        let (turned, width, height) =
+            rotate_for_ocr(&png, 90, &pdfextractor_limits::Limits::default())
+                .expect("the defaults decode a 2x2 page");
+        assert_eq!((width, height), (2, 2));
+        assert!(!turned.is_empty(), "the turn wrote no PNG");
     }
 }
