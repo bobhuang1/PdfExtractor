@@ -25,6 +25,14 @@ redline mode, lint clean-up). They were merged into this branch (`1ceaaba`, a me
 the SHAs cited here stay valid), conflicts resolved toward the owner's code; see
 progress.md, *2026-11-20 — merge*. CCITT/JBIG2 decoding left the deferred list.
 
+**Merged 2026-11-21:** `origin/main` then gained this finish round itself
+(`397168a..0642d2d`: the standard security handler and `--pdf-password`, the
+trailer-`/Root` repair, the window's password field, this plan). Merged as
+`1fdb79d` together with the budget-flag work (`f593eac`); only `plan.md`
+conflicted, and the owner's rewrite was kept whole (the old plan stays in
+`docs/history/`). The suite facts below are the merged tree's, and the review
+of the merge is logged in progress.md, *2026-11-21*.
+
 **Found on 2026-11-19, before any change:**
 
 1. **This clone's `main` is stale.** The remote's history was rewritten on
@@ -108,16 +116,16 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,282 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
-There are 130 end-to-end tests in `cli_test` that run the built binary as a child process.
+The workspace builds with zero warnings, and the suite holds 1,287 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+There are 131 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
 ## Blocked — needs a decision only the owner can make
 
-- **Local `main` vs `origin/main`.** Resetting local `main` to `origin/main` (or
-  deleting it) is the owner's call; nothing here pushes, and `finish-plan-2026-11`
-  is based on `origin/main`, so it fast-forwards onto the remote.
+- **Pushing `main`.** It is `origin/main` plus the two local commits `f593eac`
+  (budget flags and the derived-limits fuzz target) and `1fdb79d` (the merge);
+  nothing here pushes without the owner asking.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.

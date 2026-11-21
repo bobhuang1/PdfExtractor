@@ -92,3 +92,44 @@ local `main`, signing, macOS, releasing) and *Deferred*.
     failing; after the gating, `cargo test -p pdfextractor-cli --no-default-features`
     with `DOCLING_PY` pointing at the local Python: **325 passed, 0 failed, 18 ignored**.
     Native clippy (`--no-default-features`, `-D warnings`) and `cargo fmt --check` clean.
+
+### 2026-11-21 — merge 397168a..0642d2d and the review round
+
+- `origin/main` moved by nine commits: the standard security handler and
+  `--pdf-password`, the trailer-`/Root` repair and its measurements, the window's
+  password field, the plan rewrite and the lint/fmt/OCR-feature fixes. Merged as
+  `1fdb79d` on top of the budget-flag work (`f593eac`). The only conflict was
+  `plan.md`; the owner's rewrite was taken whole (the old plan stays archived in
+  `docs/history/`).
+- Suite facts after the merge: the workspace lists **1,285** tests — 1,282 from the
+  merged tree, the two budget tests from `f593eac`, and one new crypt unit test.
+  `plan.md` states 1,285 and `documentation_test` is green.
+- Full workspace run (`DOCLING_SKIP_ORACLE=1 cargo test --workspace --locked
+  --no-fail-fast`): every target passed except **one** UI test,
+  `a_refresh_re_resolves_the_cli_named_by_the_environment`, which met `ETXTBSY`
+  (“Text file busy”) executing its stand-in CLI while another test thread forked.
+  `ask_input_formats` now retries that single transient (20 × 5 ms) and returns any
+  other error at once; `cargo test -p pdfextractor-ui --lib` passes 5/5 consecutive
+  runs after the fix (121 tests each).
+- Crypt review: RC4-40/128, AES-128 and AES-256 (revisions 2–6) key derivation,
+  padding, the `/Encrypt`-dictionary and object-stream exemptions, and the
+  trailer-`/Root` choice hold up; `crypt_test` 5/5 and the CLI `encrypted_test` 6/6
+  pass against the Poppler-verified fixtures. One gap fixed: a stream whose own
+  `/Filter /Crypt` names a filter other than `/Identity` was decrypted with `/StmF`;
+  it now uses that `/CF` entry's method
+  (`crypt::tests::a_stream_naming_its_own_crypt_filter_uses_that_filter`).
+- The EXIF turn is budgeted too: `orient_for_ocr` now calls
+  `image_parser::upright_png_checked` with the run's `Limits`, so
+  `--max-image-pixels`/`--max-image-dimension`/`--max-image-alloc-bytes` govern it
+  exactly as they govern the detected quarter turn
+  (`a_one_pixel_ceiling_refuses_the_exif_turn`). Suite count moved to **1,286**.
+- Left as a follow-up: the OCR photo corpus costs about three minutes a page in a
+  debug build, which dominates a local workspace run.
+- A budget refusal from the LibreOffice bridge is now the document's failure, not
+  a reason to read it another way: the `Format::Doc` arm re-raises any error whose
+  chain holds a `LimitError`, so `--bridge-timeout 0` and
+  `--max-bridge-output-bytes 1` exit 3 and name the flag instead of converting
+  through the built-in reader. A missing or unusable LibreOffice still falls back
+  (checked by hand with `PATH=/nonexistent`, which converts `legacy_brief.doc`
+  through the built-in reader, exit 0). New test
+  `a_bridge_budget_refusal_fails_the_legacy_document`; suite counts 1,287 / 131.

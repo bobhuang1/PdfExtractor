@@ -1788,6 +1788,14 @@ fn build_document(
                     relabel(doc, path, "application/msword")?
                 }
                 Err(error) => {
+                    // A budget refusal is the run's own policy, not a broken
+                    // bridge: the document fails and names the flag that would
+                    // read it, rather than quietly taking a different reader
+                    // under a ceiling the reader asked for. Only a missing or
+                    // unusable LibreOffice falls back to the built-in reader.
+                    if is_limit_refusal(&error) {
+                        return Err(error);
+                    }
                     // Not a failure: the file has a reader of its own. Why the
                     // bridge could not be used is said once, at debug, so a run
                     // on a machine without LibreOffice does not look wrong.
@@ -4033,7 +4041,7 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // The page is the upright grid; Tesseract reads the stored one. A camera
     // that was held sideways is turned upright here, once, before recognition —
     // by EXIF when there is a tag, by the reading when there is not.
-    let mut upright = orient_for_ocr(source, declared);
+    let mut upright = orient_for_ocr(source, declared, &budgets());
     if declared != pdfextractor_image_parser::Orientation::Normal && upright.is_none() {
         tracing::warn!(
             "could not apply EXIF orientation {:?} to {}; OCR sees the stored pixels",
@@ -4107,7 +4115,10 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
             // an animation together; a GIF has none, and when the first page
             // had to be turned to be read, the strip is turned with it.
             let (turned, swaps) = if declared != pdfextractor_image_parser::Orientation::Normal {
-                (orient_for_ocr(&frame.data, declared), declared.swaps_axes())
+                (
+                    orient_for_ocr(&frame.data, declared, &budgets()),
+                    declared.swaps_axes(),
+                )
             } else if applied == QuarterTurn::AsStored {
                 (None, false)
             } else {
@@ -5318,13 +5329,16 @@ fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 ///
 /// PNG out, lossless: recognition sees exactly the pixels a viewer would, and
 /// the boxes come back in the upright pixel space the page is measured in.
-/// `None` for an image that is already upright, or one that cannot be
-/// decoded — in which case the original bytes are what Tesseract gets.
+/// `None` for an image that is already upright, or one that cannot be decoded,
+/// which includes the run's image budgets refusing it: the turn is one more
+/// decode, so `--max-image-pixels` governs it as it governs every other. The
+/// original bytes are what Tesseract then gets.
 fn orient_for_ocr(
     data: &[u8],
     orientation: pdfextractor_image_parser::Orientation,
+    limits: &pdfextractor_limits::Limits,
 ) -> Option<Vec<u8>> {
-    pdfextractor_image_parser::upright_png(data, orientation)
+    pdfextractor_image_parser::upright_png_checked(data, orientation, limits).ok()
 }
 
 /// Whether a picture *is* the page, rather than a figure printed on it.
@@ -6211,5 +6225,35 @@ mod tests {
                 .expect("the defaults decode a 2x2 page");
         assert_eq!((width, height), (2, 2));
         assert!(!turned.is_empty(), "the turn wrote no PNG");
+    }
+
+    #[test]
+    fn a_one_pixel_ceiling_refuses_the_exif_turn() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode the test picture");
+
+        let limits = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        assert!(
+            orient_for_ocr(
+                &png,
+                pdfextractor_image_parser::Orientation::Rotate90,
+                &limits
+            )
+            .is_none(),
+            "a one-pixel ceiling turned a 2x2 page by its EXIF tag"
+        );
+
+        let turned = orient_for_ocr(
+            &png,
+            pdfextractor_image_parser::Orientation::Rotate90,
+            &pdfextractor_limits::Limits::default(),
+        )
+        .expect("the defaults turn a 2x2 page");
+        assert!(!turned.is_empty(), "the EXIF turn wrote no PNG");
     }
 }

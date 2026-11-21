@@ -58,6 +58,9 @@ pub struct SecurityHandler {
     key: Vec<u8>,
     strings: Method,
     streams: Method,
+    /// The methods `/CF` names, for a stream whose own `/Crypt` filter picks
+    /// one by name instead of taking `/StmF`.
+    named: HashMap<String, Method>,
     /// `/EncryptMetadata false` leaves `/Type /Metadata` streams in the clear.
     pub encrypt_metadata: bool,
     /// Which password opened the file, for the log.
@@ -142,10 +145,12 @@ impl SecurityHandler {
             }
         };
 
+        let named = crypt_filters(encrypt);
         let handler = |key: Vec<u8>, opened_with| Self {
             key,
             strings,
             streams,
+            named: named.clone(),
             encrypt_metadata,
             opened_with,
         };
@@ -211,14 +216,24 @@ impl SecurityHandler {
             let exempt =
                 kind == Some("XRef") || (kind == Some("Metadata") && !self.encrypt_metadata);
             if !exempt {
-                let method = match stream_crypt_filter(dict) {
-                    Some(StreamFilter::Identity) => Method::Identity,
-                    _ => self.streams,
-                };
-                *raw = self.decrypt(method, num, gen, raw);
+                *raw = self.decrypt(self.stream_method(dict), num, gen, raw);
             }
         }
         self.decrypt_strings(num, gen, value);
+    }
+
+    /// The method a stream's payload is ciphered with: its own `/Crypt` filter
+    /// when it names one, and `/StmF` otherwise.
+    fn stream_method(&self, dict: &HashMap<String, PdfValue>) -> Method {
+        match stream_crypt_filter(dict) {
+            Some(StreamFilter::Identity) => Method::Identity,
+            // A name `/CF` does not define is not a reason to guess: the
+            // default stream filter is what the file said otherwise.
+            Some(StreamFilter::Named(name)) => {
+                self.named.get(&name).copied().unwrap_or(self.streams)
+            }
+            None => self.streams,
+        }
     }
 
     fn decrypt_strings(&self, num: usize, gen: i32, value: &mut PdfValue) {
@@ -267,7 +282,7 @@ impl SecurityHandler {
 /// A stream's own `/Filter /Crypt` entry, which overrides `/StmF`.
 enum StreamFilter {
     Identity,
-    Named,
+    Named(String),
 }
 
 fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter> {
@@ -289,8 +304,35 @@ fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter>
         .and_then(PdfValue::as_name);
     Some(match name {
         None | Some("Identity") => StreamFilter::Identity,
-        Some(_) => StreamFilter::Named,
+        Some(name) => StreamFilter::Named(name.to_string()),
     })
+}
+
+/// Every `/CF` entry's method, by the name a stream's `/Crypt` filter uses.
+///
+/// A method this build does not know is left out rather than mapped to
+/// identity, so the stream falls back to the file's `/StmF` — a guess that at
+/// least matches how the rest of the file was ciphered.
+fn crypt_filters(encrypt: &HashMap<String, PdfValue>) -> HashMap<String, Method> {
+    let mut filters = HashMap::new();
+    let Some(cf) = encrypt.get("CF").and_then(PdfValue::as_dict) else {
+        return filters;
+    };
+    for (name, entry) in cf {
+        let method = match entry
+            .as_dict()
+            .and_then(|filter| filter.get("CFM"))
+            .and_then(PdfValue::as_name)
+        {
+            Some("None") => Method::Identity,
+            Some("V2") => Method::Rc4,
+            Some("AESV2") => Method::Aes128,
+            Some("AESV3") => Method::Aes256,
+            _ => continue,
+        };
+        filters.insert(name.clone(), method);
+    }
+    filters
 }
 
 /// The method a `/V 4`/`/V 5` handler names under `/StrF` or `/StmF`.
@@ -551,6 +593,47 @@ mod tests {
         dict.insert("Filter".into(), PdfValue::Name("Adobe.PubSec".into()));
         let err = SecurityHandler::authenticate(&dict, b"", None).unwrap_err();
         assert!(matches!(err, CryptError::Unsupported(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_stream_naming_its_own_crypt_filter_uses_that_filter() {
+        let handler = SecurityHandler {
+            key: vec![1u8; 16],
+            strings: Method::Identity,
+            streams: Method::Rc4,
+            named: HashMap::from([("StdCF".to_string(), Method::Aes128)]),
+            encrypt_metadata: true,
+            opened_with: "user password",
+        };
+        let crypt_stream = |name: &str| {
+            let mut parms = HashMap::new();
+            parms.insert("Name".to_string(), PdfValue::Name(name.into()));
+            let mut dict = HashMap::new();
+            dict.insert("Filter".to_string(), PdfValue::Name("Crypt".into()));
+            dict.insert("DecodeParms".to_string(), PdfValue::Dictionary(parms));
+            dict
+        };
+
+        assert_eq!(
+            handler.stream_method(&crypt_stream("StdCF")),
+            Method::Aes128,
+            "a named /Crypt filter overrides /StmF"
+        );
+        assert_eq!(
+            handler.stream_method(&crypt_stream("Identity")),
+            Method::Identity,
+            "/Name /Identity leaves the stream in the clear"
+        );
+        assert_eq!(
+            handler.stream_method(&crypt_stream("Missing")),
+            Method::Rc4,
+            "an undefined name keeps the file's default stream filter"
+        );
+        assert_eq!(
+            handler.stream_method(&HashMap::new()),
+            Method::Rc4,
+            "a stream with no /Crypt filter takes /StmF"
+        );
     }
 
     #[test]

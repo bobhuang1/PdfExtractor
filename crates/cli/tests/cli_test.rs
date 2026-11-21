@@ -12757,6 +12757,59 @@ fn a_legacy_doc_is_read_through_libreoffice_as_a_document() {
     );
 }
 
+/// A bridge budget refusal is a refusal, not a reason to read the file another
+/// way: the run fails, names the flag that would read it, and writes nothing,
+/// because the ceiling was the reader's own choice. Only a missing or unusable
+/// LibreOffice falls back to the built-in `.doc` reader.
+#[test]
+fn a_bridge_budget_refusal_fails_the_legacy_document() {
+    if !libreoffice_on_path() {
+        skipped("the .doc bridge budget test", NO_SOFFICE);
+        return;
+    }
+
+    let ws = Workspace::new("doc-bridge-budget");
+    let source = repository_root().join("test-data/legacy_brief.doc");
+    let bytes = std::fs::read(&source).expect("the legacy document fixture");
+    let input = ws.write("legacy_brief.doc", &bytes);
+
+    for (flag, limit) in [
+        ("--bridge-timeout", "0"),
+        ("--max-bridge-output-bytes", "1"),
+    ] {
+        let output = ws.join(&format!("{}.json", flag.trim_start_matches('-')));
+
+        let run = Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+            .args([
+                "-i",
+                input.to_str().expect("a UTF-8 input path"),
+                "-o",
+                output.to_str().expect("a UTF-8 output path"),
+                "--ocr",
+                "never",
+                flag,
+                limit,
+            ])
+            .output()
+            .expect("spawn the CLI binary");
+
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert_eq!(
+            run.status.code(),
+            Some(3),
+            "{flag} {limit} converted the document instead of refusing it: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("(raise {flag} to allow it)")),
+            "{flag} {limit}: the refusal does not name the flag: {stderr}"
+        );
+        assert!(
+            !output.exists(),
+            "{flag} {limit}: a refused run wrote a document anyway"
+        );
+    }
+}
+
 /// The footer of `stamp_fields.doc` holds a `DATE` field and a `TIME` field, and
 /// neither keeps what the file stores: LibreOffice rewrites both from its own clock
 /// when it writes the package the DOCX reader reads, so the reading holds today's

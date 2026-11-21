@@ -167,9 +167,30 @@ pub fn turn_upright(data: &[u8]) -> Option<UprightPicture> {
 /// this is the form a sideways picture has to reach it in. `None` when the
 /// orientation is already upright or the pixels cannot be decoded.
 pub fn upright_png(data: &[u8], orientation: Orientation) -> Option<Vec<u8>> {
-    let mut bitmap = decode(data)?;
-    bitmap.apply_orientation(orientation.turn()?);
-    encode_png(&bitmap)
+    upright_png_checked(data, orientation, &Limits::default()).ok()
+}
+
+/// [`upright_png`] with an explicit pixel and allocation budget, and the refusal
+/// that stopped it.
+///
+/// The turn is one more decode, so it is held to the same image ceilings as
+/// every other: `--max-image-pixels`, `--max-image-dimension` and
+/// `--max-image-alloc-bytes` govern it. An orientation that is already upright
+/// is not a decode at all and comes back as [`LimitError::ImageDecode`], which
+/// is what the `Option` form reports as `None`.
+pub fn upright_png_checked(
+    data: &[u8],
+    orientation: Orientation,
+    limits: &Limits,
+) -> Result<Vec<u8>, LimitError> {
+    let turn = orientation.turn().ok_or_else(|| LimitError::ImageDecode {
+        detail: "the picture is already upright, so there is nothing to turn".to_string(),
+    })?;
+    let mut bitmap = decode_checked(data, limits)?;
+    bitmap.apply_orientation(turn);
+    encode_png(&bitmap).ok_or_else(|| LimitError::ImageDecode {
+        detail: "the upright picture could not be written as PNG".to_string(),
+    })
 }
 
 /// The same pixels under a media type Docling can name: a PNG.

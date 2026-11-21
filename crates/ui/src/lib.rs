@@ -958,6 +958,33 @@ pub struct Formats {
     pub families: Vec<Family>,
 }
 
+/// The CLI's `--list-input-formats` answer, retrying the one transient it can
+/// meet.
+///
+/// `ETXTBSY` (26 on Unix) means the executable was open for writing somewhere
+/// else at the instant the child tried to exec it. A freshly written script
+/// can meet this because a `fork` from another thread inherits the writing
+/// file descriptor for a moment, and the window itself is often started just
+/// after an installer replaced the CLI. The condition clears in microseconds,
+/// so it is retried rather than reported as a missing binary; every other
+/// error is returned at once.
+fn run_listing(program: &str) -> std::io::Result<std::process::Output> {
+    const ETXTBSY: i32 = 26;
+    for attempt in 0..20 {
+        let result = Command::new(program)
+            .arg("--list-input-formats")
+            .stdin(Stdio::null())
+            .output();
+        match result {
+            Err(error) if error.raw_os_error() == Some(ETXTBSY) && attempt < 19 => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            other => return other,
+        }
+    }
+    unreachable!("the loop returns on its last attempt")
+}
+
 /// Ask the CLI which input formats this build accepts.
 ///
 /// The window offers, names and filters by exactly the set a run reads, asked of
@@ -971,10 +998,7 @@ pub struct Formats {
 /// spelling, and a name that is not an extension is refused rather than passed to
 /// a chooser that would quietly offer less than the run reads.
 pub fn ask_input_formats(program: &str) -> Result<Formats, String> {
-    let output = Command::new(program)
-        .arg("--list-input-formats")
-        .stdin(Stdio::null())
-        .output()
+    let output = run_listing(program)
         .map_err(|error| format!("could not run {program} --list-input-formats: {error}"))?;
     if !output.status.success() {
         // The CLI's own reason, when it gave one: `anyhow` writes `Error: …`.
