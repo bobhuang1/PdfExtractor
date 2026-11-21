@@ -1739,6 +1739,16 @@ fn our_output_agrees_with_real_docling_conversions() {
             .to_string_lossy()
             .into_owned();
         let input = corpus_input(&stem);
+        // An image's only text is OCR: a build without the `ocr` feature has
+        // nothing to compare it with, which is not a disagreement.
+        let is_image = matches!(
+            input.extension().and_then(|e| e.to_str()),
+            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "webp" | "gif" | "jp2")
+        );
+        if is_image && !cfg!(feature = "ocr") {
+            println!("{stem}: skipped, its text is OCR and this build has no `ocr` feature");
+            continue;
+        }
 
         let out = scratch.0.join(&stem);
         std::fs::create_dir_all(&out).expect("create the output dir");

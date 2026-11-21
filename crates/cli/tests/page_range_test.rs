@@ -687,6 +687,10 @@ fn provenance_records(value: &serde_json::Value, records: &mut Vec<serde_json::V
 /// and each keeps the number it has in the file. A GIF and an animated WebP
 /// are the same reading, so a new animated format only adds a row.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_animations_frames_are_pages_of_their_own() {
     let ws = Workspace::new("frames");
     for (tag, relative, label) in [
@@ -745,6 +749,10 @@ fn an_animations_frames_are_pages_of_their_own() {
 /// animated WebP frames and a TIFF's directories are the same reading, so a new
 /// frame format only adds a row.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_single_page_keeps_its_original_page_number() {
     let ws = Workspace::new("one-page");
     for (tag, relative, label, unit) in [
@@ -859,6 +867,10 @@ fn an_out_of_range_frame_names_the_count_and_its_page_unit() {
 /// WebP's frames and a TIFF's directories are the same reading, so a new frame
 /// format only adds a row.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn out_of_order_frames_keep_file_order_and_their_page_numbers() {
     let ws = Workspace::new("frames-3-1");
     for (tag, relative, label, unit) in [

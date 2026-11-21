@@ -108,8 +108,10 @@ impl ChunkType {
     }
 }
 
-/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to.
+/// The tiktoken encoding family a `.tiktoken` vocabulary belongs to. The
+/// variants are tiktoken's own names (`cl100k_base`, …), suffix and all.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+#[allow(clippy::enum_variant_names)]
 enum TokenizerEncoding {
     #[value(name = "cl100k_base", alias = "cl100k")]
     Cl100k,
@@ -389,6 +391,19 @@ struct Args {
     /// format with no pages is read whole, and the log says so
     #[arg(long, value_name = "RANGE", value_parser = page_range::PageRange::parse)]
     page_range: Option<page_range::PageRange>,
+
+    /// The password of an encrypted PDF (user or owner). Without it an
+    /// encrypted PDF is opened with the empty user password, as every reader
+    /// opens one that asks nothing; a file that needs a password is refused by
+    /// name. The `PDFE_PDF_PASSWORD` environment variable is read when the flag
+    /// is absent, so a password need not appear in a process listing
+    #[arg(
+        long,
+        value_name = "PASSWORD",
+        env = "PDFE_PDF_PASSWORD",
+        hide_env_values = true
+    )]
+    pdf_password: Option<String>,
 
     /// When to run OCR on page images
     #[arg(long, value_enum, default_value_t = OcrMode::Auto)]
@@ -1687,6 +1702,7 @@ fn build_document(
                     ocr_lang: &langs,
                     psm: args.psm,
                     range: args.page_range.as_ref(),
+                    password: args.pdf_password.as_deref(),
                 },
                 output_path,
                 args.preview,
@@ -2074,6 +2090,8 @@ struct PdfReading<'a> {
     psm: Option<u8>,
     /// The pages to read, when the reader asked for fewer than all of them.
     range: Option<&'a page_range::PageRange>,
+    /// `--pdf-password`, for an encrypted file.
+    password: Option<&'a str>,
 }
 
 fn convert_pdf(
@@ -2088,19 +2106,39 @@ fn convert_pdf(
     // takes milliseconds, so it is measured against its own budget. The
     // deadline is checked before each picture is recognised.
     let ocr_deadline = budgets().ocr_deadline();
-    let parsed = PdfDocument::parse_with_limits(&data, budgets())?;
-    // A ciphered file is refused here, by name, rather than read as though its
-    // streams were plain: every string and stream in it is encrypted under a key
-    // derived from the password, so what came out unread would be noise in a
-    // document that looks successful. Decrypting is a separate piece of work;
-    // what a user needs to hear now is why the page came back empty.
-    if parsed.encrypted {
-        anyhow::bail!(
-            "{}: this PDF is encrypted (its trailer names /Encrypt); this build cannot \
-             decrypt it yet — re-save it without a password, for example \
-             `qpdf --decrypt in.pdf out.pdf`, and read that file",
-            path.display()
-        );
+    let parsed = PdfDocument::parse_with_limits_and_password(
+        &data,
+        budgets(),
+        reading.password.map(str::as_bytes),
+    )?;
+    // A ciphered file the password does not open is refused here, by name,
+    // rather than read as though its streams were plain: what came out unread
+    // would be noise in a document that looks successful.
+    match &parsed.locked {
+        None => {
+            if let Some(opened_with) = parsed.opened_with {
+                tracing::info!(
+                    "{}: encrypted PDF opened with the {opened_with}",
+                    path.display()
+                );
+            }
+        }
+        Some(pdfextractor_pdf_parser::crypt::CryptError::WrongPassword) => {
+            let asked = if reading.password.is_some() {
+                "the password given (--pdf-password) does not open it"
+            } else {
+                "it needs a password: pass it with --pdf-password"
+            };
+            anyhow::bail!("{}: this PDF is encrypted and {asked}", path.display());
+        }
+        Some(pdfextractor_pdf_parser::crypt::CryptError::Unsupported(what)) => {
+            anyhow::bail!(
+                "{}: this PDF is encrypted with {what}, which this build cannot decrypt — \
+                 re-save it without encryption, for example `qpdf --decrypt in.pdf out.pdf`, \
+                 and read that file",
+                path.display()
+            );
+        }
     }
     // The reader's page range is applied to the pages the file has, before any of
     // them is analysed: the furniture pass must see exactly the pages that were

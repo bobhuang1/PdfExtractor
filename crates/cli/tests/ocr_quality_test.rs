@@ -190,6 +190,10 @@ fn floor_of(file: &str) -> (f64, f64) {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn the_photographed_corpus_is_read_to_its_recorded_quality() {
     let documents = corpus();
     assert!(
@@ -435,6 +439,10 @@ fn assert_upright_boxes(doc: &Value, width: f64, height: f64) {
 /// has to turn the pixels first, or the lines come back as noise; this pins
 /// that turn and the portrait page the lines are measured on.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_sideways_camera_scan_is_read_upright() {
     let scratch = Scratch::new("rotated");
     let doc = convert_photo(&scratch, "06_rotated.jpg");
@@ -469,6 +477,10 @@ fn a_sideways_camera_scan_is_read_upright() {
 /// find the quarter turn from the pixels alone, and the page, its boxes and the
 /// pixels the engine saw all have to agree on the upright page.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn a_sideways_scan_with_no_exif_tag_is_read_upright() {
     let scratch = Scratch::new("untagged");
     let source = repository_root().join("test-data/photos/07_sideways.jpg");
@@ -510,6 +522,10 @@ fn a_sideways_scan_with_no_exif_tag_is_read_upright() {
 /// still has horizontal baselines, so Tesseract reads it as other words rather
 /// than as a page that needs turning.
 #[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
 fn an_upside_down_scan_with_no_exif_tag_is_read_upright() {
     let scratch = Scratch::new("upside-down");
     let source = repository_root().join("test-data/photos/08_upside_down.png");

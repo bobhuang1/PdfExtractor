@@ -1,0 +1,10 @@
+# The golden files are compared byte for byte, and the writers emit LF on every
+# platform; a checkout that turned them into CRLF (core.autocrlf=true on Windows)
+# fails those suites without any code having changed. Text is LF everywhere.
+* text=auto eol=lf
+*.pdf binary
+*.png binary
+*.jpg binary
+*.doc binary
+*.ppt binary
+*.xls binary

@@ -59,6 +59,10 @@ fn listed_tests(root: &Path, args: &[&str]) -> Vec<String> {
     let output = Command::new(cargo)
         .current_dir(root)
         .args(args)
+        // List with the features this test was built with: a build without
+        // Tesseract cannot compile the default (OCR) feature set. The lists are
+        // the same either way — an OCR test is ignored there, not removed.
+        .args((!cfg!(feature = "ocr")).then_some("--no-default-features"))
         .args(["--locked", "--", "--list"])
         .output()
         .unwrap_or_else(|error| {
@@ -269,6 +273,8 @@ fn count_before_in(text: &str, marker: &str, source: &str) -> Result<DocumentedC
 }
 
 /// The count after `prefix` in the plan, e.g. `the suite holds 1,047 tests`.
+/// Only the Unix-only workspace total reads it.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn count_after(plan: &str, prefix: &str) -> Result<DocumentedCount, String> {
     count_after_in(plan, prefix, "plan.md")
 }

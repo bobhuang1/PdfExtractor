@@ -23,4 +23,7 @@ image.workspace = true
 hayro-ccitt.workspace = true
 hayro-jbig2.workspace = true
 flate2.workspace = true
+md-5.workspace = true
+sha2.workspace = true
+aes.workspace = true
 tracing.workspace = true
