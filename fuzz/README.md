@@ -11,12 +11,14 @@ and libFuzzer, so they live outside the product workspace and are not part of
 | `xml` | XML size, nesting depth, DOCTYPE/entity rejection and the XML deadline. |
 | `image` | Image header limits, guarded decode, GIF/WebP/TIFF frame budgets and image deadlines. |
 | `budgets` | All four gates above at once, under `Limits` read from the input's own first 16 bytes instead of `FUZZ_*`: ceilings small enough to sit under a real document, so the refusal paths are fuzzed too. |
+| `crypt` | Encrypted PDFs: the committed fixtures with their stream payloads overwritten by the input (the real `/Encrypt` authenticates, so the handler decrypts mutated ciphertext), and a minimal PDF whose `/Encrypt` dictionary body is the input. Every refusal must carry a `CryptError` or a `LimitError`; an untyped failure or a panic is the finding. |
 
 Seed them with the committed fixtures; the real corpus is useful too:
 
 ```sh
-mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image fuzz/corpus/xml
+mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image fuzz/corpus/xml fuzz/corpus/crypt
 cp test-data/*.pdf fuzz/corpus/pdf/
+cp test-data/encrypted*.pdf fuzz/corpus/crypt/
 # The committed crash reproducers seed the pdf target as well, so a run starts
 # from the input shape that took the PNG encoder down instead of rediscovering
 # it. They are ignored by `.gitignore` only as corpus copies; the originals
@@ -40,6 +42,7 @@ cargo +nightly fuzz run zip -- -max_total_time=60
 cargo +nightly fuzz run xml -- -max_total_time=60
 cargo +nightly fuzz run image -- -max_total_time=60
 cargo +nightly fuzz run budgets -- -max_total_time=60
+cargo +nightly fuzz run crypt -- -max_total_time=60
 ```
 
 ## Budgets read from the input

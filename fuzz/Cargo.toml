@@ -56,6 +56,12 @@ path = "fuzz_targets/budgets.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "crypt"
+path = "fuzz_targets/crypt.rs"
+test = false
+doc = false
+
 [profile.release]
 debug = true
 

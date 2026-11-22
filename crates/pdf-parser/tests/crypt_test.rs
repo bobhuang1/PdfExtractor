@@ -96,10 +96,69 @@ fn a_missing_or_wrong_password_is_locked_and_reads_no_noise() {
     }
 }
 
-/// Decryption produces every stream's plaintext in one pass, so those bytes are
-/// charged to the document budget before any of them is allocated. A ceiling
-/// that still permits the input itself refuses the file here, instead of letting
-/// the plaintext of many streams add up past what the caller allowed.
+/// A file the password does not open still parses — `locked` says why — but its
+/// pages must not be handed back: they would be read from ciphertext and look
+/// like text. The checked reader reports the reason the command line reports.
+#[test]
+fn a_locked_document_is_refused_rather_than_read_as_ciphertext() {
+    for name in VARIANTS {
+        // The fixture has a page, so the refusal is the lock and not an empty file.
+        let opened = PdfDocument::parse_with_password(&fixture(name), Some(b"user"))
+            .expect("parse with the password");
+        assert!(
+            !opened.extract().is_empty(),
+            "{name}: the fixture has a page"
+        );
+
+        let doc = PdfDocument::parse_with_password(&fixture(name), Some(b"guess")).expect("parse");
+        let error = doc
+            .extract_checked()
+            .expect_err("a locked document must not yield pages");
+        let refusal = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<CryptError>())
+            .unwrap_or_else(|| panic!("{name}: the refusal carries the crypt error: {error:#}"));
+        assert_eq!(refusal, &CryptError::WrongPassword, "{name}");
+        assert!(
+            error.to_string().contains("ciphertext"),
+            "{name}: the refusal says the pages were never decrypted: {error:#}"
+        );
+        assert!(
+            doc.extract().is_empty(),
+            "{name}: the un-fallible facade yields no pages either"
+        );
+    }
+}
+
+/// The refusal is the state, not only the recorded error: a file that says it
+/// is encrypted with no handler's success behind it is refused as well, so a
+/// gap in the parser cannot produce a partial read of ciphertext. The state is
+/// built by hand because today's parser sets `locked` whenever it sets
+/// `encrypted`; this holds the invariant the reader relies on either way.
+#[test]
+fn extraction_fails_closed_when_no_handler_opened_the_file() {
+    let mut doc = PdfDocument::parse(&fixture("hello.pdf")).expect("parse");
+    assert!(!doc.encrypted && doc.locked.is_none() && doc.opened_with.is_none());
+    doc.encrypted = true;
+
+    let error = doc
+        .extract_checked()
+        .expect_err("an encrypted document that was never decrypted is refused");
+    assert!(
+        error.to_string().contains("ciphertext"),
+        "the refusal says the pages were never decrypted: {error:#}"
+    );
+    assert!(
+        doc.extract().is_empty(),
+        "the un-fallible facade yields no pages either"
+    );
+}
+
+/// A stream's payload is copied out of the file into the document's own buffer,
+/// and that copy is charged before it is made — for an encrypted file, before
+/// any of it is decrypted. A ceiling under the fixture's 45-byte payload refuses
+/// the file; the same bytes open under the default budget, so the refusal is the
+/// lowered whole-document ceiling, not the file or its password.
 #[test]
 fn a_lowered_document_budget_refuses_decryption() {
     let pdf = fixture("encrypted.pdf");
@@ -113,7 +172,7 @@ fn a_lowered_document_budget_refuses_decryption() {
     );
 
     let error = PdfDocument::parse_with_limits_and_password(&pdf, limits, None)
-        .expect_err("the plaintext is charged before it is allocated");
+        .expect_err("the payload is charged before it is copied");
     assert!(
         matches!(
             error.downcast_ref::<LimitError>(),

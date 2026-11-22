@@ -79,7 +79,8 @@ pub struct PdfDocument {
     /// Why an encrypted file could not be decrypted — a wrong or missing
     /// password, or a handler this parser does not implement. `None` for a
     /// plain file and for an encrypted one that was opened, in which case every
-    /// string and stream below is already plain.
+    /// string and stream below is already plain. While this is set, extraction
+    /// refuses the file.
     pub locked: Option<crate::crypt::CryptError>,
     /// Which password opened an encrypted file (`"user password"` or
     /// `"owner password"`), for the log.
@@ -179,6 +180,9 @@ impl PdfDocument {
 
         let mut objects: HashMap<ObjId, PdfValue> = HashMap::new();
         let mut stream_offsets: HashMap<ObjId, usize> = HashMap::new();
+        // The payload bytes copied out of the file so far, charged to the
+        // whole-document total before each copy is made.
+        let mut stream_bytes = 0u64;
         let mut encrypted = false;
         // The last trailer that names `/Encrypt`: its `/Encrypt` and `/ID` are
         // what the security handler is authenticated against.
@@ -227,10 +231,21 @@ impl PdfDocument {
             // span *is* the payload byte range.
             if let Some(PdfValue::Dictionary(dict)) = value.clone() {
                 if i < tokens.len() && matches!(tokens[i].token, Token::Stream) {
-                    let raw = data
-                        .get(tokens[i].start..tokens[i].end)
-                        .map(<[u8]>::to_vec)
-                        .unwrap_or_default();
+                    // The payload is copied out of the file into the
+                    // document's own buffer — for an encrypted file, its
+                    // ciphertext — so it is charged before it exists. The
+                    // document outlives `data`, so borrowing the file's bytes
+                    // is not an option here.
+                    let payload = data.get(tokens[i].start..tokens[i].end).unwrap_or_default();
+                    stream_bytes = stream_bytes.saturating_add(payload.len() as u64);
+                    if stream_bytes > limits.max_document_bytes {
+                        return Err(LimitError::DocumentTooLarge {
+                            actual: stream_bytes,
+                            limit: limits.max_document_bytes,
+                        }
+                        .into());
+                    }
+                    let raw = payload.to_vec();
                     stream_offsets.insert((num, gen), tokens[i].start);
                     objects.insert((num, gen), PdfValue::Stream(dict, raw));
                     i += 1; // past Stream
@@ -290,7 +305,7 @@ impl PdfDocument {
             limits,
             deadline,
             limit_hit: RefCell::new(None),
-            document_bytes: Cell::new(0),
+            document_bytes: Cell::new(stream_bytes),
             charged_streams: RefCell::new(HashSet::new()),
             decoded: RefCell::new(HashMap::new()),
             decoded_bytes: Cell::new(0),
@@ -379,10 +394,10 @@ impl PdfDocument {
             }
         };
         self.opened_with = Some(handler.opened_with);
-        // Decryption allocates a plaintext buffer for every stream and string at
-        // once. Charge the total before any of it exists, the way every decoded
-        // stream is charged, so a file of many large streams cannot allocate
-        // past the document budget ahead of the check.
+        // Decryption rebuilds the document's strings in fresh buffers; a
+        // stream's payload is decrypted where it stands, in the buffer the
+        // parser copied out of the file and charged then. Charge the strings
+        // before any is made, the way every decoded stream is charged.
         let plaintext = self
             .objects
             .iter()
@@ -429,8 +444,15 @@ impl PdfDocument {
             tracing::debug!(
                 "stream {id:?}: /Length {declared} wins over the terminator search, which found {found}"
             );
+            // The payload's own buffer is reused, so a longer declared
+            // `/Length` allocates only the growth: charge it before it is made.
+            self.charge_document((end - offset).saturating_sub(found) as u64, None);
+            if self.limit_hit.borrow().is_some() {
+                continue;
+            }
             if let Some(PdfValue::Stream(_, slot)) = self.objects.get_mut(&id) {
-                *slot = data[offset..end].to_vec();
+                slot.clear();
+                slot.extend_from_slice(&data[offset..end]);
             }
         }
     }
@@ -474,10 +496,10 @@ impl PdfDocument {
             if self.limit_hit.borrow().is_some() {
                 break;
             }
-            // Clone out of the map so we can insert into it afterwards.
-            let (dict, raw) = match self.objects.get(&id) {
-                Some(PdfValue::Stream(d, b)) => (d.clone(), b.clone()),
-                _ => continue,
+            // Read out of the store rather than cloned: decoding borrows the
+            // payload, and nothing writes to the store until it has been read.
+            let Some(stream @ PdfValue::Stream(dict, _)) = self.objects.get(&id) else {
+                continue;
             };
 
             let count = dict.get("N").and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
@@ -486,10 +508,10 @@ impl PdfDocument {
                 continue;
             }
 
-            // Built here rather than borrowed from the store, so it is charged as
-            // the work it is and never deduped against an address a later stream
-            // could inherit.
-            let decoded = self.decode_stream_uncapped(&PdfValue::Stream(dict, raw));
+            // The decoded bytes are this expansion's own buffer, so they are
+            // charged as the work they are and never deduped against an address
+            // a later stream could inherit.
+            let decoded = self.decode_stream_uncapped(stream);
             self.charge_document(decoded.len() as u64, None);
             let (tokens, truncated) =
                 Lexer::new(&decoded).tokenize_spanned_limited(self.limits.max_pdf_tokens);
@@ -887,8 +909,9 @@ impl PdfDocument {
     /// Extract every page's text together with its size.
     ///
     /// This is the un-fallible facade kept for existing callers. A document
-    /// that exceeded a budget yields no pages here; a caller that has to report
-    /// the refusal uses [`Self::extract_checked`].
+    /// that exceeded a budget, or that was never decrypted, yields no pages
+    /// here; a caller that has to report the refusal uses
+    /// [`Self::extract_checked`].
     pub fn extract(&self) -> Vec<ExtractedPage> {
         match self.extract_checked() {
             Ok(pages) => pages,
@@ -901,7 +924,23 @@ impl PdfDocument {
 
     /// Extract every page, reporting a resource limit instead of silently
     /// returning a truncated document.
+    ///
+    /// The reader fails closed on a document the security handler did not
+    /// open: it still parses, but every string and stream in it is ciphertext,
+    /// so pages read from it would be noise shaped like a document.
     pub fn extract_checked(&self) -> anyhow::Result<Vec<ExtractedPage>> {
+        // A file that says it is encrypted must have been opened before any of
+        // it is read: `locked` names why it was not, and `encrypted` with no
+        // `opened_with` is a handler that never ran at all. Either way its
+        // pages are ciphertext, not the document it promises.
+        if self.encrypted && self.opened_with.is_none() {
+            let reason =
+                "refusing to read a PDF that was never decrypted: its pages are still ciphertext";
+            return Err(match self.locked.clone() {
+                Some(locked) => anyhow::Error::new(locked).context(reason),
+                None => anyhow::Error::msg(reason),
+            });
+        }
         if let Some(error) = self.limit_hit.take() {
             return Err(error.into());
         }
@@ -1132,8 +1171,9 @@ impl PdfDocument {
     /// repeated walk is what the total exists to bound. `None` charges the
     /// bytes and remembers nothing: it is for work that is rebuilt for a single
     /// decode, which is not the same stream read twice and must not be free the
-    /// next time an address comes round — and for the plaintext decryption is
-    /// about to allocate for the whole file at once.
+    /// next time an address comes round — for the string buffers decryption
+    /// rebuilds and the payload a declared `/Length` regrows, each charged
+    /// before it is allocated.
     fn charge_document(&self, bytes: u64, key: Option<usize>) {
         if let Some(key) = key {
             if !self.charged_streams.borrow_mut().insert(key) {

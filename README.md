@@ -1150,7 +1150,7 @@ refused with a named limit rather than allowed to exhaust memory, stack or time.
 | XML part / nesting | 64 MiB / 256 levels; `DOCTYPE` declarations are refused |
 | Image grid | 100,000 per side, 100,000,000 pixels; 512 MiB decode allocation |
 | Flow-format blocks | 1,000,000, a table counting one per cell (text, Markdown, CSV, RTF, HTML, DOCX, `.doc`) |
-| One document's decoded total | 1 GiB across every PDF stream and image frame its reader decodes and the plaintext decryption is about to allocate; a stream read again is the same bytes, not new ones |
+| One document's decoded total | 1 GiB across every PDF stream payload the parser copies out of the file (an encrypted file's ciphertext included, charged before the copy), every stream its reader decodes, every object stream's decoded contents, and the string buffers decryption rebuilds; a stream read again is the same bytes, not new ones |
 | LibreOffice bridge | 512 MiB of output, 120 seconds |
 | Parser wall clock / OCR | 30 seconds, checked between objects, pages, entries and XML events; OCR pages get 600 seconds of their own, recognition being seconds a page |
 
@@ -1160,7 +1160,9 @@ below. The image budgets govern every decode the OCR pipeline makes of a page,
 including the EXIF turn, the detected quarter turn and the reduced copy the
 orientation check reads. A PDF's page count is enforced before any page is analysed, and
 extraction has a checked path (`extract_checked`) that reports the refusal
-instead of returning a shortened document.
+instead of returning a shortened document, and it refuses any PDF that says it
+is encrypted but was never decrypted — a wrong password included — rather than
+reading its ciphertext as text.
 
 ### Resource flags
 

@@ -201,3 +201,96 @@ fn a_pdf_at_the_nesting_limit_reads_and_one_level_deeper_is_refused() {
         "the refusal does not name the depth: {refusal}"
     );
 }
+
+/// A one-page PDF whose content stream is `len` bytes of `A`.
+fn one_stream_pdf(len: usize) -> Vec<u8> {
+    let mut pdf = String::from("%PDF-1.4\n");
+    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    pdf.push_str(
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] \
+         /Contents 4 0 R >>\nendobj\n",
+    );
+    pdf.push_str(&format!("4 0 obj\n<< /Length {len} >>\nstream\n"));
+    let mut bytes = pdf.into_bytes();
+    bytes.extend(std::iter::repeat_n(b'A', len));
+    bytes.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    bytes
+}
+
+/// The payload is copied out of the file into the document's own buffer — the
+/// ciphertext of an encrypted file included — so the copy is charged before it
+/// is made, not after the reader decodes it.
+#[test]
+fn a_stream_payload_is_charged_when_the_parser_copies_it_out_of_the_file() {
+    let pdf = one_stream_pdf(4_096);
+    let limits = Limits {
+        max_document_bytes: 1_024,
+        ..Limits::default()
+    };
+    let error = PdfDocument::parse_with_limits(&pdf, limits).unwrap_err();
+    let refusal = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>())
+        .unwrap_or_else(|| panic!("not a limit refusal: {error:#}"));
+    assert!(
+        matches!(refusal, LimitError::DocumentTooLarge { limit: 1_024, .. }),
+        "unexpected refusal: {refusal}"
+    );
+
+    let limits = Limits {
+        max_document_bytes: 8_192,
+        ..Limits::default()
+    };
+    PdfDocument::parse_with_limits(&pdf, limits).expect("a ceiling that holds the payload reads");
+}
+
+/// A PDF whose object stream holds one object: `body` follows the `objnum
+/// offset` header, so its payload is `body` plus those four bytes.
+fn object_stream_pdf(body: &[u8]) -> Vec<u8> {
+    let mut header = b"9 0 ".to_vec();
+    let first = header.len();
+    header.extend_from_slice(body);
+    let mut pdf = String::from("%PDF-1.5\n");
+    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+    pdf.push_str(&format!(
+        "3 0 obj\n<< /Type /ObjStm /N 1 /First {first} /Length {} >>\nstream\n",
+        header.len()
+    ));
+    let mut bytes = pdf.into_bytes();
+    bytes.extend_from_slice(&header);
+    bytes.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    bytes
+}
+
+/// Expanding an object stream decodes its payload into a buffer of its own, and
+/// that buffer is charged before it is parsed. A ceiling that holds the payload
+/// copied out of the file but not that decoded copy refuses the file.
+#[test]
+fn expanding_an_object_stream_is_charged_for_its_decoded_copy() {
+    let body = format!("[{}]", "1 ".repeat(1_024));
+    let pdf = object_stream_pdf(body.as_bytes());
+    let payload = body.len() as u64 + 4;
+
+    let limits = Limits {
+        max_document_bytes: payload + 512,
+        ..Limits::default()
+    };
+    let error = PdfDocument::parse_with_limits(&pdf, limits).unwrap_err();
+    let refusal = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>())
+        .unwrap_or_else(|| panic!("not a limit refusal: {error:#}"));
+    assert!(
+        matches!(refusal, LimitError::DocumentTooLarge { .. }),
+        "unexpected refusal: {refusal}"
+    );
+
+    let limits = Limits {
+        max_document_bytes: 8 * payload,
+        ..Limits::default()
+    };
+    PdfDocument::parse_with_limits(&pdf, limits)
+        .expect("a ceiling that holds the payload and its decoded copy reads");
+}

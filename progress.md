@@ -190,3 +190,71 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   `a_lowered_document_budget_refuses_decryption` lowers the document ceiling to
   32 bytes against a fixture whose plaintext is 45, and confirms the default
   budget still opens it. Suite counts 1,297 / 133.
+- Extraction refuses a locked file instead of reading its ciphertext.
+  `PdfDocument::extract_checked` returns an error carrying the `CryptError`
+  when `locked` is set, with a context naming the encryption, so a caller that
+  did not check `locked` itself cannot get noise shaped like a document; the
+  log of the un-fallible `extract` says the same and yields no pages. The
+  command line keeps its own message, which names `--pdf-password`. New test
+  `a_locked_document_is_refused_rather_than_read_as_ciphertext` opens each
+  encrypted fixture with `user` (its page reads), then with `guess` and checks
+  the typed refusal, the message and the empty facade. Suite counts 1,298 / 133,
+  `crypt_test` 7/7.
+- Streams are decrypted where they stand. `SecurityHandler::decrypt_object` no
+  longer builds a fresh ciphertext-sized buffer per stream; RC4 XORs the payload
+  in place, AES-CBC decrypts each 16-byte block in place and drops the IV and
+  PKCS#7 padding by moving the plaintext down over them, and an Identity stream
+  is left untouched rather than copied for nothing (a string's bytes are built
+  once and decrypted where they lie). The payload's buffer was already charged
+  to the document budget when the parser copied it out of the file, and
+  decrypting in place allocates nothing more, so a file of many encrypted
+  streams has no second ciphertext-sized copy to spend. New unit test
+  `crypt::tests::a_stream_is_decrypted_where_it_stands` holds RC4, AES-128 and
+  Identity streams to the same buffer address and the same bytes; the encrypted
+  fixtures still read end to end. Suite counts 1,299 / 133, `crypt` unit tests
+  7.
+- Extraction fails closed on any document the security handler did not open,
+  not only on a recorded `locked` reason: `extract_checked` refuses when
+  `encrypted` is set and `opened_with` is `None`, carrying the `CryptError`
+  when the parse recorded one and saying the pages are still ciphertext when it
+  did not (a malformed `/Encrypt` whose handler never ran). A gap in the parser
+  therefore cannot surface as a partial read. New test
+  `extraction_fails_closed_when_no_handler_opened_the_file` marks a parsed
+  plain file encrypted and checks the refusal and the empty facade; the
+  wrong-password test from the previous round still covers the `locked` case.
+  Suite counts 1,300 / 133, `crypt_test` 8/8.
+- Decryption has a fuzz target and an aggregate test. `fuzz/fuzz_targets/crypt.rs`
+  overwrites every stream payload in two committed fixtures with the input (the
+  real `/Encrypt` authenticates, so `decrypt_object` runs on arbitrary
+  ciphertext) and also parses a minimal PDF whose `/Encrypt` dictionary body is
+  the input; every refusal must carry a `CryptError` or a `LimitError`, so an
+  untyped failure is a finding. The deterministic half is
+  `crypt_fuzz_test::every_mutation_is_read_or_refused_with_a_typed_error`: a
+  seeded xorshift loop flips bytes in all four fixtures under three passwords
+  and feeds 256 synthesized security dictionaries straight to
+  `SecurityHandler::authenticate`, asserting the same property; a dictionary
+  that does authenticate decrypts an arbitrary payload. The first local run
+  found a real panic — a `/V 5` handler naming a legacy revision took the
+  AES-256 key length into the 16-byte MD5 derivation and sliced past it — now a
+  typed `Unsupported` refusal, pinned by
+  `an_aes256_key_length_with_a_legacy_revision_is_refused`. Local runs:
+  `cargo +nightly fuzz run crypt fuzz/corpus/crypt -- -runs=4000
+  -max_total_time=45` → 302 executions, no crash (the corpus is seeded from
+  `test-data/encrypted*.pdf`); no workflow was dispatched. Suite counts
+  1,302 / 133, `crypt` unit tests 8.
+- The document budget now counts the bytes the parser and the object-stream
+  expansion actually copy. A stream payload's copy out of the file is charged
+  to the whole-document total before it is made (a lowered ceiling now refuses
+  the file at parse, encrypted or not); `honour_stream_lengths` reuses the
+  payload's own buffer and charges only the   growth a longer `/Length` needs; and an object stream is decoded straight
+  from the store rather than cloned, with its decoded contents charged before
+  they are parsed. Decryption no longer charges the stream plaintext a second
+  time — it decrypts in the buffer that copy already paid for — so
+  `SecurityHandler::plaintext_len` counts only the string buffers decryption
+  rebuilds, and the budget is one charge per buffer. New tests
+  `a_stream_payload_is_charged_when_the_parser_copies_it_out_of_the_file` and
+  `expanding_an_object_stream_is_charged_for_its_decoded_copy`;
+  `a_lowered_document_budget_refuses_decryption` still passes, the 32-byte
+  ceiling now refusing the fixture's 45-byte payload as it is copied. The
+  refusal matrix (`limits_matrix_test`) and the decryption fuzz aggregate still
+  pass. Suite counts 1,304 / 133.

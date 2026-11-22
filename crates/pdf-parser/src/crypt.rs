@@ -43,6 +43,8 @@ impl std::fmt::Display for CryptError {
     }
 }
 
+impl std::error::Error for CryptError {}
+
 /// How one class of data (strings or streams) is ciphered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Method {
@@ -133,6 +135,14 @@ impl SecurityHandler {
                 let strings = crypt_filter(encrypt, "StrF")?;
                 let streams = crypt_filter(encrypt, "StmF")?;
                 let length = if v == 5 {
+                    // `/V 5` is AES-256, whose revisions are 5 and 6. A legacy
+                    // revision cannot take this key length: the legacy
+                    // derivation below is a 16-byte MD5 digest.
+                    if !(5..=6).contains(&r) {
+                        return Err(CryptError::Unsupported(format!(
+                            "a /V {v} handler with revision {r}"
+                        )));
+                    }
                     32
                 } else {
                     // `/Length` of a V4 handler is in bits; 128 is the default.
@@ -213,34 +223,31 @@ impl SecurityHandler {
     pub fn decrypt_object(&self, num: usize, gen: i32, value: &mut PdfValue) {
         if let PdfValue::Stream(dict, raw) = value {
             if !stream_is_exempt(dict, self.encrypt_metadata) {
-                *raw = self.decrypt(self.stream_method(dict), num, gen, raw);
+                self.decrypt_in_place(self.stream_method(dict), num, gen, raw);
             }
         }
         self.decrypt_strings(num, gen, value);
     }
 
-    /// The bytes decrypting `value` produces: a stream's payload unless it is
-    /// exempt, and every string inside it, including a stream dictionary's own.
+    /// The bytes decrypting `value` rebuilds in fresh buffers: every string
+    /// inside it, nested dictionaries and arrays included.
     ///
     /// The caller charges this before [`Self::decrypt_object`] runs, so a file
-    /// of many large streams cannot allocate all of its plaintext before the
-    /// whole-document budget is consulted. A stream the handler leaves in the
-    /// clear is copied as well, so its bytes count too.
+    /// whose strings would not fit the whole-document budget is refused before
+    /// any of them is rebuilt. A stream's payload is not counted: it is
+    /// decrypted where it stands, in the buffer the parser charged when it
+    /// copied the payload out of the file.
     pub fn plaintext_len(&self, value: &PdfValue) -> u64 {
         match value {
-            PdfValue::Stream(dict, raw) => {
-                let body = if stream_is_exempt(dict, self.encrypt_metadata) {
-                    0
-                } else {
-                    raw.len() as u64
-                };
-                body.saturating_add(dict_values_len(dict))
-            }
-            PdfValue::Dictionary(dict) => dict_values_len(dict),
+            PdfValue::String(s) => s.chars().count() as u64,
             PdfValue::Array(items) => items.iter().fold(0u64, |total, item| {
                 total.saturating_add(self.plaintext_len(item))
             }),
-            PdfValue::String(s) => s.chars().count() as u64,
+            PdfValue::Dictionary(dict) | PdfValue::Stream(dict, _) => {
+                dict.values().fold(0u64, |total, item| {
+                    total.saturating_add(self.plaintext_len(item))
+                })
+            }
             _ => 0,
         }
     }
@@ -262,8 +269,11 @@ impl SecurityHandler {
     fn decrypt_strings(&self, num: usize, gen: i32, value: &mut PdfValue) {
         match value {
             PdfValue::String(s) => {
-                let plain = self.decrypt(self.strings, num, gen, &latin1_bytes(s));
-                *s = latin1_string(&plain);
+                // A string holds one `char` per byte, so its bytes are built
+                // once and decrypted where they lie before the text is rebuilt.
+                let mut bytes = latin1_bytes(s);
+                self.decrypt_in_place(self.strings, num, gen, &mut bytes);
+                *s = latin1_string(&bytes);
             }
             PdfValue::Array(items) => {
                 for item in items {
@@ -279,12 +289,19 @@ impl SecurityHandler {
         }
     }
 
-    fn decrypt(&self, method: Method, num: usize, gen: i32, data: &[u8]) -> Vec<u8> {
+    /// Decrypt `data` where it stands.
+    ///
+    /// A stream's buffer is the one the parser copied out of the file and
+    /// charged to the document budget, so decrypting in place allocates no
+    /// second ciphertext-sized buffer per stream — the copy that would let a
+    /// file of many encrypted streams outgrow the charge. An Identity payload
+    /// is left untouched rather than copied for nothing.
+    fn decrypt_in_place(&self, method: Method, num: usize, gen: i32, data: &mut Vec<u8>) {
         match method {
-            Method::Identity => data.to_vec(),
-            Method::Rc4 => rc4(&self.object_key(num, gen, false), data),
-            Method::Aes128 => aes_cbc_decrypt(&self.object_key(num, gen, true), data),
-            Method::Aes256 => aes_cbc_decrypt(&self.key, data),
+            Method::Identity => {}
+            Method::Rc4 => rc4_in_place(&self.object_key(num, gen, false), data),
+            Method::Aes128 => aes_cbc_decrypt_in_place(&self.object_key(num, gen, true), data),
+            Method::Aes256 => aes_cbc_decrypt_in_place(&self.key, data),
         }
     }
 
@@ -308,25 +325,6 @@ impl SecurityHandler {
 fn stream_is_exempt(dict: &HashMap<String, PdfValue>, encrypt_metadata: bool) -> bool {
     let kind = dict.get("Type").and_then(PdfValue::as_name);
     kind == Some("XRef") || (kind == Some("Metadata") && !encrypt_metadata)
-}
-
-/// The bytes the strings inside a dictionary decrypt to.
-fn dict_values_len(dict: &HashMap<String, PdfValue>) -> u64 {
-    dict.values().fold(0u64, |total, value| {
-        total.saturating_add(strings_len_in(value))
-    })
-}
-
-/// The bytes the strings inside an array item or nested dictionary decrypt to.
-fn strings_len_in(value: &PdfValue) -> u64 {
-    match value {
-        PdfValue::String(s) => s.chars().count() as u64,
-        PdfValue::Array(items) => items.iter().fold(0u64, |total, item| {
-            total.saturating_add(strings_len_in(item))
-        }),
-        PdfValue::Dictionary(dict) => dict_values_len(dict),
-        _ => 0,
-    }
 }
 
 /// The name a stream's own `/Filter /Crypt` entry gives, or `None` when the
@@ -511,8 +509,16 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 /// RC4, the stream cipher of the older handlers.
 pub fn rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut out = data.to_vec();
+    rc4_in_place(key, &mut out);
+    out
+}
+
+/// RC4 over the bytes' own buffer: the cipher XORs a keystream, so each byte
+/// is replaced where it stands.
+fn rc4_in_place(key: &[u8], data: &mut [u8]) {
     if key.is_empty() {
-        return data.to_vec();
+        return;
     }
     let mut s: [u8; 256] = std::array::from_fn(|i| i as u8);
     let mut j = 0u8;
@@ -521,36 +527,76 @@ pub fn rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
         s.swap(i, j as usize);
     }
     let (mut i, mut j) = (0u8, 0u8);
-    data.iter()
-        .map(|&byte| {
-            i = i.wrapping_add(1);
-            j = j.wrapping_add(s[i as usize]);
-            s.swap(i as usize, j as usize);
-            byte ^ s[s[i as usize].wrapping_add(s[j as usize]) as usize]
-        })
-        .collect()
+    for byte in data.iter_mut() {
+        i = i.wrapping_add(1);
+        j = j.wrapping_add(s[i as usize]);
+        s.swap(i as usize, j as usize);
+        *byte ^= s[s[i as usize].wrapping_add(s[j as usize]) as usize];
+    }
+}
+
+/// An AES block cipher of one of the two key sizes `/V 4` and `/V 5` use.
+enum Cipher {
+    A128(Box<aes::Aes128>),
+    A256(Box<aes::Aes256>),
+}
+
+impl Cipher {
+    /// `None` for a key length AES does not take, which a malformed `/Length`
+    /// can leave a handler with.
+    fn new(key: &[u8]) -> Option<Self> {
+        match key.len() {
+            16 => Some(Cipher::A128(Box::new(aes::Aes128::new(
+                GenericArray::from_slice(key),
+            )))),
+            32 => Some(Cipher::A256(Box::new(aes::Aes256::new(
+                GenericArray::from_slice(key),
+            )))),
+            _ => None,
+        }
+    }
+
+    /// Decrypt one block over its own bytes.
+    fn decrypt_block(&self, block: &mut [u8; 16]) {
+        let block = GenericArray::from_mut_slice(block.as_mut_slice());
+        match self {
+            Cipher::A128(cipher) => cipher.decrypt_block(block),
+            Cipher::A256(cipher) => cipher.decrypt_block(block),
+        }
+    }
 }
 
 /// AES-CBC with the IV in the first block and PKCS#7 padding, as a PDF writes
-/// it. A payload too short for an IV, or whose padding is malformed, comes back
-/// as best decrypted rather than lost: a damaged stream is the filters' problem.
-fn aes_cbc_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
+/// it, decrypted in the payload's own buffer: the IV is dropped and the padding
+/// trimmed by moving the plaintext down, never by allocating a second copy. A
+/// payload too short for an IV, or whose padding is malformed, comes back as
+/// best decrypted rather than lost: a damaged stream is the filters' problem.
+fn aes_cbc_decrypt_in_place(key: &[u8], data: &mut Vec<u8>) {
+    let Some(cipher) = Cipher::new(key) else {
+        data.clear();
+        return;
+    };
     if data.len() < 32 {
-        return Vec::new();
+        data.clear();
+        return;
     }
-    let (iv, body) = data.split_at(16);
-    let body = &body[..body.len() - body.len() % 16];
-    let mut out = cbc_decrypt(key, iv, body);
-    if let Some(&n) = out.last() {
+    let mut iv = [0u8; 16];
+    iv.copy_from_slice(&data[..16]);
+    let body_len = (data.len() - 16) / 16 * 16;
+    data.truncate(16 + body_len);
+    cbc_decrypt_in_place(&cipher, &iv, &mut data[16..]);
+    if let Some(&n) = data.last() {
         let n = n as usize;
         if (1..=16).contains(&n)
-            && n <= out.len()
-            && out[out.len() - n..].iter().all(|&b| b as usize == n)
+            && n <= body_len
+            && data[data.len() - n..].iter().all(|&b| b as usize == n)
         {
-            out.truncate(out.len() - n);
+            data.truncate(data.len() - n);
         }
     }
-    out
+    let plain_len = data.len() - 16;
+    data.copy_within(16.., 0);
+    data.truncate(plain_len);
 }
 
 /// `/UE` and `/OE`: AES-256-CBC with a zero IV and no padding.
@@ -558,32 +604,30 @@ fn aes256_cbc_no_iv_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     cbc_decrypt(key, &[0u8; 16], data)
 }
 
+/// AES-CBC over a copy of `body`: the short fixed-size buffers of the password
+/// checks, where there is nothing to save by decrypting in place.
 fn cbc_decrypt(key: &[u8], iv: &[u8], body: &[u8]) -> Vec<u8> {
-    enum Cipher {
-        A128(Box<aes::Aes128>),
-        A256(Box<aes::Aes256>),
-    }
-    let cipher = match key.len() {
-        16 => Cipher::A128(Box::new(aes::Aes128::new(GenericArray::from_slice(key)))),
-        32 => Cipher::A256(Box::new(aes::Aes256::new(GenericArray::from_slice(key)))),
-        _ => return Vec::new(),
+    let Some(cipher) = Cipher::new(key) else {
+        return Vec::new();
     };
+    let mut out = body.to_vec();
+    cbc_decrypt_in_place(&cipher, iv, &mut out);
+    out
+}
+
+/// AES-CBC over `body` itself: only the 16-byte ciphertext block being
+/// decrypted is held aside, so the payload never exists twice.
+fn cbc_decrypt_in_place(cipher: &Cipher, iv: &[u8], body: &mut [u8]) {
     let mut prev = [0u8; 16];
     prev.copy_from_slice(iv);
-    let mut out = Vec::with_capacity(body.len());
-    for chunk in body.as_chunks::<16>().0 {
-        let mut block = GenericArray::clone_from_slice(chunk);
-        match &cipher {
-            Cipher::A128(c) => c.decrypt_block(&mut block),
-            Cipher::A256(c) => c.decrypt_block(&mut block),
+    for chunk in body.as_chunks_mut::<16>().0 {
+        let ciphertext = *chunk;
+        cipher.decrypt_block(chunk);
+        for (byte, previous) in chunk.iter_mut().zip(prev.iter()) {
+            *byte ^= previous;
         }
-        for (b, p) in block.iter_mut().zip(prev.iter()) {
-            *b ^= p;
-        }
-        out.extend_from_slice(&block);
-        prev.copy_from_slice(chunk);
+        prev = ciphertext;
     }
-    out
 }
 
 /// AES-128-CBC encryption with no padding (the input is a multiple of 16).
@@ -627,7 +671,85 @@ mod tests {
         padded.extend(std::iter::repeat_n(3u8, 3));
         let mut data = iv.to_vec();
         data.extend(aes128_cbc_encrypt(&key, &iv, &padded));
-        assert_eq!(aes_cbc_decrypt(&key, &data), plain);
+        aes_cbc_decrypt_in_place(&key, &mut data);
+        assert_eq!(data, plain);
+    }
+
+    fn handler(method: Method) -> SecurityHandler {
+        SecurityHandler {
+            key: vec![7u8; 16],
+            strings: Method::Rc4,
+            streams: method,
+            named: HashMap::new(),
+            encrypt_metadata: true,
+            opened_with: "user password",
+        }
+    }
+
+    /// A `/V 5` (AES-256) dictionary that names a legacy revision is a
+    /// mismatch, not a 32-byte RC4 key: the legacy derivation is a 16-byte MD5
+    /// digest, so it used to slice past the end. It is a typed refusal.
+    #[test]
+    fn an_aes256_key_length_with_a_legacy_revision_is_refused() {
+        let mut dict = HashMap::new();
+        dict.insert("Filter".into(), PdfValue::Name("Standard".into()));
+        dict.insert("V".into(), PdfValue::Integer(5));
+        dict.insert("R".into(), PdfValue::Integer(3));
+        dict.insert("O".into(), PdfValue::String("o".repeat(32)));
+        dict.insert("U".into(), PdfValue::String("u".repeat(32)));
+        let error = SecurityHandler::authenticate(&dict, &[0u8; 16], None)
+            .expect_err("a mismatched revision is refused");
+        assert!(matches!(error, CryptError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("revision 3"), "{error}");
+    }
+
+    /// A stream is decrypted in the buffer the document already holds, so the
+    /// whole-document charge is its only ceiling: no ciphertext-sized copy per
+    /// stream is allocated past the check.
+    #[test]
+    fn a_stream_is_decrypted_where_it_stands() {
+        let plain = b"Secret ledger".as_slice();
+
+        // RC4 and AES-128 keep the payload's own allocation, and round-trip.
+        for method in [Method::Rc4, Method::Aes128] {
+            let handler = handler(method);
+            let aes = method == Method::Aes128;
+            let key = handler.object_key(4, 0, aes);
+            let ciphertext = if aes {
+                let iv = [9u8; 16];
+                let mut padded = plain.to_vec();
+                padded.extend(std::iter::repeat_n(3u8, 3));
+                let mut data = iv.to_vec();
+                data.extend(aes128_cbc_encrypt(&key, &iv, &padded));
+                data
+            } else {
+                rc4(&key, plain)
+            };
+            let mut value = PdfValue::Stream(HashMap::new(), ciphertext);
+            let PdfValue::Stream(_, raw) = &value else {
+                unreachable!()
+            };
+            let buffer = raw.as_ptr();
+            handler.decrypt_object(4, 0, &mut value);
+            let PdfValue::Stream(_, raw) = &value else {
+                unreachable!()
+            };
+            assert_eq!(raw.as_ptr(), buffer, "{method:?}: decrypted in place");
+            assert_eq!(raw.as_slice(), plain, "{method:?}");
+        }
+
+        // A stream the handler leaves in the clear is not copied either.
+        let mut value = PdfValue::Stream(HashMap::new(), plain.to_vec());
+        let PdfValue::Stream(_, raw) = &value else {
+            unreachable!()
+        };
+        let buffer = raw.as_ptr();
+        handler(Method::Identity).decrypt_object(4, 0, &mut value);
+        let PdfValue::Stream(_, raw) = &value else {
+            unreachable!()
+        };
+        assert_eq!(raw.as_ptr(), buffer, "Identity: not copied");
+        assert_eq!(raw.as_slice(), plain);
     }
 
     #[test]
