@@ -632,6 +632,11 @@ fn run() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    // The password is in the arguments now; the variable is not needed for the
+    // rest of this process, and any child spawned below (LibreOffice, pdftoppm)
+    // would otherwise inherit a secret about a document it may know nothing
+    // about. Removing it here is the single point that covers every child.
+    std::env::remove_var(pdfextractor_formats::PDF_PASSWORD_ENV);
     install_budgets(&args);
 
     // A consumer asking what this build can take should not have to hold an
@@ -1015,14 +1020,11 @@ struct RedlineScratch(PathBuf);
 
 impl RedlineScratch {
     fn new() -> anyhow::Result<Self> {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos());
-        let path = std::env::temp_dir().join(format!(
-            "pdfextractor-redline-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+        // Private and freshly created: the extracted pictures are the
+        // document's content, and another local user has no business reading
+        // them while the comparison runs.
+        let path = pdfextractor_formats::private_scratch_dir("redline")
+            .with_context(|| "create the redline scratch directory")?;
         Ok(Self(path))
     }
 
@@ -2298,7 +2300,7 @@ fn convert_pdf(
             for (data, width, height, box_) in images {
                 ocr_deadline.check("recognising a page")?;
                 let turn = if detect_sideways && picture_is_page(box_, page.width, page.height) {
-                    match engine.detect_upright(data) {
+                    match engine.detect_upright(data, &budgets()) {
                         Ok(QuarterTurn::AsStored) => QuarterTurn::AsStored,
                         Ok(turn) => {
                             tracing::debug!(
@@ -4021,7 +4023,10 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // own reading of the page's turns decides which one it is written in.
     let declared = image.orientation;
     let detected = if declared == pdfextractor_image_parser::Orientation::Normal {
-        match engine.as_mut().map(|engine| engine.detect_upright(source)) {
+        match engine
+            .as_mut()
+            .map(|engine| engine.detect_upright(source, &budgets()))
+        {
             Some(Ok(turn)) => turn,
             Some(Err(err)) => {
                 tracing::debug!(
@@ -4041,13 +4046,17 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     // The page is the upright grid; Tesseract reads the stored one. A camera
     // that was held sideways is turned upright here, once, before recognition —
     // by EXIF when there is a tag, by the reading when there is not.
-    let mut upright = orient_for_ocr(source, declared, &budgets());
-    if declared != pdfextractor_image_parser::Orientation::Normal && upright.is_none() {
-        tracing::warn!(
-            "could not apply EXIF orientation {:?} to {}; OCR sees the stored pixels",
-            declared,
-            path.display()
-        );
+    let mut upright = None;
+    if declared != pdfextractor_image_parser::Orientation::Normal {
+        match orient_for_ocr(source, declared, &budgets()) {
+            Ok(png) => upright = Some(png),
+            Err(refusal) => tracing::warn!(
+                "could not apply EXIF orientation {:?} to {}; OCR sees the stored pixels{}",
+                declared,
+                path.display(),
+                flag_hint(&refusal.into())
+            ),
+        }
     }
     let mut applied = QuarterTurn::AsStored;
     if declared == pdfextractor_image_parser::Orientation::Normal
@@ -4116,7 +4125,7 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
             // had to be turned to be read, the strip is turned with it.
             let (turned, swaps) = if declared != pdfextractor_image_parser::Orientation::Normal {
                 (
-                    orient_for_ocr(&frame.data, declared, &budgets()),
+                    orient_for_ocr(&frame.data, declared, &budgets()).ok(),
                     declared.swaps_axes(),
                 )
             } else if applied == QuarterTurn::AsStored {
@@ -4694,7 +4703,13 @@ fn picture_from_bytes(declared: Option<&'static str>, data: Vec<u8>) -> Option<F
 /// The file a picture's source names, if it names one at all.
 ///
 /// A `data:` URI never reaches this: its bytes are the source, and
-/// [`data_uri_picture`] has already answered. What is left here is a path.
+/// [`data_uri_picture`] has already answered. What is left here is a path, and
+/// it is read only when it names a file inside the document's own directory: a
+/// page is untrusted input, so an absolute path or one that climbs out with
+/// `..` (or a symlink that leads out) names no picture here rather than
+/// whatever file it points at. A relative path is resolved against the
+/// document, because that is what a relative destination means in both
+/// formats.
 fn local_image_path(document: &Path, source: &str) -> Option<PathBuf> {
     let source = source.trim();
     if source.is_empty() || source.starts_with("//") {
@@ -4712,14 +4727,27 @@ fn local_image_path(document: &Path, source: &str) -> Option<PathBuf> {
     }
     let decoded = percent_decode(source);
     let path = Path::new(&decoded);
-    Some(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        document
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(path)
-    })
+    if path.is_absolute() {
+        return None;
+    }
+    // A document named without a directory has an empty parent, which is the
+    // working directory the document itself was resolved against.
+    let directory = match document.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    file_under(directory, path)
+}
+
+/// `path` as a file inside `base`, when it is one.
+///
+/// `..` is refused by the canonical comparison, and a symlink that leads out of
+/// the directory is refused because the canonical form is what is compared — so
+/// what is read is what the document's own directory holds.
+fn file_under(base: &Path, path: &Path) -> Option<PathBuf> {
+    let base = base.canonicalize().ok()?;
+    let candidate = base.join(path).canonicalize().ok()?;
+    candidate.starts_with(&base).then_some(candidate)
 }
 
 /// Decode `%20`-style escapes in a Markdown destination: a path written for a
@@ -5337,8 +5365,8 @@ fn orient_for_ocr(
     data: &[u8],
     orientation: pdfextractor_image_parser::Orientation,
     limits: &pdfextractor_limits::Limits,
-) -> Option<Vec<u8>> {
-    pdfextractor_image_parser::upright_png_checked(data, orientation, limits).ok()
+) -> Result<Vec<u8>, pdfextractor_limits::LimitError> {
+    pdfextractor_image_parser::upright_png_checked(data, orientation, limits)
 }
 
 /// Whether a picture *is* the page, rather than a figure printed on it.
@@ -6238,14 +6266,16 @@ mod tests {
             max_image_pixels: 1,
             ..pdfextractor_limits::Limits::default()
         };
-        assert!(
-            orient_for_ocr(
-                &png,
-                pdfextractor_image_parser::Orientation::Rotate90,
-                &limits
-            )
-            .is_none(),
-            "a one-pixel ceiling turned a 2x2 page by its EXIF tag"
+        let refusal = orient_for_ocr(
+            &png,
+            pdfextractor_image_parser::Orientation::Rotate90,
+            &limits,
+        )
+        .expect_err("a one-pixel ceiling turned a 2x2 page by its EXIF tag");
+        assert_eq!(
+            raise_flag(&refusal.into()),
+            Some("--max-image-pixels"),
+            "the refusal does not name the budget that refused the turn"
         );
 
         let turned = orient_for_ocr(

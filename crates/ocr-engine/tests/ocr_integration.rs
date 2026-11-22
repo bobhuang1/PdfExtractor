@@ -5,6 +5,7 @@
 //! required capability of this project.
 #![cfg(feature = "tesseract")]
 
+use pdfextractor_limits::Limits;
 use pdfextractor_ocr_engine::{OcrEngine, QuarterTurn};
 use pdfextractor_pdf_parser::PdfDocument;
 
@@ -92,7 +93,7 @@ fn a_sideways_page_is_found_without_a_tag() {
     let mut engine = OcrEngine::new("eng").expect("initialise Tesseract");
     assert_eq!(
         engine
-            .detect_upright(&photo("07_sideways.jpg"))
+            .detect_upright(&photo("07_sideways.jpg"), &Limits::default())
             .expect("find the orientation"),
         QuarterTurn::Clockwise90,
         "the invoice is stored a quarter turn anticlockwise"
@@ -104,7 +105,7 @@ fn an_upside_down_page_is_turned_round() {
     let mut engine = OcrEngine::new("eng").expect("initialise Tesseract");
     assert_eq!(
         engine
-            .detect_upright(&photo("08_upside_down.png"))
+            .detect_upright(&photo("08_upside_down.png"), &Limits::default())
             .expect("find the orientation"),
         QuarterTurn::Clockwise180
     );
@@ -116,7 +117,7 @@ fn an_upright_page_is_left_as_stored() {
     for name in ["01_flat.png", "02_skew.png", "05_photo.jpg"] {
         assert_eq!(
             engine
-                .detect_upright(&photo(name))
+                .detect_upright(&photo(name), &Limits::default())
                 .expect("find the orientation"),
             QuarterTurn::AsStored,
             "{name} is already upright"

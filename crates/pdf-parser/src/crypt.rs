@@ -212,27 +212,50 @@ impl SecurityHandler {
     /// is exempt (a cross-reference stream, or metadata left in the clear).
     pub fn decrypt_object(&self, num: usize, gen: i32, value: &mut PdfValue) {
         if let PdfValue::Stream(dict, raw) = value {
-            let kind = dict.get("Type").and_then(PdfValue::as_name);
-            let exempt =
-                kind == Some("XRef") || (kind == Some("Metadata") && !self.encrypt_metadata);
-            if !exempt {
+            if !stream_is_exempt(dict, self.encrypt_metadata) {
                 *raw = self.decrypt(self.stream_method(dict), num, gen, raw);
             }
         }
         self.decrypt_strings(num, gen, value);
     }
 
+    /// The bytes decrypting `value` produces: a stream's payload unless it is
+    /// exempt, and every string inside it, including a stream dictionary's own.
+    ///
+    /// The caller charges this before [`Self::decrypt_object`] runs, so a file
+    /// of many large streams cannot allocate all of its plaintext before the
+    /// whole-document budget is consulted. A stream the handler leaves in the
+    /// clear is copied as well, so its bytes count too.
+    pub fn plaintext_len(&self, value: &PdfValue) -> u64 {
+        match value {
+            PdfValue::Stream(dict, raw) => {
+                let body = if stream_is_exempt(dict, self.encrypt_metadata) {
+                    0
+                } else {
+                    raw.len() as u64
+                };
+                body.saturating_add(dict_values_len(dict))
+            }
+            PdfValue::Dictionary(dict) => dict_values_len(dict),
+            PdfValue::Array(items) => items.iter().fold(0u64, |total, item| {
+                total.saturating_add(self.plaintext_len(item))
+            }),
+            PdfValue::String(s) => s.chars().count() as u64,
+            _ => 0,
+        }
+    }
+
     /// The method a stream's payload is ciphered with: its own `/Crypt` filter
     /// when it names one, and `/StmF` otherwise.
     fn stream_method(&self, dict: &HashMap<String, PdfValue>) -> Method {
         match stream_crypt_filter(dict) {
-            Some(StreamFilter::Identity) => Method::Identity,
-            // A name `/CF` does not define is not a reason to guess: the
-            // default stream filter is what the file said otherwise.
-            Some(StreamFilter::Named(name)) => {
-                self.named.get(&name).copied().unwrap_or(self.streams)
-            }
             None => self.streams,
+            Some("Identity") => Method::Identity,
+            // A name `/CF` does not define leaves the file malformed. The
+            // default stream filter is the closest thing to a stated method —
+            // it is what this stream would have been ciphered with had the
+            // `/Crypt` entry been absent — so it is the guess made here.
+            Some(name) => self.named.get(name).copied().unwrap_or(self.streams),
         }
     }
 
@@ -279,13 +302,37 @@ impl SecurityHandler {
     }
 }
 
-/// A stream's own `/Filter /Crypt` entry, which overrides `/StmF`.
-enum StreamFilter {
-    Identity,
-    Named(String),
+/// Whether a stream's payload is left ciphered as it stands: a cross-reference
+/// stream is never ciphered, and `/EncryptMetadata false` leaves metadata in
+/// the clear.
+fn stream_is_exempt(dict: &HashMap<String, PdfValue>, encrypt_metadata: bool) -> bool {
+    let kind = dict.get("Type").and_then(PdfValue::as_name);
+    kind == Some("XRef") || (kind == Some("Metadata") && !encrypt_metadata)
 }
 
-fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter> {
+/// The bytes the strings inside a dictionary decrypt to.
+fn dict_values_len(dict: &HashMap<String, PdfValue>) -> u64 {
+    dict.values().fold(0u64, |total, value| {
+        total.saturating_add(strings_len_in(value))
+    })
+}
+
+/// The bytes the strings inside an array item or nested dictionary decrypt to.
+fn strings_len_in(value: &PdfValue) -> u64 {
+    match value {
+        PdfValue::String(s) => s.chars().count() as u64,
+        PdfValue::Array(items) => items.iter().fold(0u64, |total, item| {
+            total.saturating_add(strings_len_in(item))
+        }),
+        PdfValue::Dictionary(dict) => dict_values_len(dict),
+        _ => 0,
+    }
+}
+
+/// The name a stream's own `/Filter /Crypt` entry gives, or `None` when the
+/// stream has no such filter. A `/Crypt` entry with no `/Name` is the Identity
+/// filter, which is the specification's default for the key.
+fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<&str> {
     let names_crypt = match dict.get("Filter") {
         Some(PdfValue::Name(n)) => n == "Crypt",
         Some(PdfValue::Array(a)) => a.iter().any(|f| f.as_name() == Some("Crypt")),
@@ -299,40 +346,43 @@ fn stream_crypt_filter(dict: &HashMap<String, PdfValue>) -> Option<StreamFilter>
         Some(PdfValue::Array(a)) => a.iter().find_map(PdfValue::as_dict),
         _ => None,
     };
-    let name = parms
-        .and_then(|p| p.get("Name"))
-        .and_then(PdfValue::as_name);
-    Some(match name {
-        None | Some("Identity") => StreamFilter::Identity,
-        Some(name) => StreamFilter::Named(name.to_string()),
-    })
+    Some(
+        parms
+            .and_then(|p| p.get("Name"))
+            .and_then(PdfValue::as_name)
+            .unwrap_or("Identity"),
+    )
+}
+
+/// The cipher method a `/CFM` names; `None` for a method this build does not
+/// implement. An absent `/CFM` means `/None`, the identity filter.
+fn method_of(cfm: Option<&str>) -> Option<Method> {
+    match cfm {
+        None | Some("None") => Some(Method::Identity),
+        Some("V2") => Some(Method::Rc4),
+        Some("AESV2") => Some(Method::Aes128),
+        Some("AESV3") => Some(Method::Aes256),
+        Some(_) => None,
+    }
 }
 
 /// Every `/CF` entry's method, by the name a stream's `/Crypt` filter uses.
 ///
-/// A method this build does not know is left out rather than mapped to
-/// identity, so the stream falls back to the file's `/StmF` — a guess that at
-/// least matches how the rest of the file was ciphered.
+/// A method this build does not implement is left out rather than mapped to
+/// identity, so that stream falls back to the file's `/StmF`.
 fn crypt_filters(encrypt: &HashMap<String, PdfValue>) -> HashMap<String, Method> {
-    let mut filters = HashMap::new();
     let Some(cf) = encrypt.get("CF").and_then(PdfValue::as_dict) else {
-        return filters;
+        return HashMap::new();
     };
-    for (name, entry) in cf {
-        let method = match entry
-            .as_dict()
-            .and_then(|filter| filter.get("CFM"))
-            .and_then(PdfValue::as_name)
-        {
-            Some("None") => Method::Identity,
-            Some("V2") => Method::Rc4,
-            Some("AESV2") => Method::Aes128,
-            Some("AESV3") => Method::Aes256,
-            _ => continue,
-        };
-        filters.insert(name.clone(), method);
-    }
-    filters
+    cf.iter()
+        .filter_map(|(name, entry)| {
+            let cfm = entry
+                .as_dict()
+                .and_then(|filter| filter.get("CFM"))
+                .and_then(PdfValue::as_name);
+            Some((name.clone(), method_of(cfm)?))
+        })
+        .collect()
 }
 
 /// The method a `/V 4`/`/V 5` handler names under `/StrF` or `/StmF`.
@@ -350,17 +400,10 @@ fn crypt_filter(encrypt: &HashMap<String, PdfValue>, key: &str) -> Result<Method
         .and_then(|cf| cf.get(name))
         .and_then(PdfValue::as_dict)
         .and_then(|f| f.get("CFM"))
-        .and_then(PdfValue::as_name)
-        .unwrap_or("None");
-    match cfm {
-        "None" => Ok(Method::Identity),
-        "V2" => Ok(Method::Rc4),
-        "AESV2" => Ok(Method::Aes128),
-        "AESV3" => Ok(Method::Aes256),
-        other => Err(CryptError::Unsupported(format!(
-            "crypt filter method /{other}"
-        ))),
-    }
+        .and_then(PdfValue::as_name);
+    method_of(cfm).ok_or_else(|| {
+        CryptError::Unsupported(format!("crypt filter method /{}", cfm.unwrap_or("?")))
+    })
 }
 
 fn padded(password: &[u8]) -> Vec<u8> {
@@ -633,6 +676,29 @@ mod tests {
             handler.stream_method(&HashMap::new()),
             Method::Rc4,
             "a stream with no /Crypt filter takes /StmF"
+        );
+    }
+
+    #[test]
+    fn a_cf_entry_without_a_known_method_is_read_by_the_specification() {
+        let mut cf = HashMap::new();
+        cf.insert("StdCF".to_string(), PdfValue::Dictionary(HashMap::new()));
+        let mut odd = HashMap::new();
+        odd.insert("CFM".to_string(), PdfValue::Name("AESV4".into()));
+        cf.insert("Odd".to_string(), PdfValue::Dictionary(odd));
+        let mut encrypt = HashMap::new();
+        encrypt.insert("CF".to_string(), PdfValue::Dictionary(cf));
+
+        let filters = crypt_filters(&encrypt);
+        assert_eq!(
+            filters.get("StdCF"),
+            Some(&Method::Identity),
+            "an absent /CFM is /None, the identity"
+        );
+        assert_eq!(
+            filters.get("Odd"),
+            None,
+            "a method this build does not implement is left out, not guessed"
         );
     }
 

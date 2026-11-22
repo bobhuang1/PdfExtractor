@@ -958,33 +958,6 @@ pub struct Formats {
     pub families: Vec<Family>,
 }
 
-/// The CLI's `--list-input-formats` answer, retrying the one transient it can
-/// meet.
-///
-/// `ETXTBSY` (26 on Unix) means the executable was open for writing somewhere
-/// else at the instant the child tried to exec it. A freshly written script
-/// can meet this because a `fork` from another thread inherits the writing
-/// file descriptor for a moment, and the window itself is often started just
-/// after an installer replaced the CLI. The condition clears in microseconds,
-/// so it is retried rather than reported as a missing binary; every other
-/// error is returned at once.
-fn run_listing(program: &str) -> std::io::Result<std::process::Output> {
-    const ETXTBSY: i32 = 26;
-    for attempt in 0..20 {
-        let result = Command::new(program)
-            .arg("--list-input-formats")
-            .stdin(Stdio::null())
-            .output();
-        match result {
-            Err(error) if error.raw_os_error() == Some(ETXTBSY) && attempt < 19 => {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            other => return other,
-        }
-    }
-    unreachable!("the loop returns on its last attempt")
-}
-
 /// Ask the CLI which input formats this build accepts.
 ///
 /// The window offers, names and filters by exactly the set a run reads, asked of
@@ -998,7 +971,10 @@ fn run_listing(program: &str) -> std::io::Result<std::process::Output> {
 /// spelling, and a name that is not an extension is refused rather than passed to
 /// a chooser that would quietly offer less than the run reads.
 pub fn ask_input_formats(program: &str) -> Result<Formats, String> {
-    let output = run_listing(program)
+    let output = Command::new(program)
+        .arg("--list-input-formats")
+        .stdin(Stdio::null())
+        .output()
         .map_err(|error| format!("could not run {program} --list-input-formats: {error}"))?;
     if !output.status.success() {
         // The CLI's own reason, when it gave one: `anyhow` writes `Error: …`.
@@ -1575,6 +1551,24 @@ mod tests {
         assert!(problem.contains("not JSON"), "{problem}");
     }
 
+    /// Ask a just-written stand-in CLI, retrying the one race a multithreaded
+    /// test binary creates: another thread's `fork` can inherit the descriptor
+    /// the script was written through, and `exec` then answers `ETXTBSY`
+    /// ("Text file busy") until that child closes it. Production never writes
+    /// the executable it runs, so the retry belongs to the test that does.
+    #[cfg(unix)]
+    fn answered_while_busy<T>(mut ask: impl FnMut() -> Result<T, String>) -> T {
+        for _ in 0..40 {
+            match ask() {
+                Err(error) if error.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                other => return other.expect("the stand-in CLI answers"),
+            }
+        }
+        panic!("the stand-in CLI stayed busy");
+    }
+
     /// The window asks once and asks again: the kept answer is what the chooser
     /// filters by, and a refresh replaces it with what the binary says *now* —
     /// which is how a CLI rebuilt or replaced under an open window is picked up.
@@ -1610,13 +1604,19 @@ mod tests {
             .expect("an executable stand-in CLI");
 
         let formats = AcceptedFormats::new(script.to_string_lossy().into_owned());
-        assert_eq!(formats.get().unwrap().names, vec![".pdf"]);
+        assert_eq!(
+            answered_while_busy(|| formats.refresh()).names,
+            vec![".pdf"]
+        );
         assert_eq!(
             formats.get().unwrap().names,
             vec![".pdf"],
             "the answer is kept, not asked for again on every chooser click"
         );
-        assert_eq!(formats.refresh().unwrap().names, vec![".pdf", ".rtf"]);
+        assert_eq!(
+            answered_while_busy(|| formats.refresh()).names,
+            vec![".pdf", ".rtf"]
+        );
         assert_eq!(
             formats.get().unwrap().names,
             vec![".pdf", ".rtf"],
@@ -1657,7 +1657,10 @@ mod tests {
 
         std::env::set_var("PDFEXTRACTOR_CLI", &first);
         let formats = AcceptedFormats::from_environment();
-        assert_eq!(formats.get().unwrap().names, vec![".pdf"]);
+        assert_eq!(
+            answered_while_busy(|| formats.refresh()).names,
+            vec![".pdf"]
+        );
         assert_eq!(formats.program(), first.to_string_lossy());
 
         std::env::set_var("PDFEXTRACTOR_CLI", &second);
@@ -1672,7 +1675,7 @@ mod tests {
             "the kept answer is not re-resolved until a refresh"
         );
         assert_eq!(
-            formats.refresh().unwrap().names,
+            answered_while_busy(|| formats.refresh()).names,
             vec![".pdf", ".rtf"],
             "the refresh still asked the binary the environment named at setup"
         );

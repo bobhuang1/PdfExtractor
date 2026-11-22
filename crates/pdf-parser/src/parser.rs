@@ -102,8 +102,9 @@ pub struct PdfDocument {
     deadline: Deadline,
     /// The first stream that exceeded its budget, returned by extraction.
     limit_hit: RefCell<Option<LimitError>>,
-    /// Every distinct stream this document has expanded, so a file of many
-    /// streams each inside its own ceiling cannot expand without bound.
+    /// Every distinct stream this document has expanded and every byte of
+    /// plaintext its decryption produced, so a file of many streams each
+    /// inside its own ceiling cannot expand or allocate without bound.
     document_bytes: Cell<u64>,
     /// The streams already charged to it: read again, a stream is the same
     /// bytes, not new ones.
@@ -334,6 +335,12 @@ impl PdfDocument {
         }
         if let Some(trailer) = encrypting_trailer {
             doc.decrypt(&trailer, password);
+            // Decryption charges its plaintext before allocating it; that
+            // refusal has to be reported before object streams are expanded on
+            // bytes that were never decrypted.
+            if let Some(error) = doc.limit_hit.take() {
+                return Err(error.into());
+            }
         }
 
         doc.expand_object_streams()?;
@@ -372,6 +379,21 @@ impl PdfDocument {
             }
         };
         self.opened_with = Some(handler.opened_with);
+        // Decryption allocates a plaintext buffer for every stream and string at
+        // once. Charge the total before any of it exists, the way every decoded
+        // stream is charged, so a file of many large streams cannot allocate
+        // past the document budget ahead of the check.
+        let plaintext = self
+            .objects
+            .iter()
+            .filter(|(id, _)| Some(**id) != encrypt_ref)
+            .fold(0u64, |total, (_, value)| {
+                total.saturating_add(handler.plaintext_len(value))
+            });
+        self.charge_document(plaintext, None);
+        if self.limit_hit.borrow().is_some() {
+            return;
+        }
         for (&(num, gen), value) in self.objects.iter_mut() {
             // The `/Encrypt` dictionary's own strings (`/O`, `/U`) are never
             // ciphered.
@@ -1110,7 +1132,8 @@ impl PdfDocument {
     /// repeated walk is what the total exists to bound. `None` charges the
     /// bytes and remembers nothing: it is for work that is rebuilt for a single
     /// decode, which is not the same stream read twice and must not be free the
-    /// next time an address comes round.
+    /// next time an address comes round — and for the plaintext decryption is
+    /// about to allocate for the whole file at once.
     fn charge_document(&self, bytes: u64, key: Option<usize>) {
         if let Some(key) = key {
             if !self.charged_streams.borrow_mut().insert(key) {

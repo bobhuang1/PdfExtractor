@@ -116,16 +116,17 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,287 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
-There are 131 end-to-end tests in `cli_test` that run the built binary as a child process.
+The workspace builds with zero warnings, and the suite holds 1,297 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+There are 133 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing `main`.** It is `origin/main` plus the two local commits `f593eac`
-  (budget flags and the derived-limits fuzz target) and `1fdb79d` (the merge);
-  nothing here pushes without the owner asking.
+- **Pushing the branch.** `finish-plan-2026-11` is `origin/main` plus four
+  local commits — `f593eac` (budget flags and the derived-limits fuzz target),
+  `1fdb79d` (the merge), `b59e0e3` (the review's hardening) and the security
+  and budget review round — and nothing here pushes without the owner asking.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.

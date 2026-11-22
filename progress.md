@@ -108,13 +108,45 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   --no-fail-fast`): every target passed except **one** UI test,
   `a_refresh_re_resolves_the_cli_named_by_the_environment`, which met `ETXTBSY`
   (“Text file busy”) executing its stand-in CLI while another test thread forked.
-  `ask_input_formats` now retries that single transient (20 × 5 ms) and returns any
-  other error at once; `cargo test -p pdfextractor-ui --lib` passes 5/5 consecutive
-  runs after the fix (121 tests each).
+  The two tests that write and run a stand-in CLI now retry that transient
+  themselves (`answered_while_busy`), because only a test writes the executable it
+  runs; production keeps a single `exec`. `cargo test -p pdfextractor-ui --lib`
+  passes 8/8 consecutive runs (121 tests each).
+- Review pass on the two fixes: the `/CFM`→method mapping is now one helper
+  (`method_of`); an absent `/CFM` is the identity, as the specification says (it
+  used to fall back to `/StmF`); a stream naming a filter `/CF` does not define
+  still uses `/StmF`, now with that choice written down; and the `ETXTBSY` retry
+  moved out of production into the tests that create the race. The EXIF turn's
+  library contract is pinned where it lives too:
+  `the_exif_turn_is_held_to_the_callers_budget_and_returns_upright_pixels` in
+  `crates/image-parser/tests/limits_test.rs` checks the typed refusal and the
+  swapped axes, not only the CLI wrapper. Suite count 1,294.
+- Security and efficiency review of the whole workspace (no `unsafe` anywhere;
+  the PDF parser, budgets, bridge and exporters were read end to end). Fixed
+  now: the PDF password is removed from the CLI's environment after its args are
+  parsed and from the bridge child's environment explicitly, so LibreOffice no
+  longer inherits `PDFE_PDF_PASSWORD`; bridge and redline scratch directories are
+  freshly created, private (`0700`) and unpredictable instead of a fixed
+  `pid`-named path that was removed and reused; both exporters create their
+  sibling temporary file with `O_EXCL` and retry a different name, so a planted
+  symlink is never followed or truncated; embedded Markdown/HTML pictures are
+  read only from inside the reading's own directory, so a document cannot embed
+  an absolute path or one that climbs out with `..`; and JSON export streams the
+  pretty form through a `BufWriter` instead of holding a second full copy of the
+  document in memory. Flow readers were held to the same containment later: a
+  page's own `<img src>` / `![](...)` path is read only from inside the
+  document's directory, so an absolute path, a `..` climb or a symlink out
+  names no picture. Decryption's plaintext is now charged to the
+  whole-document budget before any of it is allocated (below). Left as
+  follow-ups: `--pdf-password` still appears in argv (the environment remains
+  the documented route), decryption still copies ciphertext before filters
+  rather than charging those copies too, and `soffice` is still found by `PATH`
+  (overridable with `PDFE_SOFFICE`).
 - Crypt review: RC4-40/128, AES-128 and AES-256 (revisions 2–6) key derivation,
   padding, the `/Encrypt`-dictionary and object-stream exemptions, and the
-  trailer-`/Root` choice hold up; `crypt_test` 5/5 and the CLI `encrypted_test` 6/6
-  pass against the Poppler-verified fixtures. One gap fixed: a stream whose own
+  trailer-`/Root` choice hold up; `crypt_test` 5/5 at that point (6 with the
+  decryption-budget test below) and the CLI `encrypted_test` 6/6 pass against
+  the Poppler-verified fixtures. One gap fixed: a stream whose own
   `/Filter /Crypt` names a filter other than `/Identity` was decrypted with `/StmF`;
   it now uses that `/CF` entry's method
   (`crypt::tests::a_stream_naming_its_own_crypt_filter_uses_that_filter`).
@@ -133,3 +165,28 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   (checked by hand with `PATH=/nonexistent`, which converts `legacy_brief.doc`
   through the built-in reader, exit 0). New test
   `a_bridge_budget_refusal_fails_the_legacy_document`; suite counts 1,287 / 131.
+- The orientation check's decode is budgeted too: `OcrEngine::detect_upright`
+  takes the run's `Limits` (there is no defaulting wrapper to call by accident),
+  decodes the reduced detection copy through `image_parser::decode_checked`, and
+  both
+  CLI call sites pass `&budgets()`. A page the image budgets refuse yields that
+  `LimitError` (the command line keeps the stored orientation and reads on, as it
+  does for a refused page turn). New test
+  `a_one_pixel_ceiling_refuses_the_orientation_decode`; suite count 1,288.
+- Flow readers were held to the exporters' containment rule: a picture path
+  written in an untrusted HTML or Markdown document (`local_image_path`) is
+  resolved against the document's own directory and read only when the
+  canonical file is still under it. An absolute path, a `..` climb or a symlink
+  leading out names no picture instead of an arbitrary local file. New tests
+  `an_absolute_picture_path_is_not_read_from_a_flow_page` and
+  `a_picture_path_cannot_climb_out_of_the_documents_directory`; the existing
+  in-directory picture tests still pass. Suite counts 1,296 / 133.
+- Decryption is charged before it allocates. `SecurityHandler::plaintext_len`
+  sums the payload of every stream the handler decrypts plus every string the
+  file holds (stream dictionaries included); `PdfDocument::decrypt` charges
+  that total to the whole-document budget, excluding the `/Encrypt` object's own
+  strings, and returns on a refusal before a single plaintext buffer exists, so
+  the parse reports the refusal before object streams are expanded. New test
+  `a_lowered_document_budget_refuses_decryption` lowers the document ceiling to
+  32 bytes against a fixture whose plaintext is 45, and confirms the default
+  budget still opens it. Suite counts 1,297 / 133.

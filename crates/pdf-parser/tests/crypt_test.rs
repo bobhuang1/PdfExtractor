@@ -6,6 +6,7 @@
 //! user password `user` and owner password `owner`). Poppler's `pdftotext`
 //! reads every one of them back, so these are files a real reader accepts.
 
+use pdfextractor_limits::{LimitError, Limits};
 use pdfextractor_pdf_parser::crypt::CryptError;
 use pdfextractor_pdf_parser::objects::PdfValue;
 use pdfextractor_pdf_parser::PdfDocument;
@@ -93,6 +94,38 @@ fn a_missing_or_wrong_password_is_locked_and_reads_no_noise() {
             assert_eq!(doc.opened_with, None);
         }
     }
+}
+
+/// Decryption produces every stream's plaintext in one pass, so those bytes are
+/// charged to the document budget before any of them is allocated. A ceiling
+/// that still permits the input itself refuses the file here, instead of letting
+/// the plaintext of many streams add up past what the caller allowed.
+#[test]
+fn a_lowered_document_budget_refuses_decryption() {
+    let pdf = fixture("encrypted.pdf");
+    let limits = Limits {
+        max_document_bytes: 32,
+        ..Limits::default()
+    };
+    assert!(
+        (pdf.len() as u64) <= limits.max_input_bytes,
+        "the file is inside the input ceiling"
+    );
+
+    let error = PdfDocument::parse_with_limits_and_password(&pdf, limits, None)
+        .expect_err("the plaintext is charged before it is allocated");
+    assert!(
+        matches!(
+            error.downcast_ref::<LimitError>(),
+            Some(LimitError::DocumentTooLarge { limit: 32, .. })
+        ),
+        "{error}"
+    );
+
+    // The same bytes open under the default budget: the refusal is the lowered
+    // whole-document ceiling, not the file or its password.
+    let doc = PdfDocument::parse(&pdf).expect("the default budget opens it");
+    assert_eq!(doc.locked, None);
 }
 
 #[test]

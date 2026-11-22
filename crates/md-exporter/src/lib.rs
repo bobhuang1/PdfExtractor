@@ -285,20 +285,59 @@ pub fn export_to_file_with_images(
 ) -> anyhow::Result<()> {
     let base = path.parent();
     let text = render_with_images(doc, include_notes, image_mode, base);
+    write_beside(path, &text)
+}
 
+/// Write `text` through an exclusively created sibling, renamed into place once
+/// it is whole.
+///
+/// `O_EXCL` matters here as much as the rename does: the temporary name is
+/// predictable enough to be planted (as a symlink, say) in a shared output
+/// directory, and a plain `write` would follow it.
+fn write_beside(path: &Path, text: &str) -> anyhow::Result<()> {
+    let mut last = None;
+    for attempt in 0..16 {
+        let temp = temp_path_beside(path, attempt);
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let written = std::io::Write::write_all(&mut file, text.as_bytes());
+        drop(file);
+        let outcome = written
+            .map_err(anyhow::Error::from)
+            .and_then(|()| std::fs::rename(&temp, path).map_err(Into::into));
+        if outcome.is_err() {
+            // Do not leave the temporary file behind for a failed export.
+            let _ = std::fs::remove_file(&temp);
+        }
+        return outcome;
+    }
+    Err(last.map_or_else(
+        || {
+            anyhow::anyhow!(
+                "could not create a temporary file beside {}",
+                path.display()
+            )
+        },
+        anyhow::Error::from,
+    ))
+}
+
+fn temp_path_beside(path: &Path, attempt: u32) -> PathBuf {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "document.md".to_string());
-    let temp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-
-    std::fs::write(&temp, text)?;
-    if let Err(error) = std::fs::rename(&temp, path) {
-        // Do not leave the temporary file behind for a failed export.
-        let _ = std::fs::remove_file(&temp);
-        return Err(error.into());
-    }
-    Ok(())
+    path.with_file_name(format!(".{name}.{}.{attempt}.tmp", std::process::id()))
 }
 
 struct Renderer<'a> {
@@ -652,11 +691,13 @@ pub(crate) fn cell_tables<'a>(
 /// The `data:` URI carrying `image`'s bytes, when they can be reached.
 ///
 /// A `uri` that is already a `data:` URI is kept exactly as written; a file is
-/// read from `base` (or as given, when there is no base). A remote address is
-/// not fetched — a renderer that reached over the network would turn a local
-/// conversion into an HTTP client — and an image with no media type cannot be
-/// labelled honestly, so both answer `None` and the caller writes a
-/// placeholder instead.
+/// read from `base`, and only from inside it, so a document cannot name an
+/// absolute path or climb out with `..` and have its bytes embedded. (With no
+/// base the library caller has named the file itself, and it is read as given.)
+/// A remote address is not fetched — a renderer that reached over the network
+/// would turn a local conversion into an HTTP client — and an image with no
+/// media type cannot be labelled honestly, so both answer `None` and the caller
+/// writes a placeholder instead.
 pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<String> {
     let uri = image.uri.as_deref()?;
     if uri.starts_with("data:") {
@@ -667,11 +708,27 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
     }
     let mimetype = image.mimetype.as_deref()?;
     let path = match base {
-        Some(base) => base.join(uri),
+        Some(base) => file_under(base, uri)?,
         None => PathBuf::from(uri),
     };
     let bytes = std::fs::read(path).ok()?;
     Some(format!("data:{mimetype};base64,{}", STANDARD.encode(bytes)))
+}
+
+/// `uri` as a file inside `base`, when it is one.
+///
+/// Absolute names are refused because `Path::join` would discard `base` for
+/// them, `..` is refused by the canonical comparison, and a symlink that leads
+/// out of the directory is refused because the canonical form is what is
+/// compared — so what is embedded is what the reading's own directory holds.
+fn file_under(base: &Path, uri: &str) -> Option<PathBuf> {
+    let base = base.canonicalize().ok()?;
+    let named = Path::new(uri);
+    if named.is_absolute() {
+        return None;
+    }
+    let candidate = base.join(named).canonicalize().ok()?;
+    candidate.starts_with(&base).then_some(candidate)
 }
 
 /// The GitHub-flavoured pipe table for `table`, shared with the text writer:
@@ -1650,6 +1707,33 @@ mod tests {
             "<!-- image -->\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An embedded picture is read only from inside the directory the reading is
+    /// written in: an untrusted document must not be able to name any file on
+    /// the machine and have its bytes carried in the output.
+    #[test]
+    fn an_embedded_picture_cannot_climb_out_of_its_directory() {
+        let dir = std::env::temp_dir().join(format!("pdfe-md-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let secret = dir.with_file_name(format!("pdfe-md-secret-{}", std::process::id()));
+        std::fs::write(&secret, b"secret bytes").expect("the file outside the directory");
+
+        let name = secret
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .expect("the secret's name");
+        for uri in [format!("../{name}"), secret.to_string_lossy().into_owned()] {
+            let doc = picture_doc(&uri, "image/png");
+            assert_eq!(
+                render_with_images(&doc, false, ImageMode::Embedded, Some(&dir)),
+                "<!-- image -->\n",
+                "{uri} was read from outside the document's directory"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&secret);
     }
 
     /// A `uri` that is already a `data:` URI is carried as written: reading an

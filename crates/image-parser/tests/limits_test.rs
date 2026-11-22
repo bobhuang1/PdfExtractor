@@ -1,4 +1,4 @@
-use pdfextractor_image_parser::ImageDocument;
+use pdfextractor_image_parser::{upright_png_checked, ImageDocument, Orientation};
 use pdfextractor_limits::{LimitError, Limits};
 
 /// A PNG signature and IHDR big enough for the header reader, with a grid that
@@ -66,6 +66,43 @@ fn the_default_budget_accepts_a_letter_sized_scan() {
     let data = png(2_550, 3_300);
     let document = ImageDocument::parse_bytes(&data).expect("a normal scan");
     assert_eq!((document.width, document.height), (2_550, 3_300));
+}
+
+/// A nominally sized, decodable picture: the header reader and the decoder both
+/// accept it, so only a budget can stand between it and its pixels.
+fn decodable(width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::GrayImage::from_pixel(width, height, image::Luma([0x7f]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .expect("encode the test PNG");
+    out
+}
+
+/// The EXIF turn is one more decode, so it takes the caller's budgets: a
+/// lowered ceiling is refused with the budget's own error (not `None`), and at
+/// the defaults the same picture comes back with its axes swapped.
+#[test]
+fn the_exif_turn_is_held_to_the_callers_budget_and_returns_upright_pixels() {
+    let data = decodable(4, 2);
+    let tight = Limits {
+        max_image_pixels: 1,
+        ..Limits::default()
+    };
+    let error = upright_png_checked(&data, Orientation::Rotate90, &tight)
+        .expect_err("a four-by-two picture must be refused by a one-pixel budget");
+    assert!(
+        matches!(error, LimitError::ImageTooManyPixels { .. }),
+        "the refusal must be the budget's own error, not a decode failure: {error}"
+    );
+
+    let png = upright_png_checked(&data, Orientation::Rotate90, &Limits::default())
+        .expect("the defaults turn a tiny page");
+    let turned = image::load_from_memory(&png).expect("the turn writes a decodable PNG");
+    assert_eq!(
+        (turned.width(), turned.height()),
+        (2, 4),
+        "a quarter turn must swap the page's axes"
+    );
 }
 
 #[test]

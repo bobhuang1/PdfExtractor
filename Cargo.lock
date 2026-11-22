@@ -3626,6 +3626,7 @@ dependencies = [
  "leptess",
  "pdfextractor-core",
  "pdfextractor-image-parser",
+ "pdfextractor-limits",
  "pdfextractor-pdf-parser",
  "tracing",
 ]

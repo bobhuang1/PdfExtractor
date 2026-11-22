@@ -228,12 +228,20 @@ impl OcrEngine {
     /// as a turned page, and only a stronger reading the right way round shows
     /// it. The two quarter turns are read only when the stored reading is weak
     /// (`DETECT_SETTLED_SCORE`), which is the shape a sideways page makes.
-    pub fn detect_upright(&mut self, image_bytes: &[u8]) -> Result<QuarterTurn> {
+    /// The detector reduces the page by decoding it, so its `limits` are the
+    /// run's image budgets: `--max-image-pixels`, `--max-image-dimension` and
+    /// `--max-image-alloc-bytes` govern this decode like every other. A page the
+    /// budgets refuse yields the budget's own
+    /// [`pdfextractor_limits::LimitError`], and the caller decides what a refused
+    /// page means (the command line keeps the stored orientation and reads on).
+    pub fn detect_upright(
+        &mut self,
+        image_bytes: &[u8],
+        limits: &pdfextractor_limits::Limits,
+    ) -> Result<QuarterTurn> {
         #[cfg(feature = "tesseract")]
         {
-            let bitmap = pdfextractor_image_parser::decode(image_bytes)
-                .context("failed to decode the image whose orientation was to be found")?;
-            let sample = downscale_for_detection(&bitmap);
+            let sample = detection_sample(image_bytes, limits)?;
 
             let stored = self.read_turn(&sample, QuarterTurn::AsStored)?;
             let mut readings = vec![
@@ -253,7 +261,7 @@ impl OcrEngine {
         }
         #[cfg(not(feature = "tesseract"))]
         {
-            let _ = image_bytes;
+            let _ = (image_bytes, limits);
             anyhow::bail!("OCR support was not compiled in")
         }
     }
@@ -303,6 +311,19 @@ impl OcrEngine {
             anyhow::bail!("OCR support was not compiled in")
         }
     }
+}
+
+/// The page reduced to the size the orientation detector reads, decoded under
+/// the run's image budgets: the detector's decode is one more decode of the
+/// page, so it is held to the same ceilings as every other.
+#[cfg(feature = "tesseract")]
+fn detection_sample(
+    image_bytes: &[u8],
+    limits: &pdfextractor_limits::Limits,
+) -> Result<image::GrayImage> {
+    let bitmap = pdfextractor_image_parser::decode_checked(image_bytes, limits)
+        .context("failed to decode the image whose orientation was to be found")?;
+    Ok(downscale_for_detection(&bitmap))
 }
 
 /// The page reduced to the size the orientation detector reads, as grey: the
@@ -472,6 +493,35 @@ mod tests {
     fn ignores_non_word_rows_and_blanks() {
         let r = parse_tsv(TSV);
         assert!(r.words.iter().all(|w| !w.text.trim().is_empty()));
+    }
+
+    /// The detector decodes the page to reduce it; that decode is the run's,
+    /// so a ceiling that refuses the page refuses the detection too.
+    #[cfg(feature = "tesseract")]
+    #[test]
+    fn a_one_pixel_ceiling_refuses_the_orientation_decode() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode the test picture");
+
+        let limits = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let refused = detection_sample(&png, &limits)
+            .expect_err("a one-pixel ceiling decoded a 2x2 page to find its orientation");
+        assert!(
+            refused.chain().any(|cause| cause
+                .downcast_ref::<pdfextractor_limits::LimitError>()
+                .is_some()),
+            "the refusal is not the budget's: {refused:#}"
+        );
+
+        assert!(
+            detection_sample(&png, &pdfextractor_limits::Limits::default()).is_ok(),
+            "the defaults decode a 2x2 page"
+        );
     }
 
     /// A reading with just these words, at these confidences.

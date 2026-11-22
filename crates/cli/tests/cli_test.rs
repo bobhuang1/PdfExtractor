@@ -10321,6 +10321,104 @@ fn an_html_picture_is_copied_like_a_markdown_one() {
     );
 }
 
+/// An absolute source on a flow page names no picture: the page is untrusted
+/// input, so the file it points at — even a real one — is neither read nor
+/// copied. The markup stays as the words the page holds instead.
+#[test]
+fn an_absolute_picture_path_is_not_read_from_a_flow_page() {
+    let ws = Workspace::new("html-picture-absolute");
+    let absolute = repository_root().join("test-data/images/scan.jpg");
+    assert!(absolute.is_file(), "the image fixture");
+    let input = ws.write(
+        "page.html",
+        format!(
+            "<!DOCTYPE html><html><body><h1>Absolute</h1>\
+             <p>Before <img src=\"{}\" alt=\"outside\"> after.</p></body></html>",
+            absolute.display()
+        )
+        .as_bytes(),
+    );
+
+    let json = ws.join("page.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        json.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&json);
+    assert_eq!(
+        doc["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "the page took a picture from an absolute path: {:#?}",
+        doc["pictures"]
+    );
+    assert!(
+        !ws.join("page_images").exists(),
+        "the picture outside the page's own directory was copied"
+    );
+    let markdown = std::fs::read_to_string(ws.join("page.md")).expect("the Markdown");
+    assert!(
+        markdown.contains(&format!("![outside]({})", absolute.display()))
+            && markdown.contains("Before")
+            && markdown.contains("after."),
+        "the page's own words were lost:\n{markdown}"
+    );
+}
+
+/// A relative source that climbs out of the document's directory with `..` is
+/// refused for the same reason: what a page may read is what its own directory
+/// holds, not the file above it.
+#[test]
+fn a_picture_path_cannot_climb_out_of_the_documents_directory() {
+    let ws = Workspace::new("html-picture-climb");
+    let bytes = fixture("images/scan.jpg");
+    ws.write("secret/scan.jpg", &bytes);
+    let input = ws.write(
+        "site/page.html",
+        b"<!DOCTYPE html><html><body><h1>Climb</h1>\
+          <p>Before <img src=\"../secret/scan.jpg\" alt=\"outside\"> after.</p></body></html>",
+    );
+
+    let json = ws.join("page.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        json.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&json);
+    assert_eq!(
+        doc["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "the page climbed out of its own directory: {:#?}",
+        doc["pictures"]
+    );
+    assert!(
+        !ws.join("page_images").exists(),
+        "the picture above the page's directory was copied"
+    );
+    let markdown = std::fs::read_to_string(ws.join("page.md")).expect("the Markdown");
+    assert!(
+        markdown.contains("![outside](../secret/scan.jpg)"),
+        "the page's own words were lost:\n{markdown}"
+    );
+}
+
 /// A flow page's picture keeps the name the page gave it even when that name
 /// holds a space or a character HTML must escape. The page written from the
 /// document names the same file — `&` as `&amp;`, the apostrophe as its

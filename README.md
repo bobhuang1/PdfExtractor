@@ -351,7 +351,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--page-range <RANGE>` | read only these pages: `1-4,9`, and `7-` for page 7 to the end (1-based, inclusive). A **page** is a PDF's page, a workbook's **sheet**, a presentation's **slide** (PPTX or ODP), or an image's **frame** (a GIF's or WebP's animation, a TIFF's directories). The range is applied **before layout analysis**, so a kept PDF page's furniture and footnotes are found among the kept pages only, and each page, sheet, slide or frame keeps the number it has in the file (a document read as pages 2–3 still says its pages are 2 and 3). A format with no pages — DOCX, Markdown — is read whole, and the log says so; a range that names no page fails, naming the range and how many there were |
 | `--ocr <MODE>` | `auto` (default, scans only), `always`, or `never` |
 | `--ocr-lang <LANGS>` | OCR languages as comma-separated Tesseract codes (`eng,deu`), default `eng`; the language's data must be installed, or shipped beside a released binary |
-| `--pdf-password <PASSWORD>` | the password of an encrypted PDF, user or owner; read from `PDFE_PDF_PASSWORD` when the flag is absent, so it need not appear in a process listing. Without it an encrypted PDF is opened with the empty user password |
+| `--pdf-password <PASSWORD>` | the password of an encrypted PDF, user or owner; read from `PDFE_PDF_PASSWORD` when the flag is absent, so it need not appear in a process listing. Once read, the variable is removed from the environment, so no child process inherits it. Without it an encrypted PDF is opened with the empty user password |
 | `--psm <N>` | Tesseract page segmentation mode, 0–13 (6 is one block, 7 one line, 11 sparse text); the engine's own default when absent |
 | `--text-dehyphenate <BOOL>` | join words a line break split when writing `--to text` (default `true`, as pdftotext does); `--text-dehyphenate false` is the off switch — every source character is kept, at the cost of `exam- ple` style breaks |
 | `--include-notes` | include the notes layer — a deck's speaker notes and comments — in the `md`, `html` and `text` outputs. Off, those three are a reading of the slides alone; JSON and YAML always carry the whole document. Markdown writes a speaker note's paragraphs as `> **Notes:**` lines and a comment's as `> **Comment:**` lines, and HTML as an `<aside class="notes">` (or `<aside class="notes comment">`) holding one `<p>` per paragraph with a bold label on the first, so an included remark is visibly not a slide, a comment is visibly not the presenter's note, and paragraph breaks are kept; plain text keeps it unmarked. Reading such a Markdown or HTML back puts the remark on the notes layer again, paragraphs and all |
@@ -1150,13 +1150,15 @@ refused with a named limit rather than allowed to exhaust memory, stack or time.
 | XML part / nesting | 64 MiB / 256 levels; `DOCTYPE` declarations are refused |
 | Image grid | 100,000 per side, 100,000,000 pixels; 512 MiB decode allocation |
 | Flow-format blocks | 1,000,000, a table counting one per cell (text, Markdown, CSV, RTF, HTML, DOCX, `.doc`) |
-| One document's decoded total | 1 GiB across every PDF stream and image frame its reader decodes; a stream read again is the same bytes, not new ones |
+| One document's decoded total | 1 GiB across every PDF stream and image frame its reader decodes and the plaintext decryption is about to allocate; a stream read again is the same bytes, not new ones |
 | LibreOffice bridge | 512 MiB of output, 120 seconds |
 | Parser wall clock / OCR | 30 seconds, checked between objects, pages, entries and XML events; OCR pages get 600 seconds of their own, recognition being seconds a page |
 
 Each budget has a flag, so a run can raise one without a rebuild, and a refusal
 names the flag that would (`--max-image-pixels`, say) — see "Resource flags"
-below. A PDF's page count is enforced before any page is analysed, and
+below. The image budgets govern every decode the OCR pipeline makes of a page,
+including the EXIF turn, the detected quarter turn and the reduced copy the
+orientation check reads. A PDF's page count is enforced before any page is analysed, and
 extraction has a checked path (`extract_checked`) that reports the refusal
 instead of returning a shortened document.
 
@@ -1449,7 +1451,10 @@ resolution implied by the box the document drew them into. A picture a **flow pa
 (HTML or Markdown) already named beside itself keeps the page's own relative path
 instead — `![…](images/scan.jpg)` is still `images/scan.jpg` beside the output —
 because the page named that file, and a page written from the document has to name
-it again to be the page it was. A picture the page carried in a `data:` URI, or named
+it again to be the page it was. Only a file inside the page's own directory is read:
+an absolute path, a `..` climb or a symlink leading out names no picture, so an
+untrusted page cannot make the reader open the rest of the disk. A picture the page
+carried in a `data:` URI, or named
 in a way this cannot spell (a remote URL, an absolute path, a name needing escapes, an
 extension that is not the bytes' own), is written under `<stem>_images/img<N>.<ext>`
 like any extracted picture. Figures drawn as pure vector

@@ -33,11 +33,64 @@ use pdfextractor_limits::{LimitError, Limits};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// How often a running conversion is measured, while it runs.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The environment variable a PDF password is read from (`--pdf-password`'s
+/// `env` in the command line, and what the window sets for its child).
+///
+/// A conversion hands a document to another program, and the password is a
+/// secret about a *different* document in the same run, so the bridge removes
+/// it from the child's environment ([`bridge_command`]).
+pub const PDF_PASSWORD_ENV: &str = "PDFE_PDF_PASSWORD";
+
+/// A fresh, private scratch directory under the system temporary directory.
+///
+/// The name carries the process, a timestamp and an attempt counter, and the
+/// directory is created rather than reused: a predictable name in a
+/// world-writable directory can be pre-created by another user (as a symlink,
+/// say) and made to redirect or expose what a conversion writes there. On Unix
+/// the new directory is `0700`, so the converted document is readable by its
+/// owner alone while the bridge runs.
+pub fn private_scratch_dir(tag: &str) -> std::io::Result<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let mut collision = None;
+    for attempt in 0..16u32 {
+        let path = std::env::temp_dir().join(format!(
+            "pdfe-{tag}-{}-{nanos}-{attempt}",
+            std::process::id()
+        ));
+        match create_private_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                collision = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "no free scratch directory name",
+        )
+    }))
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700).create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(path)
+}
 
 /// The MIME type a Works document is published under; WordPerfect's and the
 /// legacy Excel one are here for the same reason.
@@ -550,18 +603,7 @@ pub fn bridge_with_limits(
     // budget is being watched.
     let log_path = scratch.path.join("libreoffice.log");
     let log = File::create(&log_path)?;
-    let mut child = Command::new(&soffice)
-        .arg("--headless")
-        .arg("--norestore")
-        .arg(format!(
-            "-env:UserInstallation=file://{}",
-            profile.to_string_lossy()
-        ))
-        .arg("--convert-to")
-        .arg(target.extension())
-        .arg("--outdir")
-        .arg(&out)
-        .arg(input)
+    let mut child = bridge_command(&soffice, &profile, &out, input, &target)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))
         .spawn()
@@ -586,6 +628,37 @@ pub fn bridge_with_limits(
         path: produced,
         _scratch: scratch,
     })
+}
+
+/// The command that runs one conversion.
+///
+/// The PDF password is removed from the child's environment: the bridge is
+/// handed the document it was asked about, and an unrelated `.doc` in the same
+/// run must not carry a secret about an encrypted PDF into a program that has
+/// no use for it. (The command line also clears the variable once its arguments
+/// are parsed, so no other child inherits it either.)
+fn bridge_command(
+    soffice: &Path,
+    profile: &Path,
+    out: &Path,
+    input: &Path,
+    target: &BridgeTarget,
+) -> Command {
+    let mut command = Command::new(soffice);
+    command
+        .arg("--headless")
+        .arg("--norestore")
+        .arg(format!(
+            "-env:UserInstallation=file://{}",
+            profile.to_string_lossy()
+        ))
+        .arg("--convert-to")
+        .arg(target.extension())
+        .arg("--outdir")
+        .arg(out)
+        .arg(input)
+        .env_remove(PDF_PASSWORD_ENV);
+    command
 }
 
 /// Wait for a bridge conversion to finish, killing it when it outlives the
@@ -631,11 +704,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(tag: &str) -> Result<Self> {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("pdfe-{tag}-{}-{unique}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+        let path = private_scratch_dir(tag)
+            .with_context(|| format!("create a {tag} scratch directory"))?;
         Ok(Self { path })
     }
 }
@@ -1166,5 +1236,48 @@ mod tests {
         let search = std::ffi::OsString::from(directory.as_os_str());
         assert_eq!(resolve_soffice(None, Some(search)), Some(fake));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The bridge is handed the document it is asked about, never a secret
+    /// about another document in the same run: `Command` records the removal,
+    /// so the child inherits no value even when the parent's environment has
+    /// one.
+    #[test]
+    fn the_bridge_does_not_inherit_the_pdf_password() {
+        let command = bridge_command(
+            Path::new("soffice"),
+            Path::new("/tmp/profile"),
+            Path::new("/tmp/out"),
+            Path::new("in.doc"),
+            &BridgeTarget::Docx,
+        );
+        assert!(
+            command.get_envs().any(
+                |(key, value)| key == std::ffi::OsStr::new(PDF_PASSWORD_ENV) && value.is_none()
+            ),
+            "the child would inherit {PDF_PASSWORD_ENV}"
+        );
+    }
+
+    /// Scratch directories are created, not reused, and are private: a stale one
+    /// from a crashed run is never written into, and another user cannot read the
+    /// converted document while it is there.
+    #[test]
+    fn scratch_directories_are_fresh_and_private() {
+        let first = private_scratch_dir("test").expect("a scratch directory");
+        let second = private_scratch_dir("test").expect("a second scratch directory");
+        assert_ne!(first, second, "two runs shared a scratch directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&first)
+                .expect("the scratch directory")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "the scratch directory is not private");
+        }
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 }
