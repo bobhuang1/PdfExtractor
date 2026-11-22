@@ -1621,10 +1621,23 @@ fn convert_one(
 /// file first; checking the metadata here keeps a giant file from becoming an
 /// allocation before any reader sees it.
 fn read_input(path: &Path) -> anyhow::Result<Vec<u8>> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
+    read_open_input(&file, path)
+}
+
+/// The bytes of a file already open, held to the input ceiling.
+///
+/// The handle is taken rather than the name so the size that is checked and the
+/// bytes that are read are the same file: a name can be swapped between the two.
+fn read_open_input(mut file: &std::fs::File, path: &Path) -> anyhow::Result<Vec<u8>> {
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("read the size of {}", path.display()))?;
     budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
-    std::fs::read(path).with_context(|| format!("read {}", path.display()))
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    Ok(bytes)
 }
 
 /// Convert one input into a document, without writing it out.
@@ -4602,9 +4615,9 @@ fn load_flow_picture(document: &Path, source: &str) -> Option<FlowPicture> {
     let (declared, data) = match data_uri_picture(source) {
         Some(carried) => carried,
         None => {
-            let file = local_image_path(document, source)?;
-            let data = read_input(&file).ok()?;
-            (image_mimetype_for_path(&file), data)
+            let (path, file) = open_local_image(document, source)?;
+            let data = read_open_input(&file, &path).ok()?;
+            (image_mimetype_for_path(&path), data)
         }
     };
     picture_from_bytes(declared, data)
@@ -4700,17 +4713,18 @@ fn picture_from_bytes(declared: Option<&'static str>, data: Vec<u8>) -> Option<F
     })
 }
 
-/// The file a picture's source names, if it names one at all.
+/// The file a picture's source names, opened, if it names one at all.
 ///
 /// A `data:` URI never reaches this: its bytes are the source, and
 /// [`data_uri_picture`] has already answered. What is left here is a path, and
-/// it is read only when it names a file inside the document's own directory: a
+/// it is opened only when it names a file inside the document's own directory: a
 /// page is untrusted input, so an absolute path or one that climbs out with
 /// `..` (or a symlink that leads out) names no picture here rather than
 /// whatever file it points at. A relative path is resolved against the
 /// document, because that is what a relative destination means in both
-/// formats.
-fn local_image_path(document: &Path, source: &str) -> Option<PathBuf> {
+/// formats. The caller reads the handle, so the file that was checked is the
+/// file that is read — see [`open_under`].
+fn open_local_image(document: &Path, source: &str) -> Option<(PathBuf, std::fs::File)> {
     let source = source.trim();
     if source.is_empty() || source.starts_with("//") {
         return None;
@@ -4736,18 +4750,52 @@ fn local_image_path(document: &Path, source: &str) -> Option<PathBuf> {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    file_under(directory, path)
+    open_under(directory, path)
 }
 
-/// `path` as a file inside `base`, when it is one.
+/// `path` as a file inside `base`, opened, when it is one.
 ///
 /// `..` is refused by the canonical comparison, and a symlink that leads out of
 /// the directory is refused because the canonical form is what is compared — so
-/// what is read is what the document's own directory holds.
-fn file_under(base: &Path, path: &Path) -> Option<PathBuf> {
+/// what is read is what the document's own directory holds. The read is held to
+/// that check as well: the file is opened inside it and the handle is compared
+/// with the canonical path, which a link swapped in between resolving the path
+/// and opening it would no longer be.
+fn open_under(base: &Path, path: &Path) -> Option<(PathBuf, std::fs::File)> {
     let base = base.canonicalize().ok()?;
     let candidate = base.join(path).canonicalize().ok()?;
-    candidate.starts_with(&base).then_some(candidate)
+    if !candidate.starts_with(&base) {
+        return None;
+    }
+    // The file the canonical path named before it was opened: what comes back
+    // has to be this one, not whatever the name points at now.
+    let checked = std::fs::symlink_metadata(&candidate).ok()?;
+    if checked.file_type().is_symlink() {
+        return None;
+    }
+    let file = std::fs::File::open(&candidate).ok()?;
+    same_file(&checked, &file.metadata().ok()?).then_some((candidate, file))
+}
+
+/// Whether two metadata records describe one file, so a handle can be held to
+/// the path it was opened by.
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    // Without a file identity the handle cannot be held to the path, so the
+    // picture is not read rather than comparing something weaker.
+    false
 }
 
 /// Decode `%20`-style escapes in a Markdown destination: a path written for a
@@ -5439,6 +5487,50 @@ fn fnv1a(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture the page names beside itself is opened only inside the
+    /// document's own directory, and the handle is held to the path that was
+    /// checked: a name that climbs out, an absolute one, or a symlink that
+    /// leads out names no picture.
+    #[test]
+    fn a_flow_picture_is_opened_only_from_the_documents_own_directory() {
+        let root = std::env::temp_dir().join(format!("pdfe-flow-image-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("docs")).expect("the document's directory");
+        std::fs::write(root.join("docs/picture.png"), b"inside").expect("the picture");
+        std::fs::write(root.join("outside.png"), b"outside").expect("the file outside");
+
+        let document = root.join("docs/report.md");
+        let (path, _file) =
+            open_local_image(&document, "picture.png").expect("a picture beside it opens");
+        assert_eq!(
+            path,
+            root.join("docs/picture.png")
+                .canonicalize()
+                .expect("canonical")
+        );
+        assert!(
+            open_local_image(&document, "../outside.png").is_none(),
+            "`..` climbs out"
+        );
+        assert!(
+            open_local_image(&document, root.join("outside.png").to_str().expect("utf-8"))
+                .is_none(),
+            "an absolute name is refused"
+        );
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("outside.png"), root.join("docs/link.png"))
+                .expect("the symlink");
+            assert!(
+                open_local_image(&document, "link.png").is_none(),
+                "a symlink leads out"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn comment(
         author: Option<&str>,

@@ -271,3 +271,18 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   `test-data/xref_encrypt_no_id.pdf` and test
   `an_xref_stream_encrypt_without_an_id_is_refused_not_read`. Suite counts
   1,305 / 133, `crypt_test` 9/9.
+- Picture containment holds the read to the file it checked. Both places that
+  read a picture named beside a document — the Markdown/HTML writers embedding
+  it as a `data:` URI, and the command line reading a flow picture back — used
+  to canonicalize the path, confirm it sat under the document's directory, and
+  then open the same name again. A symlink swapped in between resolution and
+  open escaped containment because only the earlier check was believed. Both now
+  open inside the check: the canonical path is stat'ed (a path that has become a
+  symlink is refused), the handle is opened, and its identity (`dev`/`ino`, or
+  `volume serial`/`file index` on Windows) is compared with the file the
+  canonical path named. `read_input` likewise reads the handle it measured
+  rather than reopening the name. New unit tests
+  `a_picture_is_embedded_only_from_the_readings_own_directory` and
+  `a_handle_is_held_to_the_file_the_path_names` (md-exporter) and
+  `a_flow_picture_is_opened_only_from_the_documents_own_directory` (cli).
+  Suite counts 1,308 / 133.

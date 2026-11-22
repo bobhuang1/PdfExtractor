@@ -707,28 +707,67 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
         return None;
     }
     let mimetype = image.mimetype.as_deref()?;
-    let path = match base {
-        Some(base) => file_under(base, uri)?,
-        None => PathBuf::from(uri),
+    let bytes = match base {
+        Some(base) => read_under(base, uri)?,
+        None => std::fs::read(uri).ok()?,
     };
-    let bytes = std::fs::read(path).ok()?;
     Some(format!("data:{mimetype};base64,{}", STANDARD.encode(bytes)))
 }
 
-/// `uri` as a file inside `base`, when it is one.
+/// `uri` read as a file inside `base`, when it is one.
 ///
 /// Absolute names are refused because `Path::join` would discard `base` for
 /// them, `..` is refused by the canonical comparison, and a symlink that leads
 /// out of the directory is refused because the canonical form is what is
 /// compared — so what is embedded is what the reading's own directory holds.
-fn file_under(base: &Path, uri: &str) -> Option<PathBuf> {
+///
+/// The read itself is held to that check: the file is opened inside it and the
+/// handle is compared with the canonical path, which a link swapped in between
+/// resolving the path and opening it would no longer be.
+fn read_under(base: &Path, uri: &str) -> Option<Vec<u8>> {
     let base = base.canonicalize().ok()?;
     let named = Path::new(uri);
     if named.is_absolute() {
         return None;
     }
     let candidate = base.join(named).canonicalize().ok()?;
-    candidate.starts_with(&base).then_some(candidate)
+    if !candidate.starts_with(&base) {
+        return None;
+    }
+    // The file the canonical path named before it was opened: what comes back
+    // has to be this one, not whatever the name points at now.
+    let checked = std::fs::symlink_metadata(&candidate).ok()?;
+    if checked.file_type().is_symlink() {
+        return None;
+    }
+    let mut file = std::fs::File::open(&candidate).ok()?;
+    if !same_file(&checked, &file.metadata().ok()?) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Whether two metadata records describe one file, so a handle can be held to
+/// the path it was opened by.
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    // Without a file identity the handle cannot be held to the path, so the
+    // picture is not embedded rather than comparing something weaker.
+    false
 }
 
 /// The GitHub-flavoured pipe table for `table`, shared with the text writer:
@@ -904,6 +943,60 @@ mod tests {
     use pdfextractor_core::{
         DocumentBuilder, GridCell, GridTable, HtmlHead, PictureData, TextLabel,
     };
+
+    /// A picture is embedded from the reading's own directory and nowhere else:
+    /// a name that climbs out, an absolute name, or a symlink that leads out is
+    /// not a picture. The read is held to the path that was checked.
+    #[test]
+    fn a_picture_is_embedded_only_from_the_readings_own_directory() {
+        let root = std::env::temp_dir().join(format!("pdfe-md-image-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("doc")).expect("the reading's directory");
+        std::fs::write(root.join("doc/picture.png"), b"inside").expect("the picture");
+        std::fs::write(root.join("outside.png"), b"outside").expect("the file outside");
+
+        let base = root.join("doc");
+        assert_eq!(
+            read_under(&base, "picture.png"),
+            Some(b"inside".to_vec()),
+            "a picture beside the reading is embedded"
+        );
+        assert_eq!(read_under(&base, "../outside.png"), None, "`..` climbs out");
+        assert_eq!(
+            read_under(&base, root.join("outside.png").to_str().expect("utf-8")),
+            None,
+            "an absolute name is refused"
+        );
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("outside.png"), base.join("link.png"))
+                .expect("the symlink");
+            assert_eq!(read_under(&base, "link.png"), None, "a symlink leads out");
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The handle is held to the path by identity: two names for one file are
+    /// one file, and two files are not.
+    #[test]
+    fn a_handle_is_held_to_the_file_the_path_names() {
+        let root = std::env::temp_dir().join(format!("pdfe-md-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the directory");
+        std::fs::write(root.join("one"), b"one").expect("the file");
+        std::fs::write(root.join("two"), b"two").expect("the other file");
+        std::fs::hard_link(root.join("one"), root.join("alias")).expect("the second name");
+
+        let meta = |name: &str| std::fs::metadata(root.join(name)).expect("metadata");
+        assert!(
+            same_file(&meta("one"), &meta("alias")),
+            "two names, one file"
+        );
+        assert!(!same_file(&meta("one"), &meta("two")), "two files");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// One slide, its speaker notes inside the slide's group and a comment in
     /// its own `comment_section` group — the shape the PPTX reader builds.
