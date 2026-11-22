@@ -1161,8 +1161,9 @@ including the EXIF turn, the detected quarter turn and the reduced copy the
 orientation check reads. A PDF's page count is enforced before any page is analysed, and
 extraction has a checked path (`extract_checked`) that reports the refusal
 instead of returning a shortened document, and it refuses any PDF that says it
-is encrypted but was never decrypted — a wrong password included — rather than
-reading its ciphertext as text.
+is encrypted — in a trailer or a cross-reference stream, with or without an
+`/ID` — but was never decrypted, a wrong password included, rather than reading
+its ciphertext as text.
 
 ### Resource flags
 

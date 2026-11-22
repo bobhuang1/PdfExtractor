@@ -130,6 +130,40 @@ fn a_locked_document_is_refused_rather_than_read_as_ciphertext() {
     }
 }
 
+/// A PDF 1.5 file can state its encryption only in a cross-reference stream's
+/// own dictionary, which need not carry an `/ID`. The bytes are still
+/// ciphertext: the entry has to be detected on its own, and the handler's
+/// refusal — there is no `/ID` to authenticate against — has to be reported
+/// rather than the payload handed back as text.
+#[test]
+fn an_xref_stream_encrypt_without_an_id_is_refused_not_read() {
+    let doc = PdfDocument::parse(&fixture("xref_encrypt_no_id.pdf")).expect("parse");
+    assert!(doc.encrypted, "an xref stream's /Encrypt is detected");
+    assert_eq!(doc.opened_with, None, "no password opened it");
+    assert_eq!(
+        doc.locked,
+        Some(CryptError::WrongPassword),
+        "the handler cannot authenticate without an /ID"
+    );
+
+    let error = doc
+        .extract_checked()
+        .expect_err("ciphertext must not be returned as text");
+    let refusal = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<CryptError>())
+        .unwrap_or_else(|| panic!("the refusal carries the crypt error: {error:#}"));
+    assert_eq!(refusal, &CryptError::WrongPassword);
+    assert!(
+        error.to_string().contains("ciphertext"),
+        "the refusal says the pages were never decrypted: {error:#}"
+    );
+    assert!(
+        doc.extract().is_empty(),
+        "the un-fallible facade yields no pages either"
+    );
+}
+
 /// The refusal is the state, not only the recorded error: a file that says it
 /// is encrypted with no handler's success behind it is refused as well, so a
 /// gap in the parser cannot produce a partial read of ciphertext. The state is

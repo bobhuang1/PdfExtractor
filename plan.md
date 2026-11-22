@@ -116,7 +116,7 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,304 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,305 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 There are 133 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.

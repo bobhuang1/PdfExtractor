@@ -335,17 +335,22 @@ impl PdfDocument {
         // own dictionary, which is an object and has no classic trailer to say
         // it in. Object streams are themselves ciphered, so this — and the
         // decryption — happens before they are expanded.
+        //
+        // `/ID` is not required for the entry to count. Without it the handler
+        // cannot authenticate, but the bytes are still ciphertext, and a guess
+        // at the password must not turn them into text. As with the classic
+        // trailer, the newest stream that names `/Encrypt` wins.
         if encrypting_trailer.is_none() {
             encrypting_trailer = doc
-                .objects
-                .values()
-                .filter_map(PdfValue::as_dict)
-                .filter(|dict| {
-                    dict.get("Type").and_then(|t| t.as_name()) == Some("XRef")
-                        && dict.get("Encrypt").is_some()
+                .stream_offsets
+                .iter()
+                .filter_map(|(id, offset)| Some((*offset, doc.objects.get(id)?.as_dict()?)))
+                .filter(|(_, dict)| {
+                    dict.get("Type").and_then(PdfValue::as_name) == Some("XRef")
+                        && dict.contains_key("Encrypt")
                 })
-                .find(|dict| dict.contains_key("ID"))
-                .cloned();
+                .max_by_key(|(offset, _)| *offset)
+                .map(|(_, dict)| dict.clone());
             doc.encrypted |= encrypting_trailer.is_some();
         }
         if let Some(trailer) = encrypting_trailer {

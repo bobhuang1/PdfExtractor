@@ -258,3 +258,16 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   ceiling now refusing the fixture's 45-byte payload as it is copied. The
   refusal matrix (`limits_matrix_test`) and the decryption fuzz aggregate still
   pass. Suite counts 1,304 / 133.
+- Encryption stated only in a cross-reference stream is detected without `/ID`.
+  A PDF 1.5 file can put `/Encrypt` in an xref stream's own dictionary instead
+  of a classic trailer; the parser required `/ID` in that dictionary before
+  believing the entry, so a file whose only `/Encrypt` sat there without one
+  parsed as if it were plain and its ciphertext was read as text. The entry now
+  counts on its own — `/ID` is what a handler authenticates against, not what
+  makes the bytes ciphertext — and the newest such stream wins, by file offset,
+  as the newest classic trailer does. With no `/ID` the handler authenticates
+  against an empty first element and refuses, so the document is refused with
+  its `CryptError` instead of read. New fixture
+  `test-data/xref_encrypt_no_id.pdf` and test
+  `an_xref_stream_encrypt_without_an_id_is_refused_not_read`. Suite counts
+  1,305 / 133, `crypt_test` 9/9.
