@@ -53,7 +53,7 @@ fn an_empty_user_password_opens_without_asking() {
 #[test]
 fn every_handler_opens_with_the_user_password() {
     for name in VARIANTS {
-        let doc = PdfDocument::parse_with_password(&fixture(name), Some(b"user")).expect("parse");
+        let doc = PdfDocument::parse_with_password(&fixture(name), Some("user")).expect("parse");
         assert!(doc.encrypted, "{name}");
         assert_eq!(doc.locked, None, "{name}");
         assert_eq!(doc.opened_with, Some("user password"), "{name}");
@@ -73,7 +73,7 @@ fn every_handler_opens_with_the_user_password() {
 #[test]
 fn every_handler_opens_with_the_owner_password() {
     for name in VARIANTS {
-        let doc = PdfDocument::parse_with_password(&fixture(name), Some(b"owner")).expect("parse");
+        let doc = PdfDocument::parse_with_password(&fixture(name), Some("owner")).expect("parse");
         assert_eq!(doc.locked, None, "{name}");
         assert_eq!(doc.opened_with, Some("owner password"), "{name}");
         assert!(page_text(&doc).contains("Secret ledger"), "{name}");
@@ -83,7 +83,7 @@ fn every_handler_opens_with_the_owner_password() {
 #[test]
 fn a_missing_or_wrong_password_is_locked_and_reads_no_noise() {
     for name in VARIANTS {
-        for password in [None, Some(&b"guess"[..])] {
+        for password in [None, Some("guess")] {
             let doc = PdfDocument::parse_with_password(&fixture(name), password).expect("parse");
             assert!(doc.encrypted, "{name}");
             assert_eq!(
@@ -103,14 +103,14 @@ fn a_missing_or_wrong_password_is_locked_and_reads_no_noise() {
 fn a_locked_document_is_refused_rather_than_read_as_ciphertext() {
     for name in VARIANTS {
         // The fixture has a page, so the refusal is the lock and not an empty file.
-        let opened = PdfDocument::parse_with_password(&fixture(name), Some(b"user"))
+        let opened = PdfDocument::parse_with_password(&fixture(name), Some("user"))
             .expect("parse with the password");
         assert!(
             !opened.extract().is_empty(),
             "{name}: the fixture has a page"
         );
 
-        let doc = PdfDocument::parse_with_password(&fixture(name), Some(b"guess")).expect("parse");
+        let doc = PdfDocument::parse_with_password(&fixture(name), Some("guess")).expect("parse");
         let error = doc
             .extract_checked()
             .expect_err("a locked document must not yield pages");
@@ -162,6 +162,41 @@ fn an_xref_stream_encrypt_without_an_id_is_refused_not_read() {
         doc.extract().is_empty(),
         "the un-fallible facade yields no pages either"
     );
+}
+
+/// qpdf wrote this revision 4 file with the password `Grüße`: the file holds it
+/// in PDFDocEncoding, so the same text has to be encoded that way before it is
+/// hashed — the argv's UTF-8 bytes are not it, and the file used to stay
+/// locked.
+#[test]
+fn a_pdfdocencoding_password_opens_a_revision_four_file() {
+    let doc = PdfDocument::parse_with_password(&fixture("encrypted_pdfdoc.pdf"), Some("Grüße"))
+        .expect("parse");
+    assert_eq!(doc.opened_with, Some("user password"));
+    assert!(
+        page_text(&doc).contains("Hello World"),
+        "{}",
+        page_text(&doc)
+    );
+
+    // A password the encoding cannot write is not the one the file holds.
+    let doc = PdfDocument::parse_with_password(&fixture("encrypted_pdfdoc.pdf"), Some("日本語"))
+        .expect("parse");
+    assert_eq!(doc.locked, Some(CryptError::WrongPassword));
+}
+
+/// qpdf wrote this revision 6 file with the composed `päss`; a reader that
+/// applies SASLprep opens it with the decomposed text a keyboard can produce as
+/// well, because NFKC is what the profile does to both.
+#[test]
+fn an_r6_password_is_prepared_with_saslprep() {
+    for password in ["päss", "pa\u{0308}ss"] {
+        let doc =
+            PdfDocument::parse_with_password(&fixture("encrypted_r6_saslprep.pdf"), Some(password))
+                .expect("parse");
+        assert_eq!(doc.locked, None, "{password:?}");
+        assert!(page_text(&doc).contains("Hello World"), "{password:?}");
+    }
 }
 
 /// The refusal is the state, not only the recorded error: a file that says it

@@ -3,7 +3,9 @@
 //! `test-data/encrypted.pdf` is a real standard-security document (RC4 40-bit,
 //! revision 2, empty user password) written by `test-data/make_encrypted_pdf.py`;
 //! `test-data/make_encrypted_variants.py` writes RC4-128, AES-128 and AES-256
-//! files whose user password is `user` (owner `owner`). The contract: a file
+//! files whose user password is `user` (owner `owner`), and
+//! `test-data/make_encrypted_unicode.sh` writes two with qpdf whose passwords
+//! are not ASCII (`Grüße` in PDFDocEncoding, `päss` after SASLprep). The contract: a file
 //! that asks nothing of its reader is read like any other, a file that needs a
 //! password is read with `--pdf-password` (or `PDFE_PDF_PASSWORD`), and one the
 //! password does not open is refused by name with no document written.
@@ -127,6 +129,33 @@ fn a_missing_password_is_refused_by_name_and_says_how_to_give_one() {
     let out = out_path("missing");
     let output = run("encrypted_aes256.pdf", &out, &[], None);
     assert_refused("encrypted_aes256.pdf", &out, &output, "--pdf-password");
+}
+
+/// A non-ASCII password arrives as text on argv and is written the way the
+/// file's revision writes passwords: `encrypted_pdfdoc.pdf` holds `Grüße` in
+/// PDFDocEncoding, and `encrypted_r6_saslprep.pdf` holds the composed `päss`
+/// that SASLprep also yields for the decomposed `pa\u0308ss`.
+#[test]
+fn a_non_ascii_password_is_encoded_for_the_files_revision() {
+    for (name, password) in [
+        ("encrypted_pdfdoc.pdf", "Grüße"),
+        ("encrypted_r6_saslprep.pdf", "päss"),
+        ("encrypted_r6_saslprep.pdf", "pa\u{0308}ss"),
+    ] {
+        let out = out_path("unicode");
+        let output = run(name, &out, &["--pdf-password", password], None);
+        assert!(
+            output.status.success(),
+            "{name} with {password:?} was not read:\nstderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = std::fs::read_to_string(&out).expect("a document was written");
+        assert!(
+            json.contains("Hello World"),
+            "{name} with {password:?}: the page text is not plain:\n{json}"
+        );
+        let _ = std::fs::remove_file(&out);
+    }
 }
 
 #[test]

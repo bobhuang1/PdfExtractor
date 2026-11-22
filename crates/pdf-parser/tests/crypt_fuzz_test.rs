@@ -126,7 +126,7 @@ fn every_mutation_is_read_or_refused_with_a_typed_error() {
                 let at = rng.below(bytes.len());
                 bytes[at] ^= (rng.next() as u8) | 1;
             }
-            for password in [None, Some(&b"user"[..]), Some(&b"owner"[..])] {
+            for password in [None, Some("user"), Some("owner")] {
                 match PdfDocument::parse_with_limits_and_password(&bytes, limits.clone(), password)
                 {
                     Ok(document) => {
@@ -152,7 +152,8 @@ fn every_mutation_is_read_or_refused_with_a_typed_error() {
     for _ in 0..256 {
         let dict = security_dictionary(&mut rng);
         let id = rng.bytes(16);
-        for password in [None, Some(&b"user"[..]), Some(&id[..])] {
+        let id_text = latin1_string(&id);
+        for password in [None, Some("user"), Some(id_text.as_str())] {
             match SecurityHandler::authenticate(&dict, &id, password) {
                 Ok(handler) => {
                     let payload_len = 1 + rng.below(256);

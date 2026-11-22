@@ -286,3 +286,20 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   `a_handle_is_held_to_the_file_the_path_names` (md-exporter) and
   `a_flow_picture_is_opened_only_from_the_documents_own_directory` (cli).
   Suite counts 1,308 / 133.
+- Non-ASCII passwords are written the way the file's revision writes them.
+  `SecurityHandler::authenticate`, and with it `parse_with_password` and
+  `parse_with_limits_and_password`, take the password as text (`&str`) rather
+  than bytes: a revision 4 or older file stores it in PDFDocEncoding and a
+  revision 6 file stores UTF-8 after SASLprep (RFC 4013 — B.1 dropped, C.1.2
+  mapped to a space, then NFKC; the prohibition and bidi checks are not
+  repeated, because refusing text no prepared password can hold and rejecting a
+  wrong password are the same answer). Revision 5 stays UTF-8 as typed, and the
+  127-byte truncation applies after preparation. A password the encoding cannot
+  write is refused as a wrong password instead of being hashed as the terminal's
+  UTF-8. New qpdf fixtures (11.9.0, `test-data/make_encrypted_unicode.sh`):
+  `encrypted_pdfdoc.pdf` (revision 4, `Grüße`) and
+  `encrypted_r6_saslprep.pdf` (revision 6, composed `päss`). New tests
+  `a_pdfdocencoding_password_opens_a_revision_four_file` and
+  `an_r6_password_is_prepared_with_saslprep` (parser), the CLI's
+  `a_non_ascii_password_is_encoded_for_the_files_revision`, and unit tests for
+  the encoding table and RFC 4013's own examples. Suite counts 1,313 / 133.

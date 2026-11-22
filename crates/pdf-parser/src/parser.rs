@@ -137,9 +137,14 @@ impl PdfDocument {
     /// Parse a PDF, opening an encrypted one with `password` (tried as the user
     /// password and then as the owner password; `None` is the empty password).
     ///
+    /// `password` is the text a person gave, not bytes: it is written the way
+    /// the file's revision writes passwords (see
+    /// [`SecurityHandler::authenticate`]), so a non-ASCII password is not hashed
+    /// as whatever bytes the terminal happened to pass.
+    ///
     /// A file the password does not open is still returned, with `locked`
     /// saying why, so the caller decides how to refuse it.
-    pub fn parse_with_password(data: &[u8], password: Option<&[u8]>) -> anyhow::Result<Self> {
+    pub fn parse_with_password(data: &[u8], password: Option<&str>) -> anyhow::Result<Self> {
         Self::parse_with_limits_and_password(data, Limits::default(), password)
     }
 
@@ -153,7 +158,7 @@ impl PdfDocument {
     pub fn parse_with_limits_and_password(
         data: &[u8],
         limits: Limits,
-        password: Option<&[u8]>,
+        password: Option<&str>,
     ) -> anyhow::Result<Self> {
         limits.check_input(data.len())?;
         let deadline = limits.deadline();
@@ -373,7 +378,7 @@ impl PdfDocument {
 
     /// Authenticate the password against the trailer's `/Encrypt` and decrypt
     /// every object in place, or record in `locked` why that was not possible.
-    fn decrypt(&mut self, trailer: &HashMap<String, PdfValue>, password: Option<&[u8]>) {
+    fn decrypt(&mut self, trailer: &HashMap<String, PdfValue>, password: Option<&str>) {
         let encrypt_ref = trailer.get("Encrypt").and_then(PdfValue::as_ref);
         let encrypt = match trailer.get("Encrypt").and_then(|v| self.resolve(v)) {
             Some(PdfValue::Dictionary(dict)) => dict.clone(),

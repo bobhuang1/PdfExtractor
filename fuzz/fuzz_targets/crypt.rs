@@ -114,7 +114,7 @@ fuzz_target!(|data: &[u8]| {
         );
         // The passwords the two fixtures actually open with: the empty one and
         // AES-256's `/U` password. Other refusals are the aggregate test's job.
-        for password in [None, Some(&b"user"[..])] {
+        for password in [None, Some("user")] {
             let parsed =
                 PdfDocument::parse_with_limits_and_password(&bytes, limits.clone(), password);
             match &parsed {
@@ -135,7 +135,10 @@ fuzz_target!(|data: &[u8]| {
     // a dictionary the mutation made consistent) decrypts the stream after it.
     let body = &data[..data.len().min(4096)];
     let pdf = with_encrypt_dictionary(body);
-    for password in [None, Some(data)] {
+    // The handler takes text now, so arbitrary bytes are read as text lossily:
+    // the encoding paths are what the fuzzer is reaching here.
+    let password_text = String::from_utf8_lossy(data).into_owned();
+    for password in [None, Some(password_text.as_str())] {
         match PdfDocument::parse_with_limits_and_password(&pdf, limits.clone(), password) {
             Ok(document) => {
                 let pages = document.extract_checked();

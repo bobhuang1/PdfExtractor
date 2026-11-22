@@ -2129,11 +2129,7 @@ fn convert_pdf(
     // takes milliseconds, so it is measured against its own budget. The
     // deadline is checked before each picture is recognised.
     let ocr_deadline = budgets().ocr_deadline();
-    let parsed = PdfDocument::parse_with_limits_and_password(
-        &data,
-        budgets(),
-        reading.password.map(str::as_bytes),
-    )?;
+    let parsed = PdfDocument::parse_with_limits_and_password(&data, budgets(), reading.password)?;
     // A ciphered file the password does not open is refused here, by name,
     // rather than read as though its streams were plain: what came out unread
     // would be noise in a document that looks successful.

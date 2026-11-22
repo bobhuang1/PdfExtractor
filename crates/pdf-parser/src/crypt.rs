@@ -16,6 +16,7 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyIn
 use md5::{Digest as _, Md5};
 use sha2::{Sha256, Sha384, Sha512};
 use std::collections::HashMap;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::objects::PdfValue;
 
@@ -30,7 +31,8 @@ const PAD: [u8; 32] = [
 pub enum CryptError {
     /// The handler or its revision is not one this module implements.
     Unsupported(String),
-    /// No password tried (the empty one included) opens the file.
+    /// No password tried (the empty one included) opens the file, or the
+    /// password cannot be written in the encoding the file's revision uses.
     WrongPassword,
 }
 
@@ -99,10 +101,15 @@ impl SecurityHandler {
     /// password) against `/Encrypt`; `id0` is the first element of the
     /// trailer's `/ID`. A `None` password tries the empty one, which is how a
     /// reader opens a file that asks nothing of the person opening it.
+    ///
+    /// `password` is the text a person gave, not bytes: the revision read here
+    /// decides how it is written, PDFDocEncoding up to revision 4 and UTF-8
+    /// after SASLprep from revision 6. A password that cannot be written that
+    /// way cannot be the one the file holds.
     pub fn authenticate(
         encrypt: &HashMap<String, PdfValue>,
         id0: &[u8],
-        password: Option<&[u8]>,
+        password: Option<&str>,
     ) -> Result<Self, CryptError> {
         let filter = encrypt.get("Filter").and_then(PdfValue::as_name);
         if filter != Some("Standard") {
@@ -120,7 +127,7 @@ impl SecurityHandler {
             encrypt.get("EncryptMetadata"),
             Some(PdfValue::Boolean(false))
         );
-        let password = password.unwrap_or(b"");
+        let password = password.unwrap_or("");
 
         let (strings, streams, length) = match v {
             1 => (Method::Rc4, Method::Rc4, 5),
@@ -167,13 +174,17 @@ impl SecurityHandler {
 
         match r {
             2..=4 => {
+                // A revision 4 or older password is written in PDFDocEncoding,
+                // while the text here came from argv: the bytes hashed are the
+                // file's encoding's, not the terminal's UTF-8.
+                let password = pdfdoc_encoding(password).ok_or(CryptError::WrongPassword)?;
                 if let Some(key) =
-                    legacy_user(password, &o, &u, p, id0, r, length, encrypt_metadata)
+                    legacy_user(&password, &o, &u, p, id0, r, length, encrypt_metadata)
                 {
                     return Ok(handler(key, "user password"));
                 }
                 // As the owner: algorithm 7 recovers the user password from /O.
-                let user = legacy_owner_to_user(password, &o, r, length);
+                let user = legacy_owner_to_user(&password, &o, r, length);
                 if let Some(key) = legacy_user(&user, &o, &u, p, id0, r, length, encrypt_metadata) {
                     return Ok(handler(key, "owner password"));
                 }
@@ -182,10 +193,15 @@ impl SecurityHandler {
             5 | 6 => {
                 let ue = bytes_of(encrypt.get("UE")).unwrap_or_default();
                 let oe = bytes_of(encrypt.get("OE")).unwrap_or_default();
-                // Revision 6 passwords are UTF-8 (SASLprep is not applied: an
-                // ASCII password, the overwhelming case, is unchanged by it),
-                // truncated to 127 bytes.
-                let password = &password[..password.len().min(127)];
+                // A revision 5 password is UTF-8 as typed; a revision 6 one is
+                // prepared with SASLprep first. Both are truncated to 127 bytes,
+                // as the passwords that were stored were.
+                let prepared = if r == 6 {
+                    saslprep(password)
+                } else {
+                    password.to_string()
+                };
+                let password = &prepared.as_bytes()[..prepared.len().min(127)];
                 if u.len() < 48 || o.len() < 48 || ue.len() < 32 || oe.len() < 32 {
                     return Err(CryptError::Unsupported(
                         "an AES-256 handler whose /O, /U, /OE or /UE is short".into(),
@@ -317,6 +333,107 @@ impl SecurityHandler {
         let digest = h.finalize();
         digest[..(self.key.len() + 5).min(16)].to_vec()
     }
+}
+
+/// `text` as PDFDocEncoding, the encoding a revision 4 or older handler writes
+/// its password in (ISO 32000-2, Annex D). `None` when a character has no slot
+/// there, which is a password no such file can be holding.
+fn pdfdoc_encoding(text: &str) -> Option<Vec<u8>> {
+    text.chars().map(pdfdoc_byte).collect()
+}
+
+/// The PDFDocEncoding byte for a character.
+fn pdfdoc_byte(c: char) -> Option<u8> {
+    let byte = match c {
+        // Printable ASCII keeps its byte; 0x18–0x1F hold accents (below) and
+        // 0x7F has none. Latin-1 from 0xA1 keeps its byte except the soft
+        // hyphen; 0x80–0x9F are the encoding's own symbols (below), and U+00A0
+        // has no slot.
+        '\u{0000}'..='\u{0017}' | '\u{0020}'..='\u{007E}' => c as u8,
+        '\u{00A1}'..='\u{00FF}' if c != '\u{00AD}' => c as u8,
+        '\u{02D8}' => 0x18, // breve
+        '\u{02C7}' => 0x19, // caron
+        '\u{02C6}' => 0x1A, // circumflex
+        '\u{02D9}' => 0x1B, // dot above
+        '\u{02DD}' => 0x1C, // double acute
+        '\u{02DB}' => 0x1D, // ogonek
+        '\u{02DA}' => 0x1E, // ring above
+        '\u{02DC}' => 0x1F, // small tilde
+        '\u{2022}' => 0x80, // bullet
+        '\u{2020}' => 0x81, // dagger
+        '\u{2021}' => 0x82, // double dagger
+        '\u{2026}' => 0x83, // ellipsis
+        '\u{2014}' => 0x84, // em dash
+        '\u{2013}' => 0x85, // en dash
+        '\u{0192}' => 0x86, // florin
+        '\u{2044}' => 0x87, // fraction slash
+        '\u{2039}' => 0x88, // single left angle quote
+        '\u{203A}' => 0x89, // single right angle quote
+        '\u{2212}' => 0x8A, // minus
+        '\u{2030}' => 0x8B, // per mille
+        '\u{201E}' => 0x8C, // double low quote
+        '\u{201C}' => 0x8D, // left double quote
+        '\u{201D}' => 0x8E, // right double quote
+        '\u{2018}' => 0x8F, // left single quote
+        '\u{2019}' => 0x90, // right single quote
+        '\u{201A}' => 0x91, // single low quote
+        '\u{2122}' => 0x92, // trademark
+        '\u{FB01}' => 0x93, // fi ligature
+        '\u{FB02}' => 0x94, // fl ligature
+        '\u{0141}' => 0x95, // L with stroke
+        '\u{0152}' => 0x96, // OE ligature
+        '\u{0160}' => 0x97, // S with caron
+        '\u{0178}' => 0x98, // Y with diaeresis
+        '\u{017D}' => 0x99, // Z with caron
+        '\u{0131}' => 0x9A, // dotless i
+        '\u{0142}' => 0x9B, // l with stroke
+        '\u{0153}' => 0x9C, // oe ligature
+        '\u{0161}' => 0x9D, // s with caron
+        '\u{017E}' => 0x9E, // z with caron
+        '\u{20AC}' => 0xA0, // euro
+        _ => return None,
+    };
+    Some(byte)
+}
+
+/// RFC 4013's preparation of a revision 6 password, before it is UTF-8
+/// encoded: the characters that are commonly mapped to nothing are dropped,
+/// the non-ASCII spaces become a space, and the result is NFKC.
+///
+/// The profile's prohibition and bidirectional checks are not repeated. They
+/// refuse text no prepared password can hold, and a refused password and a
+/// wrong one are the same answer here, so leaving them out cannot fail a file
+/// that should open.
+fn saslprep(text: &str) -> String {
+    let mapped: String = text
+        .chars()
+        .filter(|c| !maps_to_nothing(*c))
+        .map(|c| if is_non_ascii_space(c) { ' ' } else { c })
+        .collect();
+    mapped.nfkc().collect()
+}
+
+/// Stringprep B.1, the characters a prepared password drops.
+fn maps_to_nothing(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{1806}'
+            | '\u{180B}'..='\u{180D}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2060}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Stringprep C.1.2, the non-ASCII spaces a prepared password turns into one.
+fn is_non_ascii_space(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200B}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
 }
 
 /// Whether a stream's payload is left ciphered as it stands: a cross-reference
@@ -829,5 +946,34 @@ mod tests {
         assert_eq!(padded(b""), PAD.to_vec());
         assert_eq!(&padded(b"ab")[..2], b"ab");
         assert_eq!(padded(&[1u8; 40]), vec![1u8; 32]);
+    }
+
+    #[test]
+    fn a_legacy_password_is_written_in_pdfdocencoding() {
+        // The two letters qpdf wrote into the revision 4 fixture.
+        assert_eq!(
+            pdfdoc_encoding("Grüße"),
+            Some(vec![0x47, 0x72, 0xFC, 0xDF, 0x65])
+        );
+        // Slots Latin-1 does not have: the euro sits at 0xA0, and a right
+        // single quote at 0x90 rather than at its Latin-1 byte.
+        assert_eq!(pdfdoc_encoding("€"), Some(vec![0xA0]));
+        assert_eq!(pdfdoc_encoding("\u{2019}"), Some(vec![0x90]));
+        // A character with no slot cannot be a stored password.
+        assert_eq!(pdfdoc_encoding("日本"), None);
+        assert_eq!(pdfdoc_encoding("\u{00A0}"), None, "no-break space");
+        assert_eq!(pdfdoc_encoding("\u{00AD}"), None, "soft hyphen");
+    }
+
+    #[test]
+    fn a_revision_six_password_is_prepared_with_saslprep() {
+        // RFC 4013's own examples: B.1 drops the soft hyphen, and NFKC turns
+        // the ordinal indicator and the Roman numeral into their letters.
+        assert_eq!(saslprep("I\u{00AD}X"), "IX");
+        assert_eq!(saslprep("\u{00AA}"), "a");
+        assert_eq!(saslprep("\u{2168}"), "IX");
+        // A non-ASCII space becomes a space, and a decomposed letter composes.
+        assert_eq!(saslprep("a\u{00A0}b"), "a b");
+        assert_eq!(saslprep("pa\u{0308}ss"), "päss");
     }
 }

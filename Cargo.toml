@@ -79,6 +79,9 @@ flate2 = "1"
 md-5 = "0.10"
 sha2 = "0.10"
 aes = "0.8"
+# A revision 6 password is SASLprep'd (RFC 4013) before it is UTF-8 encoded, and
+# the normalization step is NFKC; the preparation itself stays in `crypt.rs`.
+unicode-normalization = "0.1"
 
 # ZIP handling (DOCX - reuse)
 zip = "2"
