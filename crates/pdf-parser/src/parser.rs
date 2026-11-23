@@ -325,15 +325,10 @@ impl PdfDocument {
             doc.root = doc
                 .stream_offsets
                 .iter()
-                .filter_map(|(id, offset)| {
-                    let dict = doc.objects.get(id)?.as_dict()?;
-                    (dict.get("Type").and_then(PdfValue::as_name) == Some("XRef"))
-                        .then(|| dict.get("Root").and_then(PdfValue::as_ref))
-                        .flatten()
-                        .map(|root| (*offset, root))
-                })
+                .filter_map(|(id, offset)| Some((*offset, doc.objects.get(id)?.as_dict()?)))
+                .filter(|(_, dict)| dict.contains_key("Root"))
                 .max_by_key(|(offset, _)| *offset)
-                .map(|(_, root)| root);
+                .and_then(|(_, dict)| dict.get("Root").and_then(PdfValue::as_ref));
         }
 
         // A PDF 1.5 file states its encryption in the cross-reference stream's
@@ -341,19 +336,20 @@ impl PdfDocument {
         // it in. Object streams are themselves ciphered, so this — and the
         // decryption — happens before they are expanded.
         //
-        // `/ID` is not required for the entry to count. Without it the handler
-        // cannot authenticate, but the bytes are still ciphertext, and a guess
-        // at the password must not turn them into text. As with the classic
-        // trailer, the newest stream that names `/Encrypt` wins.
+        // The entry counts on its own: a stream dictionary that names
+        // `/Encrypt` is a trailer, and nothing else about it is required. `/ID`
+        // is what a handler authenticates against, not what makes the bytes
+        // ciphertext, and a writer that leaves out `/Type /XRef` or the `/W`
+        // and `/Size` entries has still marked every string and stream as
+        // ciphered: asking for either would read ciphertext as text when it is
+        // missing, which is the fail-open this refuses. As with the classic
+        // trailer, the newest such stream wins.
         if encrypting_trailer.is_none() {
             encrypting_trailer = doc
                 .stream_offsets
                 .iter()
                 .filter_map(|(id, offset)| Some((*offset, doc.objects.get(id)?.as_dict()?)))
-                .filter(|(_, dict)| {
-                    dict.get("Type").and_then(PdfValue::as_name) == Some("XRef")
-                        && dict.contains_key("Encrypt")
-                })
+                .filter(|(_, dict)| dict.contains_key("Encrypt"))
                 .max_by_key(|(offset, _)| *offset)
                 .map(|(_, dict)| dict.clone());
             doc.encrypted |= encrypting_trailer.is_some();

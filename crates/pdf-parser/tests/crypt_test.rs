@@ -164,6 +164,57 @@ fn an_xref_stream_encrypt_without_an_id_is_refused_not_read() {
     );
 }
 
+/// A cross-reference stream states its kind twice: `/Type /XRef`, and the `/W`
+/// and `/Size` entries only such a stream carries. A writer that leaves the
+/// type out still means the bytes it indexes to be ciphered, so the entry has
+/// to count on the shape too; with no `/ID` the handler cannot authenticate,
+/// and the page must be refused rather than read as though it were plain.
+#[test]
+fn an_untyped_xref_stream_encrypt_is_refused_not_read() {
+    let doc = PdfDocument::parse(&fixture("xref_encrypt_no_type.pdf")).expect("parse");
+    assert!(
+        doc.encrypted,
+        "/Encrypt without /Type /XRef is still an encrypted document"
+    );
+    assert_eq!(doc.opened_with, None, "no password opened it");
+    assert_eq!(
+        doc.locked,
+        Some(CryptError::WrongPassword),
+        "the handler cannot authenticate without an /ID"
+    );
+
+    let error = doc
+        .extract_checked()
+        .expect_err("ciphertext must not be returned as text");
+    assert!(
+        error.to_string().contains("ciphertext"),
+        "the refusal says the pages were never decrypted: {error:#}"
+    );
+    assert!(
+        doc.extract().is_empty(),
+        "the un-fallible facade yields no pages either"
+    );
+
+    // Even a dictionary that has lost every cross-reference marker says the
+    // file is encrypted: the entry cannot be doubted into a plaintext read.
+    let committed = String::from_utf8_lossy(&fixture("xref_encrypt_no_type.pdf")).into_owned();
+    let stripped = committed.replace(
+        "<< /W [1 2 1] /Size 7 /Encrypt 6 0 R /Length 0 >>",
+        "<< /Encrypt 6 0 R /Length 0 >>",
+    );
+    assert_ne!(
+        stripped, committed,
+        "the fixture's dictionary is the one this test rewrites"
+    );
+    let doc = PdfDocument::parse(stripped.as_bytes()).expect("parse");
+    assert!(
+        doc.encrypted,
+        "a marker-less /Encrypt is still an encryption"
+    );
+    assert_eq!(doc.locked, Some(CryptError::WrongPassword));
+    assert!(doc.extract().is_empty(), "no page is read from ciphertext");
+}
+
 /// qpdf wrote this revision 4 file with the password `Grüße`: the file holds it
 /// in PDFDocEncoding, so the same text has to be encoded that way before it is
 /// hashed — the argv's UTF-8 bytes are not it, and the file used to stay

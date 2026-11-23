@@ -48,6 +48,7 @@ test-data/link_annotations.pdf	crates/cli/tests/cli_test.rs
 test-data/link_annotations.pdf	crates/cli/tests/formats_golden_test.rs
 test-data/link_annotations.pdf	crates/cli/tests/md_golden_test.rs
 test-data/encrypted.pdf	crates/cli/tests/encrypted_test.rs
+test-data/xref_encrypt_no_type.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/compressed.pdf	crates/cli/tests/cli_test.rs
 
 test-data/inventory.xlsx	crates/xlsx-parser/tests/fixture_test.rs
