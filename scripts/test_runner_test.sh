@@ -191,9 +191,11 @@ fixture_coverage_pattern_is_valid() {
 
 # These are generators, an input to a generator, and documentation rather than
 # fixtures a test reads. Every other tracked test-data file must have a row.
+# A generator is written in Python or in shell (`make_encrypted_unicode.sh`), so
+# the rule is its name rather than one extension.
 fixture_coverage_excluded() {
     local path=$1
-    [[ $path == test-data/*.py ]] && return 0
+    [[ $path == test-data/*.py || $path == test-data/make_* ]] && return 0
     case "$path" in
         test-data/golden/regenerate.py|test-data/images/stretch.svg|test-data/photos/README.md)
             return 0
@@ -577,6 +579,7 @@ mkdir -p "$coverage_root/test-data/golden" "$coverage_root/test-data/images" \
 : >"$coverage_root/test-data/owned.bin"
 : >"$coverage_root/test-data/unowned.bin"
 : >"$coverage_root/test-data/make_generator.py"
+: >"$coverage_root/test-data/make_shell_generator.sh"
 : >"$coverage_root/test-data/golden/regenerate.py"
 : >"$coverage_root/test-data/images/stretch.svg"
 : >"$coverage_root/test-data/photos/README.md"
@@ -596,6 +599,7 @@ contains "$coverage_output" 'unowned test-data file: test-data/unowned.bin' 'cov
 contains "$coverage_output" 'unmatchable fixture-owner pattern: test-data/missing/*.pdf' 'coverage audit'
 contains "$coverage_output" 'invalid fixture-owner pattern: test-data/bad[pattern' 'coverage audit'
 does_not_contain "$coverage_output" 'test-data/make_generator.py' 'coverage exclusions'
+does_not_contain "$coverage_output" 'test-data/make_shell_generator.sh' 'coverage exclusions'
 does_not_contain "$coverage_output" 'test-data/golden/regenerate.py' 'coverage exclusions'
 does_not_contain "$coverage_output" 'test-data/images/stretch.svg' 'coverage exclusions'
 does_not_contain "$coverage_output" 'test-data/photos/README.md' 'coverage exclusions'

@@ -24,7 +24,7 @@ use pdfextractor_layout::Span as LayoutSpan;
 use pdfextractor_ocr_engine::QuarterTurn;
 use pdfextractor_pdf_parser::PdfDocument;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -193,7 +193,10 @@ struct Args {
     list_input_formats: bool,
 
     /// Output path (optional). If not provided, outputs in same folder as input.
-    /// The name `-` writes the document to stdout — one input, one format.
+    /// An existing folder, or a path ending in a separator, is the folder to
+    /// write into. The name `-` writes the document to stdout — one input, one
+    /// format. An output that resolves to the input document is refused rather
+    /// than written, so a conversion cannot replace the file it read.
     #[arg(short, long, value_hint = ValueHint::AnyPath)]
     output: Option<PathBuf>,
 
@@ -643,8 +646,8 @@ fn run() -> anyhow::Result<()> {
     // input path, run a conversion, or parse help text or a refusal message:
     // the set is printed as JSON and the run ends here.
     if args.list_input_formats {
-        println!("{}", serde_json::to_string_pretty(&input_formats())?);
-        flush_stdout();
+        let formats = serde_json::to_string_pretty(&input_formats())?;
+        write_stdout(&format!("{formats}\n"))?;
         return Ok(());
     }
 
@@ -722,47 +725,44 @@ fn run() -> anyhow::Result<()> {
         // input, which is where the default output would have gone.
         let target = &targets[0];
         let base = target.with_extension(formats[0].ext());
-        let doc = build_document(target, &base, &args)?;
-        match formats[0] {
-            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&doc)?),
-            OutputFormat::Md => print!(
-                "{}",
-                pdfextractor_md_exporter::render_with_images(
-                    &doc,
-                    args.include_notes,
-                    args.image_export_mode.mode(),
-                    base.parent(),
-                )
-            ),
-            OutputFormat::Html => {
-                print!(
-                    "{}",
-                    pdfextractor_md_exporter::html::render_with_images(
-                        &doc,
-                        args.include_notes,
-                        args.image_export_mode.mode(),
-                        base.parent(),
-                    )
-                )
-            }
-            OutputFormat::Text => print!(
-                "{}",
-                pdfextractor_md_exporter::text::render_with_notes(
-                    &doc,
-                    args.text_dehyphenate,
-                    args.include_notes,
-                )
-            ),
-            OutputFormat::Yaml => {
-                print!("{}", pdfextractor_md_exporter::yaml::render(&doc)?)
-            }
-            OutputFormat::Chunks => {
-                print!(
-                    "{}",
-                    pdfextractor_md_exporter::chunks::to_jsonl(&doc, &chunks)?
-                )
-            }
+        // Extracted pictures are written beside the input, where the default
+        // output would have gone. A reader of stdout has no other sign that
+        // files appeared next to the source, so say where they went.
+        if args.image_export_mode == ImageExportMode::Referenced {
+            // A note rather than a log record: it is news for the person who
+            // typed the command, and the default log filter would swallow it.
+            eprintln!(
+                "note: `-o -` writes any extracted picture into {}; `--image-export-mode \
+                 embedded` keeps the pictures in the stream",
+                image_dir_for(&base).display()
+            );
         }
+        let doc = build_document(target, &base, &args)?;
+        let text = match formats[0] {
+            OutputFormat::Json => format!("{}\n", serde_json::to_string_pretty(&doc)?),
+            OutputFormat::Md => pdfextractor_md_exporter::render_with_images(
+                &doc,
+                args.include_notes,
+                args.image_export_mode.mode(),
+                base.parent(),
+            ),
+            OutputFormat::Html => pdfextractor_md_exporter::html::render_with_images(
+                &doc,
+                args.include_notes,
+                args.image_export_mode.mode(),
+                base.parent(),
+            ),
+            OutputFormat::Text => pdfextractor_md_exporter::text::render_with_notes(
+                &doc,
+                args.text_dehyphenate,
+                args.include_notes,
+            ),
+            OutputFormat::Yaml => pdfextractor_md_exporter::yaml::render(&doc)?,
+            OutputFormat::Chunks => pdfextractor_md_exporter::chunks::to_jsonl(&doc, &chunks)?,
+        };
+        // The stream is the document, so it is written once and a consumer
+        // that stops reading ends the run quietly (see `write_stdout`).
+        write_stdout(&text)?;
         return Ok(());
     }
 
@@ -817,15 +817,16 @@ fn run() -> anyhow::Result<()> {
     // A plan precedes the first record so a parent process can show the whole
     // queue before any of it has finished.
     if args.progress {
-        println!(
-            "{}",
+        // A plan is a record for the parent, not the run's result: a parent
+        // that has stopped reading must not stop the conversions.
+        let _ = write_stdout(&format!(
+            "{}\n",
             json!({
                 "kind": "plan",
                 "total": total,
                 "inputs": targets.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             })
-        );
-        flush_stdout();
+        ));
     }
 
     let done = AtomicUsize::new(0);
@@ -1068,8 +1069,8 @@ fn announce(
     match result {
         Ok(output) => {
             if args.progress {
-                println!(
-                    "{}",
+                let _ = write_stdout(&format!(
+                    "{}\n",
                     json!({
                         "kind": "progress",
                         "done": seen,
@@ -1078,16 +1079,15 @@ fn announce(
                         "ok": true,
                         "output": output.display().to_string(),
                     })
-                );
-                flush_stdout();
+                ));
             } else {
                 tracing::info!("{} -> {}", input.display(), output.display());
             }
         }
         Err(err) => {
             if args.progress {
-                println!(
-                    "{}",
+                let _ = write_stdout(&format!(
+                    "{}\n",
                     json!({
                         "kind": "progress",
                         "done": seen,
@@ -1098,19 +1098,31 @@ fn announce(
                         "limit_flag": raise_flag(err),
                         "error": format!("{err:#}"),
                     })
-                );
-                flush_stdout();
+                ));
             }
             eprintln!("error: {}: {err:#}{}", input.display(), flag_hint(err));
         }
     }
 }
 
-/// `println!` already flushes on a newline; this is belt and braces for a
-/// consumer that reads the stream through a pipe.
-fn flush_stdout() {
+/// Write text to stdout, treating a closed pipe as the end of the stream.
+///
+/// `print!`/`println!` panic when the reader goes away, so
+/// `pdfextractor -i paper.pdf -o - | head` ended in a Rust panic (exit 101)
+/// once the first screenful had been read. A consumer that stops reading is not
+/// a failure of the conversion: the write stops, quietly, with the run's own
+/// status.
+fn write_stdout(text: &str) -> anyhow::Result<()> {
     use std::io::Write;
-    let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error).context("write to stdout"),
+    }
 }
 
 /// What a walk of the input found.
@@ -1187,20 +1199,35 @@ fn collect_inputs(input: &Path, recursive: bool) -> anyhow::Result<Found> {
     };
     // `None` means unlimited depth (recursive); `Some(0)` means top level only.
     let max_depth = if recursive { None } else { Some(0usize) };
-    walk_dir(input, max_depth, &mut found)?;
+    let mut visited = HashSet::new();
+    walk_dir(input, max_depth, &mut found, &mut visited)?;
     found.documents.sort();
     found.carried.sort();
     Ok(found)
 }
 
-fn walk_dir(dir: &Path, depth_left: Option<usize>, found: &mut Found) -> anyhow::Result<()> {
+fn walk_dir(
+    dir: &Path,
+    depth_left: Option<usize>,
+    found: &mut Found,
+    visited: &mut HashSet<PathBuf>,
+) -> anyhow::Result<()> {
+    // A folder that leads back to one already walked is not new work. A symlink
+    // to the folder holding it used to be followed until the kernel stopped
+    // resolving it — forty steps of the same document converted and written
+    // under a nested copy of the output tree. Identity is the resolved path, so
+    // an alias and its target are one folder.
+    let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(resolved) {
+        return Ok(());
+    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
             match depth_left {
-                None => walk_dir(&path, None, found)?,
-                Some(n) if n > 0 => walk_dir(&path, Some(n - 1), found)?,
+                None => walk_dir(&path, None, found, visited)?,
+                Some(n) if n > 0 => walk_dir(&path, Some(n - 1), found, visited)?,
                 Some(_) => {}
             }
         } else if is_supported(&path) {
@@ -1583,6 +1610,10 @@ fn convert_one(
     // run's primary output — the one reported to `--progress` and named in
     // the log line.
     let primary = base.with_extension(formats[0].ext());
+    // A target may be the input itself: `-i notes.md --to md` normalizes the
+    // Markdown in place, and the whole document is read before any of it is
+    // written (each writer also replaces its file through a temporary, so a
+    // failed write leaves the source whole).
     let doc = build_document(path, &primary, args)?;
     for format in formats {
         let target = base.with_extension(format.ext());
@@ -2030,9 +2061,27 @@ fn output_path_for(path: &Path, args: &Args, root: &Path) -> PathBuf {
                 .with_extension("json");
             o.join(rel)
         }
+        // A folder is a folder for one document too. Without this, `-i
+        // report.pdf -o out/` treats `out` as a stem and writes `out.json`
+        // beside the folder instead of `out/report.json` inside it.
+        Some(o) if is_folder_destination(o) => {
+            let name = path.file_name().unwrap_or(path.as_os_str());
+            o.join(name).with_extension("json")
+        }
         Some(o) => o.clone(),
         None => path.with_extension("json"),
     }
+}
+
+/// Whether an output path is a folder to write into: it exists as one, or it is
+/// spelled like one (a trailing separator), the way a shell's completion writes
+/// it.
+fn is_folder_destination(path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    let spelling = path.as_os_str().to_string_lossy();
+    spelling.ends_with('/') || spelling.ends_with('\\')
 }
 
 /// Directory holding a document's extracted images, sibling to its JSON.

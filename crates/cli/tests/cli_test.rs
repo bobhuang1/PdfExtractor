@@ -234,6 +234,97 @@ fn colliding_output_names_are_disambiguated() {
     assert_eq!(json_of(&csv)["origin"]["mimetype"], "text/csv");
 }
 
+/// A folder named as the output is the folder to write into, for one document as
+/// for a run: `-i report.pdf -o out` writes `out/report.json`, not `out.json`
+/// beside the folder.
+#[test]
+fn an_existing_output_folder_receives_the_document() {
+    let ws = Workspace::new("output-folder");
+    let input = ws.write("report.pdf", &fixture("hello.pdf"));
+    let folder = ws.join("out");
+    std::fs::create_dir_all(&folder).expect("create the output folder");
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        folder.to_str().unwrap(),
+    ]);
+
+    assert!(
+        folder.join("report.json").exists(),
+        "the document went into the folder"
+    );
+    assert!(
+        !ws.join("out.json").exists(),
+        "the folder was treated as a file stem"
+    );
+}
+
+/// A symlink back to the folder that holds it is walked once, not followed until
+/// the kernel stops resolving it: the old walk converted the same document forty
+/// times and wrote a nested copy of the output tree for each.
+#[cfg(unix)]
+#[test]
+fn a_symlink_cycle_is_walked_once() {
+    let ws = Workspace::new("symlink-cycle");
+    let docs = ws.join("docs");
+    std::fs::create_dir_all(&docs).expect("create the input folder");
+    std::fs::write(docs.join("a.pdf"), fixture("hello.pdf")).expect("write the document");
+    std::os::unix::fs::symlink(&docs, docs.join("loop")).expect("create the cycle");
+    let out_dir = ws.join("out");
+
+    run_ok(&[
+        "-i",
+        docs.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+
+    assert!(out_dir.join("a.json").exists(), "the document was read");
+    assert!(
+        !out_dir.join("loop").exists(),
+        "the cycle was followed into the output"
+    );
+}
+
+/// A consumer that stops reading stdouts ends the stream, not the process: the
+/// CLI used to panic (`failed printing to stdout: Broken pipe`) and exit 101
+/// when `-o -` was piped into `head`.
+#[test]
+fn a_consumer_that_stops_reading_ends_the_stream_without_a_panic() {
+    use std::process::Stdio;
+
+    let ws = Workspace::new("closed-stdout");
+    let input = ws.copy_from_corpus("arxiv_attention.pdf", "paper.pdf");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pdfextractor-cli"))
+        .args(["-i", input.to_str().unwrap(), "-o", "-"])
+        .env("OMP_THREAD_LIMIT", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the CLI binary");
+
+    // Read one line's worth, then walk away the way `head` does. The document's
+    // JSON is far larger than a pipe buffer, so the child is still writing.
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut head = [0u8; 64];
+    std::io::Read::read_exact(&mut stdout, &mut head).expect("read the first bytes");
+    drop(stdout);
+
+    let out = child.wait_with_output().expect("wait for the CLI");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a closed pipe is not a conversion failure: status {:?}\nstderr={stderr}",
+        out.status
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the run panicked on the closed pipe:\n{stderr}"
+    );
+}
+
 /// Every added format is dispatched to its own parser with the right mimetype.
 #[test]
 fn each_new_format_gets_its_own_parser_and_mimetype() {

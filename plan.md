@@ -116,17 +116,41 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,313 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
-There are 133 end-to-end tests in `cli_test` that run the built binary as a child process.
+The workspace builds with zero warnings, and the suite holds 1,318 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+There are 136 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
+## Review round — 2026-11-22
+
+A full read of the workspace after the security-handler rounds, with the command line
+exercised as a user runs it. The defects found, and what was done:
+
+| Finding | Severity | State |
+|---|---|---|
+| `-i notes.md --to md` (also `.txt`→`--to text`, `.html`→`--to html`) writes the converted document over the file it read | considered, not a defect | left as it is: in-place normalization is tested behaviour (six `cli_test` cases read the Markdown back after the run), the whole document is read before the first write, and every writer replaces its file through a temporary so a failed write leaves the source whole |
+| `-o -` piped into `head` panicked (`failed printing to stdout: Broken pipe`) and exited 101 after the first screenful | crash on documented use | fixed — every stdout write goes through `write_stdout`, which stops quietly on `BrokenPipe`; `a_consumer_that_stops_reading_ends_the_stream_without_a_panic` |
+| `-i report.pdf -o out` with `out` an existing folder wrote `out.json` beside the folder instead of `out/report.json` inside it | wrong output path | fixed — an existing folder, or a path ending in a separator, is a destination folder; `an_existing_output_folder_receives_the_document` |
+| a symlink back to its own folder was followed until the kernel's 40-symlink limit: 41 conversions of one document and a nested copy of the output tree | duplicated work and litter | fixed — the walk remembers resolved directories; `a_symlink_cycle_is_walked_once` |
+| the LibreOffice profile was handed over as `file://{path}`, a URI only when the path is a Unix absolute path — a Windows temporary directory with a space in it or a `#` anywhere produced one LibreOffice cannot open | bridge failure on Windows | fixed — `profile_url` writes forward slashes and percent-encodes; `a_profile_path_is_a_file_uri` |
+| `-o -` left extracted pictures beside the input without saying so | surprising side effect | fixed — a stderr note names the folder, and the README's `-o` row says it; a new **Exit status** note documents the budget refusal's `3` |
+| `test-data/xref_encrypt_no_type.pdf` is untracked, so a fresh checkout's `crypt_test` fails; `tracked_fixtures_test` walks only the golden directories, so it cannot notice | fixture missing from the repository | fixed — committed with the `/Encrypt` round and its `scripts/fixture-owners.tsv` row; the runner's self-test rejects a row for a file that is not in the index, which is how this was found |
+| the encrypted fixtures had no `scripts/fixture-owners.tsv` rows, so `scripts/test.sh --path` fell back to the full suite | slow selection | fixed |
+| `./scripts/test.sh --self-test` failed on the committed tree: `test-data/make_encrypted_unicode.sh` is a generator, but the coverage audit exempted only `*.py` generators | gate red on a clean checkout | fixed — the rule is the `make_*` name, and the synthetic coverage case pins a shell generator |
+| `plan.md` said the branch was `origin/main` plus four commits; it is eight | stale documentation | fixed |
+
+No reading changed in this round. The README's ⚠️ rows (threaded XLSX comments, PPTX
+SmartArt and equations, ODT headers and footers, `.doc` character formatting without
+LibreOffice) and the *Deferred* list below remain the open capability work.
+
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing the branch.** `finish-plan-2026-11` is `origin/main` plus four
-  local commits — `f593eac` (budget flags and the derived-limits fuzz target),
-  `1fdb79d` (the merge), `b59e0e3` (the review's hardening) and the security
-  and budget review round — and nothing here pushes without the owner asking.
+- **Pushing the branch.** `main` is `origin/main` plus ten local commits —
+  `f593eac` (budget flags and the derived-limits fuzz target), `1fdb79d` (the
+  merge), `b59e0e3` (the review's hardening), the security and budget round
+  (`4e635b5`), then three handler rounds (`2ae779a`, `ef205eb`, `94319fa`), the
+  `/Encrypt`-in-a-stream round and the review round of 2026-11-22 — and nothing
+  here pushes without the owner asking.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.

@@ -303,3 +303,66 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   `an_r6_password_is_prepared_with_saslprep` (parser), the CLI's
   `a_non_ascii_password_is_encoded_for_the_files_revision`, and unit tests for
   the encoding table and RFC 4013's own examples. Suite counts 1,313 / 133.
+- A cross-reference stream's encryption is read from its shape as well as its
+  type. Detection keyed on `/Type /XRef`, so a PDF 1.5 file whose `/Encrypt`
+  sat in an xref stream dictionary without the type — a repaired or
+  hand-written file, `--object-streams` output edited by another tool — parsed
+  with `encrypted` false and its page read as plaintext. Detection now asks
+  nothing of the dictionary but the entry: a stream that names `/Encrypt` is a
+  trailer, whether or not it says `/Type /XRef` or carries `/W` and `/Size`, so
+  a file that lost them is still refused rather than read. With no `/ID` the
+  handler cannot authenticate, and the document comes back with its
+  `CryptError` instead of text. The `/Root` lookup reads the catalog from a
+  stream dictionary the same way. New fixture
+  `test-data/xref_encrypt_no_type.pdf` and test
+  `an_untyped_xref_stream_encrypt_is_refused_not_read`. Suite counts 1,314 / 133.
+
+### 2026-11-22 — full review of the workspace
+
+Read the workspace end to end after the security-handler rounds, exercising the command line as
+a user runs it. Three defects were found and fixed, one suspicion was rejected on the evidence,
+and two repository gates were already red.
+
+- **`-o -` piped into `head` panicked** (`failed printing to stdout: Broken pipe`) and exited
+  101 after the first screenful. Every stdout write now goes through `write_stdout`, which treats
+  `BrokenPipe` as the end of the stream; `--progress` records do the same, so a parent that stops
+  reading cannot stop the run. Test
+  `a_consumer_that_stops_reading_ends_the_stream_without_a_panic` (a corpus JSON far larger than
+  a pipe buffer, its reader dropped after 64 bytes).
+- **`-i report.pdf -o out` with `out` an existing folder** wrote `out.json` beside the folder
+  instead of `out/report.json` inside it, and a path ending in a separator did the same. Both are
+  a destination folder now. Test `an_existing_output_folder_receives_the_document`.
+- **A symlink back to its own folder** was followed until the kernel's 40-symlink limit: 41
+  conversions of one document and a nested copy of the output tree. The walk remembers resolved
+  directories, so an alias and its target are one folder. Test `a_symlink_cycle_is_walked_once`
+  (Unix).
+- **The LibreOffice profile URI was built by concatenation** (`file://{path}`), which is a URI
+  only when the path is a Unix absolute path: a Windows temporary directory with a space in it
+  (`C:\Users\John Smith\…`) or a `#` anywhere produced one LibreOffice cannot open. `profile_url`
+  writes `file:///` + forward slashes + percent-encoding; unit test
+  `a_profile_path_is_a_file_uri`. The Unix spelling is unchanged byte for byte.
+- **`-o -` leaves extracted pictures beside the input**, which is where the default output would
+  have gone. That is now said on stderr (the review found it the hard way: a probe left three
+  PNGs in `test-data/real/arxiv_attention_images/`, hidden from `git status` by `*_images/`, and
+  only `tracked_fixtures_test` noticed). The README's `-o` row and a new **Exit status** note
+  document both it and the `3` a budget refusal exits with.
+- **Rejected as a defect:** `-i notes.md --to md` rewrites the Markdown in place. Six `cli_test`
+  cases depend on that normalization, the document is read whole before the first write, and
+  every writer replaces its file through a temporary, so a failed write leaves the source whole.
+  Left as it is, and said so in `convert_one`.
+- Repository gates that were red on the committed tree:
+  - `./scripts/test.sh --self-test` failed: `test-data/make_encrypted_unicode.sh` is a generator,
+    but the coverage audit exempted only `*.py`. The rule is the `make_*` name now, and the
+    synthetic coverage case adds a shell generator.
+  - The encrypted fixtures from the handler rounds had no `scripts/fixture-owners.tsv` rows, so
+    `--path` fell back to the full suite; they do now.
+  - `plan.md` said the branch was `origin/main` plus four commits; it is eight.
+- `test-data/xref_encrypt_no_type.pdf` was missing from the index, so a fresh checkout's
+  `crypt_test` would fail. It went in with the `/Encrypt` round, together with its
+  `scripts/fixture-owners.tsv` row: the runner's self-test refuses a row for a file that is not
+  tracked, which is how this surfaced.
+- Checks: `cli_test` **136 passed, 0 failed**; `documentation_test` 4/4 with the counts at
+  1,318 / 136; `pdfextractor-formats` suite green; `tracked_fixtures_test` green;
+  `./scripts/test.sh --self-test` green; `cargo fmt --all --check` clean; the workspace clippy
+  run (`-D warnings`) clean; full workspace run **95 targets, 94 green** — the one failure was
+  the probe litter above, and the target re-ran green once it was removed.

@@ -344,7 +344,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | Flag | Meaning |
 |---|---|
 | `-i, --input <PATH>` | file or directory (required unless `--list-input-formats` is given) |
-| `-o, --output <PATH>` | output file (single input) or directory (directory input); defaults to beside the input. The name `-` writes the document to stdout — one input, one format |
+| `-o, --output <PATH>` | output path: a file for one document, or a folder to write into — an existing folder, a path ending in a separator, or the output of a directory input; defaults to beside the input. The name `-` writes the document to stdout — one input, one format — with extracted pictures still written beside the input (the log says where), so `--image-export-mode embedded` is what makes a piped document self-contained |
 | `--to <FMT>` | output format, repeatable: `json` (the default), `md`, `html`, `text`, `yaml` or `chunks`; each format is written beside the same stem, so `--to json --to md` writes `doc.json` and `doc.md` and `--to chunks` writes `doc.jsonl` |
 | `-p, --parallel <N>` | concurrent conversions, 1–1000 (clamped to 256) |
 | `-r, --recursive <BOOL>` | recurse into subdirectories (default `true`) |
@@ -378,6 +378,12 @@ for the bridge, for a machine where it is installed somewhere `PATH` does not re
 (and for a test that must prove a file needed no conversion). `-i old.wps` on a
 machine without LibreOffice fails with the reason and the alternative, never with a
 parse error from a format it cannot read.
+
+**Exit status:** `0` when every document was converted; `1` when a document could not be
+read, or an argument combination was refused; `3` when a document was refused by the
+shared [resource budgets](#resource-limits-for-untrusted-inputs) — a caller that retries
+with a larger budget can tell that apart from a broken file without parsing the message
+— and clap's own `2` for a malformed command line.
 
 ### Streaming progress
 
