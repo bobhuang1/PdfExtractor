@@ -725,19 +725,27 @@ fn run() -> anyhow::Result<()> {
         // input, which is where the default output would have gone.
         let target = &targets[0];
         let base = target.with_extension(formats[0].ext());
-        // Extracted pictures are written beside the input, where the default
-        // output would have gone. A reader of stdout has no other sign that
-        // files appeared next to the source, so say where they went.
-        if args.image_export_mode == ImageExportMode::Referenced {
+        let doc = build_document(target, &base, &args)?;
+        // A reader of stdout has no other sign that picture files appeared next
+        // to the source, so say where they went — but only when this conversion
+        // wrote one: no pictures leaves no folder, a vector figure has no
+        // pixels to write, and `embedded` keeps the pictures in the stream.
+        let wrote_pictures = args.image_export_mode == ImageExportMode::Referenced
+            && doc.pictures.iter().any(|picture| {
+                picture
+                    .image
+                    .as_ref()
+                    .is_some_and(|image| image.uri.is_some())
+            });
+        if wrote_pictures {
             // A note rather than a log record: it is news for the person who
             // typed the command, and the default log filter would swallow it.
             eprintln!(
-                "note: `-o -` writes any extracted picture into {}; `--image-export-mode \
+                "note: `-o -` wrote extracted pictures into {}; `--image-export-mode \
                  embedded` keeps the pictures in the stream",
                 image_dir_for(&base).display()
             );
         }
-        let doc = build_document(target, &base, &args)?;
         let text = match formats[0] {
             OutputFormat::Json => format!("{}\n", serde_json::to_string_pretty(&doc)?),
             OutputFormat::Md => pdfextractor_md_exporter::render_with_images(
@@ -817,16 +825,13 @@ fn run() -> anyhow::Result<()> {
     // A plan precedes the first record so a parent process can show the whole
     // queue before any of it has finished.
     if args.progress {
-        // A plan is a record for the parent, not the run's result: a parent
-        // that has stopped reading must not stop the conversions.
-        let _ = write_stdout(&format!(
-            "{}\n",
-            json!({
-                "kind": "plan",
-                "total": total,
-                "inputs": targets.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-            })
-        ));
+        // A plan precedes the first record so a parent process can show the
+        // whole queue before any of it has finished.
+        write_progress_record(json!({
+            "kind": "plan",
+            "total": total,
+            "inputs": targets.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        }));
     }
 
     let done = AtomicUsize::new(0);
@@ -1069,36 +1074,30 @@ fn announce(
     match result {
         Ok(output) => {
             if args.progress {
-                let _ = write_stdout(&format!(
-                    "{}\n",
-                    json!({
-                        "kind": "progress",
-                        "done": seen,
-                        "total": total,
-                        "input": input.display().to_string(),
-                        "ok": true,
-                        "output": output.display().to_string(),
-                    })
-                ));
+                write_progress_record(json!({
+                    "kind": "progress",
+                    "done": seen,
+                    "total": total,
+                    "input": input.display().to_string(),
+                    "ok": true,
+                    "output": output.display().to_string(),
+                }));
             } else {
                 tracing::info!("{} -> {}", input.display(), output.display());
             }
         }
         Err(err) => {
             if args.progress {
-                let _ = write_stdout(&format!(
-                    "{}\n",
-                    json!({
-                        "kind": "progress",
-                        "done": seen,
-                        "total": total,
-                        "input": input.display().to_string(),
-                        "ok": false,
-                        "error_kind": error_kind(err),
-                        "limit_flag": raise_flag(err),
-                        "error": format!("{err:#}"),
-                    })
-                ));
+                write_progress_record(json!({
+                    "kind": "progress",
+                    "done": seen,
+                    "total": total,
+                    "input": input.display().to_string(),
+                    "ok": false,
+                    "error_kind": error_kind(err),
+                    "limit_flag": raise_flag(err),
+                    "error": format!("{err:#}"),
+                }));
             }
             eprintln!("error: {}: {err:#}{}", input.display(), flag_hint(err));
         }
@@ -1119,10 +1118,19 @@ fn write_stdout(text: &str) -> anyhow::Result<()> {
         .write_all(text.as_bytes())
         .and_then(|()| stdout.flush())
     {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        Err(error) => Err(error).context("write to stdout"),
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Err(error).context("write to stdout")
+        }
+        // Written, or written as far as a reader that has gone away wanted.
+        _ => Ok(()),
     }
+}
+
+/// Write one `--progress` record, dropping a reader that has gone away: the
+/// stream is the parent's view of the run, not the run's result, so a closed
+/// pipe stops the reports rather than the conversions.
+fn write_progress_record(record: serde_json::Value) {
+    let _ = write_stdout(&format!("{record}\n"));
 }
 
 /// What a walk of the input found.
@@ -1212,11 +1220,10 @@ fn walk_dir(
     found: &mut Found,
     visited: &mut HashSet<PathBuf>,
 ) -> anyhow::Result<()> {
-    // A folder that leads back to one already walked is not new work. A symlink
-    // to the folder holding it used to be followed until the kernel stopped
-    // resolving it — forty steps of the same document converted and written
-    // under a nested copy of the output tree. Identity is the resolved path, so
-    // an alias and its target are one folder.
+    // A folder that leads back to one already walked is not new work: a symlink
+    // to its own parent used to be followed until the kernel stopped resolving
+    // it, converting the same document forty times. Identity is the resolved
+    // path, so an alias and its target are one folder.
     let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     if !visited.insert(resolved) {
         return Ok(());
@@ -1224,17 +1231,20 @@ fn walk_dir(
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            match depth_left {
-                None => walk_dir(&path, None, found, visited)?,
-                Some(n) if n > 0 => walk_dir(&path, Some(n - 1), found, visited)?,
-                Some(_) => {}
+        if !path.is_dir() {
+            if is_supported(&path) {
+                found.documents.push(path);
+            } else if is_carried_picture(&path) {
+                found.carried.push(path);
             }
-        } else if is_supported(&path) {
-            found.documents.push(path);
-        } else if is_carried_picture(&path) {
-            found.carried.push(path);
+            continue;
         }
+        let child_depth = match depth_left {
+            None => None,
+            Some(0) => continue,
+            Some(n) => Some(n - 1),
+        };
+        walk_dir(&path, child_depth, found, visited)?;
     }
     Ok(())
 }
@@ -2073,15 +2083,16 @@ fn output_path_for(path: &Path, args: &Args, root: &Path) -> PathBuf {
     }
 }
 
-/// Whether an output path is a folder to write into: it exists as one, or it is
-/// spelled like one (a trailing separator), the way a shell's completion writes
-/// it.
+/// Whether an output path is a folder to write into: one that exists, or one
+/// spelled with a trailing separator the way a shell's completion writes it.
+/// `is_separator` is the platform's own rule, so a backslash is not a folder
+/// name on Unix.
 fn is_folder_destination(path: &Path) -> bool {
-    if path.is_dir() {
-        return true;
-    }
-    let spelling = path.as_os_str().to_string_lossy();
-    spelling.ends_with('/') || spelling.ends_with('\\')
+    let spelled_as_folder = path
+        .as_os_str()
+        .to_string_lossy()
+        .ends_with(std::path::is_separator);
+    path.is_dir() || spelled_as_folder
 }
 
 /// Directory holding a document's extracted images, sibling to its JSON.

@@ -236,7 +236,8 @@ fn colliding_output_names_are_disambiguated() {
 
 /// A folder named as the output is the folder to write into, for one document as
 /// for a run: `-i report.pdf -o out` writes `out/report.json`, not `out.json`
-/// beside the folder.
+/// beside the folder. A trailing separator names one even before it exists,
+/// which is how a shell's completion writes it.
 #[test]
 fn an_existing_output_folder_receives_the_document() {
     let ws = Workspace::new("output-folder");
@@ -258,6 +259,17 @@ fn an_existing_output_folder_receives_the_document() {
     assert!(
         !ws.join("out.json").exists(),
         "the folder was treated as a file stem"
+    );
+
+    let spelled = format!("{}/", ws.join("filled").display());
+    run_ok(&["-i", input.to_str().unwrap(), "-o", &spelled]);
+    assert!(
+        ws.join("filled/report.json").exists(),
+        "the trailing separator named the destination folder"
+    );
+    assert!(
+        !ws.join("filled.json").exists(),
+        "the separator was dropped and the name used as a stem"
     );
 }
 
@@ -322,6 +334,61 @@ fn a_consumer_that_stops_reading_ends_the_stream_without_a_panic() {
     assert!(
         !stderr.contains("panicked"),
         "the run panicked on the closed pipe:\n{stderr}"
+    );
+}
+
+/// The `-o -` picture note names the folder only when the conversion wrote
+/// pictures into it: a document without pictures leaves no folder, so a note
+/// would point at nothing. `--image-export-mode embedded` keeps the pictures in
+/// the stream and stays silent for the same reason.
+#[test]
+fn the_stdout_picture_note_appears_only_when_pictures_were_written() {
+    let ws = Workspace::new("stdout-picture-note");
+
+    let plain = ws.write("plain.pdf", &fixture("hello.pdf"));
+    let out = run_ok(&["-i", plain.to_str().unwrap(), "-o", "-"]);
+    assert!(
+        !stderr_of(&out).contains("wrote extracted pictures"),
+        "a document with no pictures announced a picture folder:\n{}",
+        stderr_of(&out)
+    );
+    assert!(
+        !ws.join("plain_images").exists(),
+        "there was no picture to write"
+    );
+
+    let illustrated = ws.copy_from_corpus("arxiv_attention.pdf", "illustrated.pdf");
+    let out = run_ok(&["-i", illustrated.to_str().unwrap(), "-o", "-"]);
+    let stderr = stderr_of(&out);
+    assert!(
+        stderr.contains("wrote extracted pictures"),
+        "the note is what tells a reader of stdout where the files went:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("illustrated_images"),
+        "the note names the folder beside the input:\n{stderr}"
+    );
+    assert!(
+        ws.join("illustrated_images").is_dir(),
+        "the pictures the note speaks of were written"
+    );
+
+    let embedded = ws.copy_from_corpus("arxiv_attention.pdf", "embedded.pdf");
+    let out = run_ok(&[
+        "-i",
+        embedded.to_str().unwrap(),
+        "-o",
+        "-",
+        "--image-export-mode",
+        "embedded",
+    ]);
+    // `embedded` still extracts the bytes — it has to read them to write the
+    // `data:` URI — but they travel in the stream, so the note would send the
+    // reader looking for files the document does not refer to.
+    assert!(
+        !stderr_of(&out).contains("wrote extracted pictures"),
+        "embedded pictures stay in the stream, so there is nothing to announce:\n{}",
+        stderr_of(&out)
     );
 }
 

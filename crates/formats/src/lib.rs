@@ -633,24 +633,22 @@ pub fn bridge_with_limits(
 /// The `-env:UserInstallation` URI for a profile directory.
 ///
 /// LibreOffice takes this as a URI rather than as a path: a backslash is not a
-/// separator in one, and a space or `#` in the temporary directory —
-/// `C:\Users\John Smith\AppData\Local\Temp` on Windows — would end or split
-/// it. The path is written with forward slashes and everything outside the
-/// unreserved set is percent-encoded, which is the same spelling on every
-/// platform; the drive colon stays, as a `file:` URI's authority-less form
-/// expects.
+/// separator in one, and a space or `#` — a Windows temporary directory such as
+/// `C:\Users\John Smith\AppData\Local\Temp` is both — would split or end it.
+/// The path is written with forward slashes and percent-encoded, which spells
+/// the same on every platform; the drive colon stays, as a `file:` URI's
+/// authority-less form expects.
 fn profile_url(profile: &Path) -> String {
     let text = profile.to_string_lossy().replace('\\', "/");
-    let mut url = String::from("file://");
-    if !text.starts_with('/') {
-        url.push('/');
-    }
-    for byte in text.bytes() {
-        match byte {
-            b'/' | b':' | b'-' | b'_' | b'.' | b'~' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' => {
-                url.push(byte as char)
-            }
-            _ => url.push_str(&format!("%{byte:02X}")),
+    // `file:///` already ends with the separator an absolute path starts with.
+    let mut url = String::from("file:///");
+    for byte in text.trim_start_matches('/').bytes() {
+        // Unreserved characters keep their spelling, and so do the separators
+        // and the drive colon a path needs; everything else is escaped.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b':' | b'-' | b'_' | b'.' | b'~') {
+            url.push(byte as char);
+        } else {
+            url.push_str(&format!("%{byte:02X}"));
         }
     }
     url

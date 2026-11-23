@@ -342,7 +342,8 @@ and two repository gates were already red.
   writes `file:///` + forward slashes + percent-encoding; unit test
   `a_profile_path_is_a_file_uri`. The Unix spelling is unchanged byte for byte.
 - **`-o -` leaves extracted pictures beside the input**, which is where the default output would
-  have gone. That is now said on stderr (the review found it the hard way: a probe left three
+  have gone. That is now said on stderr when the document has pictures — a document without
+  any leaves no folder, and `embedded` writes none (the review found the gap the hard way: a probe left three
   PNGs in `test-data/real/arxiv_attention_images/`, hidden from `git status` by `*_images/`, and
   only `tracked_fixtures_test` noticed). The README's `-o` row and a new **Exit status** note
   document both it and the `3` a budget refusal exits with.
