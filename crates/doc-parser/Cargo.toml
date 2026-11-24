@@ -11,3 +11,6 @@ anyhow.workspace = true
 # A legacy `.doc` is a container a stranger wrote: the shared budgets bound the
 # input, the blocks it may produce and the time the walk through it may take.
 pdfextractor-limits = { path = "../limits" }
+
+[lints]
+workspace = true

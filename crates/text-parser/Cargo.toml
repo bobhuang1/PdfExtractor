@@ -23,3 +23,6 @@ pdfextractor-metafile = { path = "../metafile" }
 # Markdown carries a page's head facts in YAML front matter; reading one back
 # needs the same notation the writer used.
 serde_yaml.workspace = true
+
+[lints]
+workspace = true

@@ -20,7 +20,7 @@ layout analysis, Docling export — is implemented here.
 
 | Area | State |
 |---|---|
-| PDF text extraction | ✅ works — Flate/ASCII85/LZW/RunLength/ASCIIHex, object streams, linearized files, font encodings (cp1252, `/Differences`, `/ToUnicode`, Identity-H, **and the encoding an embedded Type 1 program carries itself**, which is where a TeX symbol font keeps `∗`/`†`/`‡`), **real glyph advances from `/Widths`**. An **encrypted** PDF is decrypted by the standard security handler — RC4 40–128 bit, AES-128 and AES-256 (revisions 2–6), with the user or the owner password: a file that asks nothing of its reader opens without a password, as in any reader, and one that needs a password is read with `--pdf-password` (or `PDFE_PDF_PASSWORD`). A wrong or missing password, or a handler this build does not implement (public-key), is refused by name with nothing written. A **damaged** file — a `startxref` that points nowhere, no xref table or trailer, offsets that lie, a truncated tail — is read from its object declarations, which is the parser's normal path rather than a fallback |
+| PDF text extraction | ✅ works — Flate/ASCII85/LZW/RunLength/ASCIIHex, object streams, linearized files, font encodings (cp1252, `/Differences`, `/ToUnicode`, Identity-H, **and the encoding an embedded Type 1 program carries itself**, which is where a TeX symbol font keeps `∗`/`†`/`‡`), **real glyph advances from `/Widths`**. An **encrypted** PDF is decrypted by the standard security handler — RC4 40–128 bit, AES-128 and AES-256 (revisions 2–6), with the user or the owner password: a file that asks nothing of its reader opens without a password, as in any reader, and one that needs a password is read with the `PDFE_PDF_PASSWORD` environment variable or a file named by `--pdf-password-file` (`--pdf-password` is refused, since `ps` shows it). A wrong or missing password, or a handler this build does not implement (public-key), is refused by name with nothing written. A **damaged** file — a `startxref` that points nowhere, no xref table or trailer, offsets that lie, a truncated tail — is read from its object declarations, which is the parser's normal path rather than a fallback |
 | PDF pictures | ✅ raster images extracted with their true placement box — Flate, DCT/JPEG, JPEG 2000, **CCITT Group 3/G4 fax** and **JBIG2** image XObjects, the last two decoded to grayscale PNGs for OCR (including a `/JBIG2Globals` dictionary and filters wrapped around either codec); **vector-only figures** detected for papers that contain no image at all |
 | **OCR for scanned pages** | ✅ works (Tesseract, wired into the pipeline) — languages chosen with `--ocr-lang`, page segmentation with `--psm`, and a page's own **`/Rotate` honoured**: the bitmap is turned with the page before recognition, so a scan captured sideways comes back upright, with its boxes in the displayed page's space. A scan with **nothing saying which way up it is** — no `/Rotate`, no EXIF tag, merely pixels on their side — is **found and turned upright before recognition**: Tesseract reads the page in its stored, half and (when the stored reading is weak) quarter turns, and the page is turned only when the other reading is clearly better |
 | **Plain images** | ✅ works — one image is one page, in PNG, JPEG, TIFF, BMP, WebP, GIF or JPEG 2000. The page is the upright pixel grid at the resolution the file declares (PNG `pHYs`, JPEG JFIF/EXIF, TIFF `XResolution`, BMP pixels per metre; 72 dpi — one pixel per point — when it declares none, which is what a WebP gets, having no resolution field at all, and what a GIF gets, its descriptor stating a pixel aspect ratio rather than a density; a JP2 states its own in a capture-resolution box (`resc`, in samples per metre), and one that states none gets the same default; a bare JPEG 2000 codestream (`.j2c`, `.j2k`, `.jpc`, `.jpf`) has no container to hold one, so its page is the grid its `SIZ` marker states at that same 72 dpi default — and which spelling a JPEG 2000 is comes from its first bytes, a signature box or the codestream's start marker, so a `.jpf` holding a container is placed by the container's boxes), and `origin.mimetype` is the image's own type rather than a PDF's. A **GIF** or an **animated WebP** is a page per frame: the logical screen its descriptor states, or the `ANIM` canvas a WebP states, is the page's size, and every frame of an animation is a page a reader turns — a hundred-frame animation is a hundred pages, each frame decoded by this reader (composited on the screen the way a player shows it, and laid on white where it leaves the screen untouched) and recognised on its own. A **TIFF** is a page per image file directory, which is how a scanner writes a batch: a three-sheet scan is three pages, each measured from its own grid at the file's declared resolution — the sheets need not be the same size — turned upright by its own directory's orientation tag, so one sideways sheet does not turn the batch with it, and recognised on its own pixels. A camera's **EXIF orientation** is honoured: the page is the grid the tag describes and the pixels are turned before recognition, so a phone held sideways is read upright. A file with **no tag at all** is read to find its own orientation: a sideways or upside-down page is detected from the pixels and turned upright before recognition, and the page size and every line box are measured on the upright grid. An image has no text layer, so the page goes straight into OCR: Tesseract's lines are mapped from pixels into points and grouped by the same layout pass a scanned PDF uses. **A photographed-page corpus scores the reading** — eight synthetic photos (skew, uneven light, softness, one tagged sideways, one sideways and one upside down with no tag) with ground truth, scored by character and word accuracy and held to floors: see [OCR quality](#ocr-quality-on-photographed-pages) |
@@ -59,7 +59,8 @@ and [plan.md](plan.md) for the full roadmap.
 
 ## Requirements
 
-- Rust 1.75+ (verified on 1.99.0)
+- Rust 1.92+ (`rust-version` in `Cargo.toml`; the suite and the releases are built
+  on 1.99.0, which `rust-toolchain.toml` pins and the release workflow names)
 - **OCR (required by default):** Tesseract + Leptonica development libraries, plus
   `libclang` because the bindings use `bindgen`:
 
@@ -70,9 +71,12 @@ and [plan.md](plan.md) for the full roadmap.
   Without these, build with `--no-default-features`; OCR calls then return a clear error.
 - **LibreOffice (optional):** only for the formats no reader here implements —
   Microsoft Works (`.wps`, `.wp`, `.wks`, `.wdb`), WordPerfect (`.wpd`), legacy
-  Excel (`.xls`) and legacy PowerPoint (`.ppt`). `soffice` is looked up on `PATH`;
-  `PDFE_SOFFICE` names it explicitly. Every other format is read without it, and nothing is ever handed to
-  it that this could read itself.
+  Excel (`.xls`) and legacy PowerPoint (`.ppt`). `PDFE_SOFFICE` names the executable; without it
+  only the fixed locations LibreOffice's installers write are read (`/usr/bin/soffice`,
+  `/usr/lib/libreoffice/program/soffice` and the snap on Linux, `/Applications/LibreOffice.app` on
+  macOS, the Program Files trees on Windows) — `PATH` is not searched, so a planted `soffice` in a
+  searched directory cannot run with your privileges. Every other format is read without it, and
+  nothing is ever handed to it that this could read itself.
 - **UI (optional):** Tauri uses the system webview. On Linux that is
   `webkit2gtk-4.1` + `libsoup-3.0` + `gtk3` (plus `libclang`, already needed for
   OCR); Windows uses WebView2 and macOS uses WKWebView. Nothing else is required
@@ -238,6 +242,31 @@ lockfile — a floating gate there fails in a build script before it reads anyth
 formatting floats, since it compiles nothing; it still meets a new image on the push that
 finds it.
 
+Two gates run on a schedule rather than on a push, because their inputs move without this
+repository changing. `.github/workflows/deny.yml` runs `cargo deny check advisories bans
+licenses` weekly (Mondays, 05:23 UTC) and by hand: a RustSec advisory is published against a
+crate already in `Cargo.lock`, a duplicate version appears when the lockfile is refreshed,
+and a licence arrives with a new dependency — so a per-push check would re-read an unchanged
+graph and put a database update between a change and its merge. `deny.toml` states what the
+check is held to: the accepted licences, the one advisory accepted with its reason (the
+unmaintained `chrono`), and the bans, where a vulnerable crate fails the job while duplicate
+versions and the workspace's wildcard path dependencies only warn. The check reads the
+`all-features` graph, so the window and the OCR bindings are in it rather than a feature
+subset that could hide a licence or an advisory. The job installs the `cargo-deny` release
+`deny.toml` was checked against instead of tracking the newest — a new lint or config schema
+is then a change that re-runs the check, not a weekly surprise — and it restores the advisory
+database from the cache, so the weekly run is an incremental fetch.
+
+`.github/workflows/fuzz.yml` runs every fuzz target briefly, also weekly (Mondays, 04:43 UTC)
+and by hand. A manual run takes a `seconds` bound — 60 by default, 1–600 — and each of the
+six targets gets that many seconds of libFuzzer after the corpus is seeded with the recipe in
+[`fuzz/README.md`](fuzz/README.md) and the corpus and the fuzz build are restored from the
+cache; a value that is not a small whole number stops before anything is built. It is not a
+per-push gate for the same kind of reason: a bounded pass proves that the targets still build,
+still take their seeds, and that a short mutation run finds nothing immediate, and a longer
+one does not prove more than that. A finding — a crash, a hang, a refusal without a type — is
+written under `fuzz/artifacts/<target>/` and uploaded, so it survives the log it printed in.
+
 ### Compatibility with Docling
 
 The output is checked two ways (`test-data/golden/README.md`):
@@ -351,7 +380,8 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--page-range <RANGE>` | read only these pages: `1-4,9`, and `7-` for page 7 to the end (1-based, inclusive). A **page** is a PDF's page, a workbook's **sheet**, a presentation's **slide** (PPTX or ODP), or an image's **frame** (a GIF's or WebP's animation, a TIFF's directories). The range is applied **before layout analysis**, so a kept PDF page's furniture and footnotes are found among the kept pages only, and each page, sheet, slide or frame keeps the number it has in the file (a document read as pages 2–3 still says its pages are 2 and 3). A format with no pages — DOCX, Markdown — is read whole, and the log says so; a range that names no page fails, naming the range and how many there were |
 | `--ocr <MODE>` | `auto` (default, scans only), `always`, or `never` |
 | `--ocr-lang <LANGS>` | OCR languages as comma-separated Tesseract codes (`eng,deu`), default `eng`; the language's data must be installed, or shipped beside a released binary |
-| `--pdf-password <PASSWORD>` | the password of an encrypted PDF, user or owner; it is text, written the way the file's revision writes passwords — PDFDocEncoding up to revision 4, UTF-8 after SASLprep from revision 6 — so a non-ASCII password is not hashed as whatever bytes the terminal passed; read from `PDFE_PDF_PASSWORD` when the flag is absent, so it need not appear in a process listing. Once read, the variable is removed from the environment, so no child process inherits it. Without it an encrypted PDF is opened with the empty user password |
+| `--pdf-password <PASSWORD>` | **refused.** `ps` shows every argument to every local user, so the password is not accepted from the command line at all: the run stops before reading the document and names the routes that keep it out of `ps`. Put it in **`PDFE_PDF_PASSWORD`** (the supported route — read when no file is named, and removed from the environment once read so no child process inherits it), or in a file named by `--pdf-password-file`. Without a password an encrypted PDF is opened with the empty user password; a non-ASCII password is written the way the file's revision writes passwords — PDFDocEncoding up to revision 4, UTF-8 after SASLprep from revision 6 |
+| `--pdf-password-file <PATH>` | read the password of an encrypted PDF from a file instead of the argument vector: the file's first line, without its `LF` or `CRLF` ending, is the password (spaces are kept; nothing after that line is read), so it never appears in `ps` or the shell history the way a `--pdf-password` value does. It takes precedence over `--pdf-password` and `PDFE_PDF_PASSWORD`. A file that cannot be read is refused by name before anything is written, and an empty file is the empty user password |
 | `--psm <N>` | Tesseract page segmentation mode, 0–13 (6 is one block, 7 one line, 11 sparse text); the engine's own default when absent |
 | `--text-dehyphenate <BOOL>` | join words a line break split when writing `--to text` (default `true`, as pdftotext does); `--text-dehyphenate false` is the off switch — every source character is kept, at the cost of `exam- ple` style breaks |
 | `--include-notes` | include the notes layer — a deck's speaker notes and comments — in the `md`, `html` and `text` outputs. Off, those three are a reading of the slides alone; JSON and YAML always carry the whole document. Markdown writes a speaker note's paragraphs as `> **Notes:**` lines and a comment's as `> **Comment:**` lines, and HTML as an `<aside class="notes">` (or `<aside class="notes comment">`) holding one `<p>` per paragraph with a bold label on the first, so an included remark is visibly not a slide, a comment is visibly not the presenter's note, and paragraph breaks are kept; plain text keeps it unmarked. Reading such a Markdown or HTML back puts the remark on the notes layer again, paragraphs and all |
@@ -1203,10 +1233,12 @@ wants a different policy constructs `Limits` itself and calls the
 `*_with_limits` entry points, which take the same struct.
 
 Fuzz targets live outside the product workspace in [`fuzz/`](fuzz/README.md):
-`pdf`, `zip`, `xml`, `image` and `budgets`, the last of which reads its `Limits`
+`pdf`, `zip`, `xml`, `image`, `budgets` and `crypt` — the four gates, the
+combined budgets and the encrypted-PDF handler. `budgets` reads its `Limits`
 from the input's own bytes so every ceiling is tried under a document-sized
 input. They compile against the shared limits and are run with
-`cargo +nightly fuzz run <target> -- -max_total_time=60`; the
+`cargo +nightly fuzz run <target> -- -max_total_time=60`, which is also what the
+weekly smoke (`.github/workflows/fuzz.yml`) does with every target; the
 deterministic tests build a ZIP bomb, deeply nested XML, a giant image header, an
 over-budget PDF page tree, an over-size Flate stream and a zero-deadline parser.
 
@@ -1338,6 +1370,9 @@ test-data/
 │                                            #   (make_scan_codec_pdfs.py)
 ├── nested_table.docx                        # a table inside a table's cell
 │                                            #   (make_nested_table_docx.py)
+├── crlf_text.docx                           # CRLF and CR line endings inside a
+│                                            #   text node and a CDATA section
+│                                            #   (make_crlf_text_docx.py)
 ├── images/        # the same scan as JPEG, TIFF, BMP, WebP, GIF and JPEG 2000,
 │                  #   a second JPEG 2000 stating 150 dpi in its `resc` box, the
 │                  #   first one's bare codestream (`scan.j2c`, and `scan.jpc` for

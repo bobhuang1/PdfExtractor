@@ -7,8 +7,10 @@
 //! `test-data/make_encrypted_unicode.sh` writes two with qpdf whose passwords
 //! are not ASCII (`Grüße` in PDFDocEncoding, `päss` after SASLprep). The contract: a file
 //! that asks nothing of its reader is read like any other, a file that needs a
-//! password is read with `--pdf-password` (or `PDFE_PDF_PASSWORD`), and one the
-//! password does not open is refused by name with no document written.
+//! password is read with `PDFE_PDF_PASSWORD` (or a file named by
+//! `--pdf-password-file`; `--pdf-password` is refused because `ps` shows it),
+//! and one the password does not open is refused by name with no document
+//! written.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -112,7 +114,7 @@ fn a_password_protected_pdf_is_read_with_its_password() {
         ("encrypted_aes256.pdf", "owner"),
     ] {
         let out = out_path(&format!("{password}-{name}"));
-        let output = run(name, &out, &["--pdf-password", password], None);
+        let output = run(name, &out, &[], Some(password));
         assert_read(name, &out, &output);
     }
 }
@@ -124,17 +126,101 @@ fn the_password_can_come_from_the_environment() {
     assert_read("encrypted_aes128.pdf", &out, &output);
 }
 
+/// A password file keeps the secret out of argv, where `ps` and the shell
+/// history show a `--pdf-password` value. The file's line ending is not part of
+/// the password, and the file wins over the environment: the wrong password set
+/// here must not be the one tried.
+#[test]
+fn the_password_can_come_from_a_file_outside_the_argument_vector() {
+    let path = std::env::temp_dir().join(format!("pdfe-password-file-{}.txt", std::process::id()));
+    std::fs::write(&path, b"user\n").expect("write the password file");
+    let out = out_path("password-file");
+    let output = run(
+        "encrypted_aes128.pdf",
+        &out,
+        &["--pdf-password-file", path.to_str().unwrap()],
+        Some("guess"),
+    );
+    assert_read("encrypted_aes128.pdf", &out, &output);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Only the line ending is dropped: a CRLF file carries the same password as an
+/// LF one.
+#[test]
+fn a_password_files_crlf_ending_is_not_part_of_the_password() {
+    let path = std::env::temp_dir().join(format!("pdfe-password-crlf-{}.txt", std::process::id()));
+    std::fs::write(&path, b"user\r\n").expect("write the password file");
+    let out = out_path("password-crlf");
+    let output = run(
+        "encrypted_rc4_128.pdf",
+        &out,
+        &["--pdf-password-file", path.to_str().unwrap()],
+        None,
+    );
+    assert_read("encrypted_rc4_128.pdf", &out, &output);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A password file that cannot be read is refused by name before anything is
+/// written — even when the environment holds a password that would open the
+/// file, because the chosen source must never be silently skipped.
+#[test]
+fn a_password_file_that_cannot_be_read_is_refused_by_name() {
+    let missing =
+        std::env::temp_dir().join(format!("pdfe-password-missing-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&missing);
+    let out = out_path("password-missing");
+    let output = run(
+        "encrypted_aes128.pdf",
+        &out,
+        &["--pdf-password-file", missing.to_str().unwrap()],
+        Some("user"),
+    );
+    assert!(
+        !output.status.success(),
+        "an unreadable password file was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot read the password file"), "{stderr}");
+    assert!(stderr.contains(missing.to_str().unwrap()), "{stderr}");
+    assert!(!out.exists(), "a refused run wrote a document anyway");
+}
+
 #[test]
 fn a_missing_password_is_refused_by_name_and_says_how_to_give_one() {
     let out = out_path("missing");
     let output = run("encrypted_aes256.pdf", &out, &[], None);
-    assert_refused("encrypted_aes256.pdf", &out, &output, "--pdf-password");
+    assert_refused("encrypted_aes256.pdf", &out, &output, "PDFE_PDF_PASSWORD");
 }
 
-/// A non-ASCII password arrives as text on argv and is written the way the
-/// file's revision writes passwords: `encrypted_pdfdoc.pdf` holds `Grüße` in
-/// PDFDocEncoding, and `encrypted_r6_saslprep.pdf` holds the composed `päss`
-/// that SASLprep also yields for the decomposed `pa\u0308ss`.
+/// `ps` shows every argument to every local user, so the password is not taken
+/// from the command line at all: the run refuses before reading the document,
+/// and names the routes that keep it out of argv.
+#[test]
+fn the_password_flag_is_refused_because_ps_shows_it() {
+    let out = out_path("flag-refused");
+    let output = run(
+        "encrypted_aes128.pdf",
+        &out,
+        &["--pdf-password", "user"],
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "the password was taken from the argument list"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--pdf-password"), "{stderr}");
+    assert!(stderr.contains("PDFE_PDF_PASSWORD"), "{stderr}");
+    assert!(stderr.contains("ps"), "{stderr}");
+    assert!(!out.exists(), "a refused run wrote a document anyway");
+}
+
+/// A non-ASCII password arrives as text in the environment and is written the
+/// way the file's revision writes passwords: `encrypted_pdfdoc.pdf` holds
+/// `Grüße` in PDFDocEncoding, and `encrypted_r6_saslprep.pdf` holds the composed
+/// `päss` that SASLprep also yields for the decomposed `pa\u0308ss`.
 #[test]
 fn a_non_ascii_password_is_encoded_for_the_files_revision() {
     for (name, password) in [
@@ -143,7 +229,7 @@ fn a_non_ascii_password_is_encoded_for_the_files_revision() {
         ("encrypted_r6_saslprep.pdf", "pa\u{0308}ss"),
     ] {
         let out = out_path("unicode");
-        let output = run(name, &out, &["--pdf-password", password], None);
+        let output = run(name, &out, &[], Some(password));
         assert!(
             output.status.success(),
             "{name} with {password:?} was not read:\nstderr={}",
@@ -161,11 +247,6 @@ fn a_non_ascii_password_is_encoded_for_the_files_revision() {
 #[test]
 fn a_wrong_password_is_refused_by_name() {
     let out = out_path("wrong");
-    let output = run(
-        "encrypted_rc4_128.pdf",
-        &out,
-        &["--pdf-password", "guess"],
-        None,
-    );
+    let output = run("encrypted_rc4_128.pdf", &out, &[], Some("guess"));
     assert_refused("encrypted_rc4_128.pdf", &out, &output, "does not open it");
 }

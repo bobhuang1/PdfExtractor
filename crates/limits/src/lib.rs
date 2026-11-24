@@ -17,7 +17,7 @@ use std::io::{Cursor, Read, Seek};
 use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesRef, Event};
 use quick_xml::Reader;
 
 /// Largest input byte slice any reader will accept.
@@ -332,7 +332,12 @@ impl Limits {
                         detail: error.to_string(),
                     })?;
                 (
-                    entry.name().to_string(),
+                    entry
+                        .name()
+                        .map_err(|error| LimitError::Zip {
+                            detail: error.to_string(),
+                        })?
+                        .into_owned(),
                     entry.size(),
                     entry.compressed_size(),
                     entry.is_dir(),
@@ -472,6 +477,33 @@ impl Limits {
             buffer.clear();
         }
         Ok(())
+    }
+}
+
+/// Append what one `&…;` reference in character data stands for.
+///
+/// The XML reader reports a document's character data and the references
+/// written inside it as separate events, so a reader that wants the text the
+/// document says appends both. The five entities XML predefines, and numeric
+/// character references, resolve to their characters; a reference a document
+/// declares in its own DTD (`&nbsp;`) keeps its spelling, because no DTD is
+/// read here.
+pub fn push_reference(into: &mut String, reference: &BytesRef<'_>) {
+    if let Ok(Some(character)) = reference.resolve_char_ref() {
+        into.push(character);
+        return;
+    }
+    match reference.as_ref() {
+        "lt" => into.push('<'),
+        "gt" => into.push('>'),
+        "amp" => into.push('&'),
+        "quot" => into.push('"'),
+        "apos" => into.push('\''),
+        other => {
+            into.push('&');
+            into.push_str(other);
+            into.push(';');
+        }
     }
 }
 
@@ -735,7 +767,7 @@ impl<'a> Package<'a> {
 
     /// Read the entry at `index`, with the name it was stored under.
     pub fn read_index(&mut self, index: usize) -> Option<(String, Vec<u8>)> {
-        let name = self.archive.by_index(index).ok()?.name().to_string();
+        let name = self.archive.by_index(index).ok()?.name().ok()?.into_owned();
         let bytes = self.read_name(&name)?;
         Some((name, bytes))
     }

@@ -21,3 +21,6 @@ hayro-jpeg2000.workspace = true
 # A TIFF's later directories, which `image`'s decoder does not reach: the pages
 # after the first are read here so a scanned batch is a page each.
 tiff.workspace = true
+
+[lints]
+workspace = true

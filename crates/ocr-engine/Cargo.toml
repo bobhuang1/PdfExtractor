@@ -29,3 +29,6 @@ tesseract = ["leptess"]
 [dev-dependencies]
 # Used by the end-to-end OCR test to pull an embedded image out of a fixture.
 pdfextractor-pdf-parser = { path = "../pdf-parser" }
+
+[lints]
+workspace = true

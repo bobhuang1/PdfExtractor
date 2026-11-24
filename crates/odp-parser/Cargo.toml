@@ -25,3 +25,6 @@ pdfextractor-limits = { path = "../limits" }
 [dev-dependencies]
 # A slide package can be built in memory for a unit test.
 zip.workspace = true
+
+[lints]
+workspace = true

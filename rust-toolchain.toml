@@ -1,0 +1,9 @@
+# The toolchain every checkout builds and tests with.
+#
+# `rust-version` in Cargo.toml is the minimum the workspace supports (1.92);
+# this pin is the rustc the suite and the releases are verified on. Without it a
+# local build, CI and a release could each read a different stable, and the
+# version the README states would be one nobody compiles.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

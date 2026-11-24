@@ -12,3 +12,6 @@ thiserror.workspace = true
 # shares; the guards live here rather than in six copies inside the readers.
 zip.workspace = true
 quick-xml.workspace = true
+
+[lints]
+workspace = true

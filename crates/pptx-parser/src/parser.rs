@@ -17,6 +17,7 @@ use anyhow::{bail, Context, Result};
 use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::collections::HashMap;
 // A shape the slide draws itself — an autoshape, a connector, a group, a text
 // box with a fill — has no image part behind it. The painter that draws a Word
@@ -307,7 +308,9 @@ fn enumerate_slides(archive: &mut limits::Package<'_>) -> Vec<String> {
         let Ok(file) = archive.by_index(index) else {
             continue;
         };
-        let name = file.name().to_string();
+        let Ok(name) = file.name().map(|name| name.into_owned()) else {
+            continue;
+        };
         if !name.starts_with("ppt/slides/") || !name.ends_with(".xml") {
             continue;
         }
@@ -328,7 +331,10 @@ fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
         let name = match archive.by_index(index) {
-            Ok(file) => file.name().to_string(),
+            Ok(file) => match file.name() {
+                Ok(name) => name.into_owned(),
+                Err(_) => continue,
+            },
             Err(_) => continue,
         };
         if !name.starts_with(prefix) {
@@ -1637,9 +1643,13 @@ impl Node {
                 }
                 Ok(Event::Text(text)) => {
                     if let Some(top) = open.last_mut() {
-                        if let Ok(text) = text.unescape() {
-                            top.text.push_str(&text);
-                        }
+                        top.text
+                            .push_str(&text.xml_content(XmlVersion::Implicit1_0));
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    if let Some(top) = open.last_mut() {
+                        limits::push_reference(&mut top.text, &reference);
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -1699,13 +1709,13 @@ fn attach(root: &mut Option<Node>, open: &mut [Node], node: Node) {
 }
 
 fn element(start: &BytesStart) -> Node {
-    let name = local_name(start.name().as_ref());
+    let name = local_name(start.name().as_ref().as_bytes());
     let mut attributes = Vec::new();
     for attribute in start.attributes().flatten() {
-        let qualified = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
-        let local = local_name(attribute.key.as_ref());
+        let qualified = String::from_utf8_lossy(attribute.key.as_ref().as_bytes()).into_owned();
+        let local = local_name(attribute.key.as_ref().as_bytes());
         let value = attribute
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map(|value| value.into_owned())
             .unwrap_or_default();
         attributes.push(XmlAttribute {
@@ -1773,7 +1783,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, body) in parts {
                 zip.start_file(*name, options).expect("start part");
@@ -1789,7 +1799,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, body) in parts {
                 zip.start_file(*name, options).expect("start part");

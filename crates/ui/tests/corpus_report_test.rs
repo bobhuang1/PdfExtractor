@@ -552,7 +552,8 @@ fn is_bridged(path: &Path) -> bool {
 /// has a reading here without the bridge, the built-in piece-table reader's, so it
 /// could be left out afterwards; a family the bridge is the *only* reader for has
 /// no reading to finish, so a run that converted first would stop on the missing
-/// tool (`reading it needs LibreOffice (soffice), which is not on PATH`, exit 1)
+/// tool (`reading it needs LibreOffice (soffice), which is not at any location this
+/// looks in`, exit 1)
 /// and never reach the leaving-out.
 ///
 /// `bridge` is the answer [`libreoffice`] gives, passed in rather than read here

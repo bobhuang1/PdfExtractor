@@ -23,8 +23,8 @@ pdfextractor-ods-parser = { path = "../crates/ods-parser" }
 pdfextractor-odp-parser = { path = "../crates/odp-parser" }
 pdfextractor-image-parser = { path = "../crates/image-parser" }
 pdfextractor-formats = { path = "../crates/formats" }
-zip = "2"
-quick-xml = { version = "0.36", features = ["serialize"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 
 [[bin]]
 name = "pdf"
@@ -59,6 +59,12 @@ doc = false
 [[bin]]
 name = "crypt"
 path = "fuzz_targets/crypt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "encrypted"
+path = "fuzz_targets/encrypted.rs"
 test = false
 doc = false
 

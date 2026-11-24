@@ -20,3 +20,6 @@ svgtypes = { version = "0.16", default-features = false }
 # codec for the bytes this crate produced.
 image.workspace = true
 tracing.workspace = true
+
+[lints]
+workspace = true

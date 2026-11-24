@@ -122,7 +122,7 @@ fn edited_docx_with(source_name: &str, replacements: &[(&str, &str)]) -> Vec<u8>
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).expect("read a DOCX entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("a UTF-8 entry name").into_owned();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).expect("read the entry");
         if name == "word/document.xml" {

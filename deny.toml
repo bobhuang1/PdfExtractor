@@ -1,0 +1,63 @@
+# The dependency gate's configuration: what `cargo deny check advisories bans
+# licenses` is held to, in .github/workflows/deny.yml and by hand.
+#
+# It is a scheduled/manual gate rather than a per-push one, because the
+# advisory database and the crate graph move without this repository changing.
+
+[graph]
+# Check what a release actually builds, optional features included: the window's
+# desktop stack and the OCR bindings are part of the graph a user installs, so a
+# licence or advisory there is not somebody else's problem.
+all-features = true
+
+[advisories]
+# An advisory that cannot be acted on yet is listed here by id with the reason
+# it is waiting, so a new one still fails the gate. No vulnerability is listed:
+# a vulnerable crate fails the gate until it is upgraded.
+ignore = [
+    # chrono is unmaintained (not vulnerable), and no release replaces it yet.
+    # The xlsx reader's date parsing is the only use; moving it to a maintained
+    # date library is its own change.
+    "RUSTSEC-2026-0543",
+]
+
+[licenses]
+# The licences this workspace accepts. The dependency tree is read from
+# Cargo.lock: MIT and Apache-2.0 dominate; the rest are the permissive licences
+# the readers and the Tauri stack bring (BSD, ISC, Zlib, Unicode data tables,
+# CC0/MIT-0 public-domain dedications, Unlicense, BSL-1.0 under its Apache
+# alternative, NCSA inside an AND, and MPL-2.0 for two build/bundle helpers).
+# LGPL appears only as one branch of an OR beside MIT, which MIT satisfies.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# All of these are declared in crate metadata, so detection should not need to
+# guess from a licence file; a crate that genuinely has no machine-readable
+# licence fails rather than being waved through on a fuzzy match.
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate are a maintenance question, not a failure: report
+# them so the weekly run shows the drift, and fail only on a real ban.
+multiple-versions = "warn"
+# The wildcard lint fires on every path dependency in this workspace (21 in the
+# CLI alone), which is how a workspace links its own crates, not an unpinned
+# registry requirement. Warn so a genuinely wildcarded external dependency is
+# visible in the log without failing on the path dependencies by design.
+wildcards = "warn"
+highlight = "all"
+deny = []

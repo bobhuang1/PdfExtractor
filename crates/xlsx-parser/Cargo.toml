@@ -22,3 +22,6 @@ pdfextractor-picture-formats = { path = "../picture-formats" }
 # A chart a sheet draws is not a picture file but a chart part — data, not
 # pixels — and it is read by the same reader a deck's charts go through.
 pdfextractor-chart = { path = "../chart" }
+
+[lints]
+workspace = true

@@ -11,7 +11,7 @@ use pdfextractor_core::page_range;
 use anyhow::Context as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 use base64::Engine as _;
-use clap::{Parser, ValueEnum, ValueHint};
+use clap::{CommandFactory as _, FromArgMatches as _, Parser, ValueEnum, ValueHint};
 // The format question — what a file actually is, and the one family with no
 // reader here — lives in a crate of its own, because the corpus report asks it
 // of the same documents and the two must not answer it differently.
@@ -395,11 +395,12 @@ struct Args {
     #[arg(long, value_name = "RANGE", value_parser = page_range::PageRange::parse)]
     page_range: Option<page_range::PageRange>,
 
-    /// The password of an encrypted PDF (user or owner). Without it an
-    /// encrypted PDF is opened with the empty user password, as every reader
-    /// opens one that asks nothing; a file that needs a password is refused by
-    /// name. The `PDFE_PDF_PASSWORD` environment variable is read when the flag
-    /// is absent, so a password need not appear in a process listing
+    /// The password of an encrypted PDF (user or owner) — refused here, because
+    /// `ps` shows every argument to every local user. Put it in
+    /// `PDFE_PDF_PASSWORD`, the supported route, or in a file named by
+    /// `--pdf-password-file`. Without a password an encrypted PDF is opened with
+    /// the empty user password, as every reader opens one that asks nothing; a
+    /// file that needs a password is refused by name
     #[arg(
         long,
         value_name = "PASSWORD",
@@ -407,6 +408,14 @@ struct Args {
         hide_env_values = true
     )]
     pdf_password: Option<String>,
+
+    /// Read the PDF password from a file instead of the argument vector: the
+    /// file's first line, without its line ending, is the password. This is the
+    /// route that keeps the password out of `ps` and the shell history, where a
+    /// `--pdf-password` value would be visible; it takes precedence over
+    /// `PDFE_PDF_PASSWORD`
+    #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+    pdf_password_file: Option<PathBuf>,
 
     /// When to run OCR on page images
     #[arg(long, value_enum, default_value_t = OcrMode::Auto)]
@@ -612,6 +621,28 @@ fn flag_hint(error: &anyhow::Error) -> String {
     }
 }
 
+/// The password written in `path`, for `--pdf-password-file`.
+///
+/// A file is the route that keeps the secret out of the argument vector and the
+/// shell history, where a `--pdf-password` value is visible to anyone who runs
+/// `ps`. The file's first line is the password and its line ending is not: a
+/// trailing `LF` or `CRLF` is how a text file ends a line, not part of what was
+/// typed. Nothing after that line is read, so a password may hold spaces but
+/// not a newline, and an empty file is the empty user password rather than an
+/// error — an unreadable file is the error, so a missing secret is never
+/// mistaken for no secret.
+fn read_password_file(path: &Path) -> anyhow::Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("cannot read the password file {}", path.display()))?;
+    let text = String::from_utf8(bytes)
+        .with_context(|| format!("the password file {} is not UTF-8", path.display()))?;
+    let line = match text.split_once('\n') {
+        Some((line, _)) => line,
+        None => text.as_str(),
+    };
+    Ok(line.strip_suffix('\r').unwrap_or(line).to_string())
+}
+
 fn main() -> anyhow::Result<()> {
     match run() {
         Ok(()) => Ok(()),
@@ -634,7 +665,24 @@ fn run() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args = Args::parse();
+    let matches = Args::command().get_matches();
+    let mut args = Args::from_arg_matches(&matches)?;
+    // `ps` shows every argument to every local user, so a password typed on the
+    // command line is not accepted at all — not even with a warning, which would
+    // still have put it there. The environment is the supported route, and a
+    // named file is the other one.
+    if matches.value_source("pdf_password") == Some(clap::parser::ValueSource::CommandLine) {
+        anyhow::bail!(
+            "--pdf-password puts the password in the process argument list, where any local \
+             user can read it with `ps`; put it in PDFE_PDF_PASSWORD instead, or name a file \
+             with --pdf-password-file"
+        );
+    }
+    // A password file is read before the password is used and before the
+    // variable is removed: it is the more specific of the two sources.
+    if let Some(path) = args.pdf_password_file.as_deref() {
+        args.pdf_password = Some(read_password_file(path)?);
+    }
     // The password is in the arguments now; the variable is not needed for the
     // rest of this process, and any child spawned below (LibreOffice, pdftoppm)
     // would otherwise inherit a secret about a document it may know nothing
@@ -2173,7 +2221,8 @@ struct PdfReading<'a> {
     psm: Option<u8>,
     /// The pages to read, when the reader asked for fewer than all of them.
     range: Option<&'a page_range::PageRange>,
-    /// `--pdf-password`, for an encrypted file.
+    /// The password (from `PDFE_PDF_PASSWORD` or a named file), for an
+    /// encrypted file.
     password: Option<&'a str>,
 }
 
@@ -2204,9 +2253,10 @@ fn convert_pdf(
         }
         Some(pdfextractor_pdf_parser::crypt::CryptError::WrongPassword) => {
             let asked = if reading.password.is_some() {
-                "the password given (--pdf-password) does not open it"
+                "the password given does not open it"
             } else {
-                "it needs a password: pass it with --pdf-password"
+                "it needs a password: pass it in PDFE_PDF_PASSWORD, or name a file with \
+                 --pdf-password-file"
             };
             anyhow::bail!("{}: this PDF is encrypted and {asked}", path.display());
         }

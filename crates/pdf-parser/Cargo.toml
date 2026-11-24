@@ -28,3 +28,6 @@ sha2.workspace = true
 aes.workspace = true
 unicode-normalization.workspace = true
 tracing.workspace = true
+
+[lints]
+workspace = true

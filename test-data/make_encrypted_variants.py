@@ -22,6 +22,9 @@ the password path is exercised, not only the empty-password default:
   but the page content stream's own `/Filter /Crypt` names `/AltCF`, a second,
   non-default `/CF` entry with `/CFM /None`: that stream is stored in the
   clear while the rest of the file is ciphered.
+* `encrypted_aggregate_streams.pdf` — revision 3, one page carried by three
+  ciphered content streams of their own: each is small enough for a lowered
+  whole-document ceiling on its own, and the three together are not.
 
 Every one uses user password `user` and owner password `owner`, carries the
 page text `Secret ledger` in a ciphered content stream and the document title
@@ -29,14 +32,18 @@ page text `Secret ledger` in a ciphered content stream and the document title
 text and title are its own, since both travel through the object stream). The arithmetic is ISO 32000-2
 §7.6 (algorithms 1, 1.A, 2, 2.A, 2.B, 3, 4, 5, 8 and 9), written out by hand so
 the fixture is reviewable; `pdftotext -upw user` reading each page back proves
-a real reader accepts it. Requires pycryptodome (`Crypto`).
+a real reader accepts it. The AES fixtures require pycryptodome (`Crypto`); the
+RC4 ones use only the standard library.
 """
 
 import hashlib
 import struct
 from pathlib import Path
 
-from Crypto.Cipher import AES
+try:
+    from Crypto.Cipher import AES
+except ImportError:  # the RC4 fixtures need no third-party module
+    AES = None
 
 PAD = bytes.fromhex(
     "28BF4E5E4E758A4164004E56FFFA01082E2E00B6D0683E802F0CA9FE6453697A"
@@ -71,6 +78,10 @@ def pad(password: bytes) -> bytes:
 
 def aes_cbc_encrypt(key: bytes, data: bytes, iv: bytes) -> bytes:
     """AES-CBC with PKCS#7 padding, the IV written first (ISO 32000 §7.6.3)."""
+    if AES is None:
+        raise SystemExit(
+            "the AES fixtures need pycryptodome (`pip install pycryptodome`)"
+        )
     n = 16 - len(data) % 16
     data = data + bytes([n]) * n
     return iv + AES.new(key, AES.MODE_CBC, iv).encrypt(data)
@@ -135,19 +146,26 @@ def hash_2b(password: bytes, salt: bytes, udata: bytes = b"") -> bytes:
             return k[:32]
 
 
+def stream_object(payload: bytes) -> bytes:
+    return b"<< /Length %d >>\nstream\n" % len(payload) + payload + b"\nendstream"
+
+
 def write(
     name: str,
     encrypt_dict: bytes,
     cipher,
     extras: dict | None = None,
     content_extra: bytes = b"",
+    content: bytes = CONTENT,
+    page: bytes | None = None,
 ) -> None:
-    content = cipher(4, CONTENT)
+    content = cipher(4, content)
     title = cipher(7, TITLE)
     objects = {
         1: b"<< /Type /Catalog /Pages 2 0 R >>",
         2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        3: (
+        3: page
+        or (
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200]"
             b" /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
         ),
@@ -456,6 +474,46 @@ def aes_128_crypt_filter() -> None:
     )
 
 
+# One page written as three ciphered content streams: each is under the
+# whole-document ceiling a reader may lower to, and their sum is not.
+MANY_STREAMS = [
+    b"BT /F1 16 Tf 40 150 Td (First ciphered stream) Tj ET\n",
+    b"BT /F1 16 Tf 40 110 Td (Second ciphered stream) Tj ET\n",
+    b"BT /F1 16 Tf 40 70 Td (Third ciphered stream) Tj ET\n",
+]
+
+
+def rc4_128_aggregate_streams() -> None:
+    """Revision 3, one page carried by three ciphered content streams.
+
+    Each stream fits a lowered whole-document ceiling on its own; the three
+    together do not, so the refusal pins that the charge is their total rather
+    than one payload at a time.
+    """
+    o = legacy_o(16)
+    key = legacy_file_key(o, 16)
+    u = legacy_u(key)
+
+    def cipher(num: int, data: bytes) -> bytes:
+        return rc4(object_key(key, num, aes=False), data)
+
+    write(
+        "encrypted_aggregate_streams.pdf",
+        b"<< /Filter /Standard /V 2 /R 3 /Length 128 /O <%s> /U <%s> /P %d >>"
+        % (o.hex().encode(), u.hex().encode(), P),
+        cipher,
+        extras={
+            8: stream_object(cipher(8, MANY_STREAMS[1])),
+            9: stream_object(cipher(9, MANY_STREAMS[2])),
+        },
+        content=MANY_STREAMS[0],
+        page=(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200]"
+            b" /Contents [4 0 R 8 0 R 9 0 R] /Resources << /Font << /F1 5 0 R >> >> >>"
+        ),
+    )
+
+
 if __name__ == "__main__":
     rc4_128()
     aes_128()
@@ -464,3 +522,4 @@ if __name__ == "__main__":
     aes_256_r5()
     aes_128_encrypt_metadata_false()
     aes_128_crypt_filter()
+    rc4_128_aggregate_streams()

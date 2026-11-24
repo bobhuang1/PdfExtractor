@@ -16,6 +16,10 @@
 //! are checked as well, because a test moving from one target to another can
 //! leave the workspace total unchanged while making the plan wrong.
 //!
+//! The workspace's own size is held the same way: the plan's sentence names how
+//! many crates the workspace holds, and `cargo metadata --no-deps` says how many
+//! it actually lists, so a member added without the sentence moving fails here.
+//!
 //! The golden reference and baseline counts are held the same way: the number
 //! of `docling/*.json` references the plan, README and golden README state must
 //! equal the files on disk, and README's remembered baseline must equal the
@@ -84,6 +88,31 @@ fn listed_tests(root: &Path, args: &[&str]) -> Vec<String> {
         .filter_map(|line| line.strip_suffix(": test"))
         .map(str::to_string)
         .collect()
+}
+
+/// The number of packages in the workspace, as Cargo resolves it.
+///
+/// `--no-deps` lists exactly the workspace's members, so a crate added to the
+/// `members` list is counted without this test knowing its name. The plan's
+/// sentence is held to this number the way its test counts are held to `--list`.
+fn workspace_member_count(root: &Path) -> usize {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .current_dir(root)
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .expect("could not run `cargo metadata --no-deps`");
+    assert!(
+        output.status.success(),
+        "`cargo metadata --no-deps` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("`cargo metadata` did not write the JSON it promises");
+    metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has a packages list")
+        .len()
 }
 
 /// A count written as digits (`1,046`) or as an English word (`eight`).
@@ -454,6 +483,11 @@ fn documented_test_counts_match_the_test_list() {
         "a reference, baseline, corpus or fixture count came back empty, so this check \
          would pass without checking anything"
     );
+    let workspace_members = workspace_member_count(&root);
+    assert!(
+        workspace_members > 0,
+        "the workspace lists no crates, so this check would pass without checking anything"
+    );
 
     let workspace = listed_tests(&root, &["test", "--workspace"]);
     let cli = listed_tests(
@@ -558,6 +592,14 @@ fn documented_test_counts_match_the_test_list() {
         acceptance_tests,
     );
 
+    // The plan opens with the workspace's size, a count like the others: a crate
+    // added or removed moves it, and nothing else holds it true.
+    check_repository_count(
+        &mut stale,
+        "the crates in the workspace",
+        &count_after_in(&plan, "A Rust workspace (", "plan.md"),
+        workspace_members,
+    );
     check_repository_count(
         &mut stale,
         "the committed Docling references",

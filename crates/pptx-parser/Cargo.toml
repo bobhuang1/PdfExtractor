@@ -33,3 +33,6 @@ pdfextractor-chart = { path = "../chart" }
 # The picture tests decode what the parser returns: upright pixels, not just
 # upright headers.
 image.workspace = true
+
+[lints]
+workspace = true

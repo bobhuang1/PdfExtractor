@@ -12,11 +12,13 @@ and libFuzzer, so they live outside the product workspace and are not part of
 | `image` | Image header limits, guarded decode, GIF/WebP/TIFF frame budgets and image deadlines. |
 | `budgets` | All four gates above at once, under `Limits` read from the input's own first 16 bytes instead of `FUZZ_*`: ceilings small enough to sit under a real document, so the refusal paths are fuzzed too. |
 | `crypt` | Encrypted PDFs: the committed fixtures with their stream payloads overwritten by the input (the real `/Encrypt` authenticates, so the handler decrypts mutated ciphertext), and a minimal PDF whose `/Encrypt` dictionary body is the input. Every refusal must carry a `CryptError` or a `LimitError`; an untyped failure or a panic is the finding. |
+| `encrypted` | Encrypted PDFs under budgets and a password the input derives: the 16-byte header is `Limits` (as in `budgets`), the next byte is a password length and those bytes are the password, and the rest is the body. The body is spliced into a minimal PDF's `/Encrypt` dictionary, and also cut into a well-formed `/V 5 /R 6` handler's `/O`, `/U`, `/OE` and `/UE`, so malformed dictionaries and algorithm 2.B, the revision-6 password hash, are exercised on fuzzed salts and password. An extraction refusal must be typed. |
 
 Seed them with the committed fixtures; the real corpus is useful too:
 
 ```sh
-mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image fuzz/corpus/xml fuzz/corpus/crypt
+mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image fuzz/corpus/xml \
+  fuzz/corpus/crypt fuzz/corpus/budgets fuzz/corpus/encrypted
 cp test-data/*.pdf fuzz/corpus/pdf/
 cp test-data/encrypted*.pdf fuzz/corpus/crypt/
 # The committed crash reproducers seed the pdf target as well, so a run starts
@@ -32,6 +34,10 @@ printf '<a><b/></a>' > fuzz/corpus/xml/basic.xml
 mkdir -p fuzz/corpus/budgets
 { printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'; cat test-data/hello.pdf; } > fuzz/corpus/budgets/hello.pdf
 { printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'; cat test-data/brief.docx; } > fuzz/corpus/budgets/brief.docx
+# `encrypted` reads the same 16-byte header, then a password length and that
+# many password bytes; the rest is the body its two PDFs are built from.
+mkdir -p fuzz/corpus/encrypted
+{ printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'; printf '\003'; printf 'user'; cat test-data/encrypted_aes256.pdf; } > fuzz/corpus/encrypted/aes256.pdf
 ```
 
 Run one target for a bounded time:
@@ -43,7 +49,38 @@ cargo +nightly fuzz run xml -- -max_total_time=60
 cargo +nightly fuzz run image -- -max_total_time=60
 cargo +nightly fuzz run budgets -- -max_total_time=60
 cargo +nightly fuzz run crypt -- -max_total_time=60
+cargo +nightly fuzz run encrypted -- -max_total_time=60
 ```
+
+## The scheduled smoke
+
+`.github/workflows/fuzz.yml` runs all seven targets for a bounded time every
+Monday (04:43 UTC), and by hand from the Actions page with a `seconds` input —
+60 by default, and 1–600, so a mistyped value cannot hold a runner for hours.
+It is not part of a push: the smoke's value is that the targets still build,
+still take their seeds and find nothing immediate in a short pass, and a longer
+run does not prove more than that.
+
+The job is a clean checkout, so it seeds the corpus with the commands above
+(nothing under `fuzz/corpus` is committed) and restores the corpus cache first,
+so a run continues from what earlier ones grew instead of starting from the
+fixtures alone. It then runs, once per target:
+
+```sh
+cargo +nightly fuzz run <target> fuzz/corpus/<target> -- \
+  -max_total_time=60 -timeout=30 -rss_limit_mb=4096
+```
+
+`-timeout=30` stops one input that hangs the target and `-rss_limit_mb=4096`
+one that allocates without bound; both are the job's bounds rather than a
+target's, so what they turn up is a finding like any other. A finding lands
+under `fuzz/artifacts/<target>/` and the job uploads that directory
+(`fuzz-artifacts-<run id>`, kept 30 days) when a target fails, so it can be
+downloaded and replayed with the command above rather than reconstructed from
+the log. A target that fails does not skip the ones after it: the step runs the
+whole list, then fails, so every target still takes its seeds and every finding
+the run produced is kept. Reproducing the smoke locally is the seeding recipe,
+the corpus cache of your own working tree, and one run per target.
 
 ## Budgets read from the input
 
@@ -60,7 +97,13 @@ A run therefore fuzzes the refusal side of every ceiling with no environment set
 the mutation that grows a document also moves the budget that governs it. A zero
 header is a valid input and refuses everything, which is a boundary the scale is
 meant to reach; an input shorter than the header keeps the product defaults and
-is read whole. The four format targets keep their `FUZZ_*` recipe, where a
+is read whole.
+
+`encrypted` reads the same header for its budgets, then a one-byte password
+length and that many password bytes; the remaining body is spliced into a
+minimal `/Encrypt` dictionary and cut into a revision-6 handler's `/O`, `/U`,
+`/OE` and `/UE`. Its budgets therefore govern the revision-6 hash's reach as
+well as the parse, and the password is fuzzed with the file. The four format targets keep their `FUZZ_*` recipe, where a
 lowered pass is a deliberate, repeatable measurement rather than a mutation.
 
 A finding is written under `fuzz/artifacts/<target>/`; reproduce it with

@@ -9,3 +9,7 @@ rust-version.workspace = true
 [dependencies]
 # A chart part is XML — the caches that hold the plotted numbers included.
 quick-xml.workspace = true
+pdfextractor-limits = { path = "../limits" }
+
+[lints]
+workspace = true

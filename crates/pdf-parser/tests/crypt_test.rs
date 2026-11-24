@@ -6,7 +6,9 @@
 //! each with user password `user` and owner password `owner`).
 //! `encrypted_objstm.pdf` is the AES-256 one laid out the PDF 1.5 way:
 //! compressed objects in an encrypted object stream, and a cross-reference
-//! stream as its only trailer. `encrypted_encryptmetadata.pdf` leaves the
+//! stream as its only trailer. `encrypted_aggregate_streams.pdf` carries its
+//! page in three ciphered content streams, so the document budget is charged
+//! their sum rather than one payload at a time. `encrypted_encryptmetadata.pdf` leaves the
 //! metadata stream in the clear, and `encrypted_cryptfilter.pdf` gives its
 //! content stream a non-default `/Crypt` filter. Poppler's `pdftotext` reads
 //! every one of them back, so these are files a real reader accepts.
@@ -314,6 +316,67 @@ fn a_lowered_document_budget_refuses_decryption() {
     // whole-document ceiling, not the file or its password.
     let doc = PdfDocument::parse(&pdf).expect("the default budget opens it");
     assert_eq!(doc.locked, None);
+}
+
+/// The whole-document ceiling is a total, not a per-stream check: this fixture
+/// carries its page in three ciphered content streams, each under the lowered
+/// ceiling used here and the three together over it. The payloads are charged
+/// as they are copied out of the file — before any of them is decrypted — so the
+/// refusal names their sum and no plaintext is ever produced.
+#[test]
+fn a_lowered_document_budget_charges_every_encrypted_stream_together() {
+    let pdf = fixture("encrypted_aggregate_streams.pdf");
+    let opened = PdfDocument::parse_with_limits_and_password(&pdf, Limits::default(), Some("user"))
+        .expect("the fixture opens under the default budget");
+    assert!(
+        page_text(&opened).contains("ciphered stream"),
+        "the fixture reads under the default budget: {}",
+        page_text(&opened)
+    );
+    let payloads: Vec<u64> = opened
+        .objects
+        .values()
+        .filter_map(|value| match value {
+            PdfValue::Stream(_, raw) => Some(raw.len() as u64),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        payloads.len(),
+        3,
+        "the page is three ciphered content streams: {payloads:?}"
+    );
+    let total: u64 = payloads.iter().sum();
+    let largest = payloads.iter().copied().max().expect("a stream");
+    let limit = total - 1;
+    assert!(
+        largest < limit,
+        "every stream fits the lowered ceiling on its own ({largest} of {limit})"
+    );
+    assert!(
+        (pdf.len() as u64) <= Limits::default().max_input_bytes,
+        "the file is inside the input ceiling"
+    );
+
+    let error = PdfDocument::parse_with_limits_and_password(
+        &pdf,
+        Limits {
+            max_document_bytes: limit,
+            ..Limits::default()
+        },
+        Some("user"),
+    )
+    .expect_err("three ciphertext payloads together cross the ceiling");
+    match error.downcast_ref::<LimitError>() {
+        Some(LimitError::DocumentTooLarge {
+            actual,
+            limit: reported,
+        }) => {
+            assert_eq!(*actual, total, "the charge is the sum of every stream");
+            assert_eq!(*reported, limit);
+        }
+        other => panic!("expected the whole-document ceiling, got {other:?}: {error}"),
+    }
 }
 
 /// `/EncryptMetadata false` leaves the `/Type /Metadata` stream in the clear:

@@ -1,0 +1,69 @@
+# The dependency gate: advisories, bans and licences over the crate graph the
+# release builds, on a schedule and by hand.
+#
+# It is not a per-push gate, because the inputs move without this repository
+# changing: a RustSec advisory is published against a crate already in
+# Cargo.lock, a new duplicate appears when the lockfile is refreshed, and a
+# licence arrives with a new dependency. Checking on every push would spend
+# runner minutes re-reading an unchanged graph and would put a database update
+# between a change and its merge. The weekly run is the one that notices.
+#
+# `deny.toml` says what the checks are held to: which licences are accepted,
+# what counts as a banned crate, and the one advisory (chrono unmaintained) that
+# is accepted with its reason. Vulnerable crates fail the job until upgraded;
+# duplicate versions and the workspace's path dependencies warn so the log
+# shows them without failing.
+#
+# The check runs with the config's `all-features = true`, so the graph is the
+# one a release actually builds — the window and the OCR bindings included —
+# rather than a feature subset that could hide a licence or an advisory.
+
+name: the dependency gate
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+# A manual run and the weekly run each get a group; a newer run of the same kind
+# cancels its predecessor instead of paying for both, without one cancelling the
+# other's coverage.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: advisories, bans and licences
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The prebuilt binary from the action rather than a `cargo install`: the
+      # check reads manifests and a lockfile, it does not build this workspace.
+      # Pinned to the release `deny.toml` was validated with, because a new
+      # cargo-deny can add lints or change the config schema; moving it is a
+      # change that re-runs the check rather than a weekly surprise.
+      - name: cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.22.0
+
+      # The advisory database is a git clone cargo-deny fetches into
+      # $CARGO_HOME/advisory-dbs. Restoring the previous one makes the weekly
+      # run an incremental fetch; a new run id keys the save, so each week
+      # stores the database it read.
+      - name: Cache the advisory database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-dbs
+          key: ${{ runner.os }}-advisory-dbs-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-advisory-dbs-
+
+      - name: Advisories, bans and licences
+        run: cargo deny check advisories bans licenses

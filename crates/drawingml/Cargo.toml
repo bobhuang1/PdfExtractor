@@ -25,3 +25,6 @@ pdfextractor-limits = { path = "../limits" }
 image.workspace = true
 tracing.workspace = true
 
+
+[lints]
+workspace = true

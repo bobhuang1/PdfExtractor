@@ -34,6 +34,12 @@ authors = ["PdfExtractor Team"]
 license = "MIT OR Apache-2.0"
 rust-version = "1.92"
 
+# The workspace holds no unsafe code, and every crate states the rule so a
+# future one fails the build instead of arriving quietly in a parser that reads
+# untrusted files. Each member opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [workspace.dependencies]
 # Error handling
 anyhow = "1"
@@ -69,7 +75,7 @@ tiff = "0.11"
 imageproc = "0.25"
 
 # XML parsing (DOCX)
-quick-xml = { version = "0.36", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 
 # DEFLATE/zlib decoding for PDF FlateDecode streams (reuse - not core domain logic)
 flate2 = "1"
@@ -83,8 +89,11 @@ aes = "0.8"
 # the normalization step is NFKC; the preparation itself stays in `crypt.rs`.
 unicode-normalization = "0.1"
 
-# ZIP handling (DOCX - reuse)
-zip = "2"
+# ZIP handling (DOCX - reuse). Only the methods an OPC/ODF package uses:
+# stored (no feature) and DEFLATE. The decoders zip enables by default —
+# bzip2, LZMA, XZ, Zstandard, PPMd, Deflate64 — are never reached by these
+# packages, and WinZip AES is a password path this workspace does not offer.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # OCR - start with Tesseract bindings
 leptess = "0.14"

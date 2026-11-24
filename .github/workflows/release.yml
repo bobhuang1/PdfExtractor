@@ -156,7 +156,11 @@ jobs:
           path: C:\vcpkg-binarycache
           key: vcpkg-tesseract-x64-windows
 
+      # The pin, not whatever stable is that morning: `rust-toolchain.toml`
+      # states the version the README says releases are built on.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
 
       - name: Cache the crates
         uses: actions/cache@v4
@@ -298,7 +302,11 @@ jobs:
           path: C:\vcpkg-binarycache
           key: vcpkg-tesseract-x64-windows
 
+      # The pin, not whatever stable is that morning: `rust-toolchain.toml`
+      # states the version the README says releases are built on.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
 
       - name: Cache the crates
         uses: actions/cache@v4

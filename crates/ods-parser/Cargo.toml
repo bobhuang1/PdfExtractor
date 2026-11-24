@@ -26,3 +26,6 @@ quick-xml.workspace = true
 # The tests build a package in memory so a sheet, a merge, a value and a
 # region split can each be read without a fixture file.
 zip.workspace = true
+
+[lints]
+workspace = true

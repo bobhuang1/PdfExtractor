@@ -21,6 +21,7 @@ use pdfextractor_metafile as metafile;
 use pdfextractor_metafile::Color;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 
 /// The resolution a drawing is rasterised at: the metafiles' 144 dpi, which is
 /// two device pixels per point.
@@ -108,15 +109,15 @@ pub fn parse(xml: &[u8]) -> Option<Node> {
 
 fn element(e: &BytesStart) -> Node {
     let mut node = Node {
-        name: local_name(e.name().as_ref()).to_string(),
+        name: local_name(e.name().as_ref().as_bytes()).to_string(),
         ..Default::default()
     };
     for attribute in e.attributes().flatten() {
-        let Ok(value) = attribute.unescape_value() else {
+        let Ok(value) = attribute.normalized_value(XmlVersion::Implicit1_0) else {
             continue;
         };
         node.attrs.push((
-            local_name(attribute.key.as_ref()).to_string(),
+            local_name(attribute.key.as_ref().as_bytes()).to_string(),
             value.into_owned(),
         ));
     }

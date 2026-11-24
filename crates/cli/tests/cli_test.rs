@@ -4309,7 +4309,7 @@ fn package_parts(bytes: &[u8], label: &str) -> Vec<(String, Vec<u8>)> {
             .unwrap_or_else(|e| panic!("{label}: part {index}: {e}"));
         let mut data = Vec::new();
         std::io::Read::read_to_end(&mut part, &mut data).expect("read a package part");
-        parts.push((part.name().to_string(), data));
+        parts.push((part.name().expect("a UTF-8 part name").into_owned(), data));
     }
     parts
 }

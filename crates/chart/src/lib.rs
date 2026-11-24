@@ -19,8 +19,10 @@
 //! not read is how the chart looks — colours, a legend's position, an axis
 //! scale — because the picture a chart becomes is its data, not its paint.
 
+use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 
 /// A chart part, ready to be placed by whichever format anchored it.
 #[derive(Debug, Clone, PartialEq)]
@@ -378,9 +380,13 @@ impl Node {
                 }
                 Ok(Event::Text(text)) => {
                     if let Some(top) = open.last_mut() {
-                        if let Ok(text) = text.unescape() {
-                            top.text.push_str(&text);
-                        }
+                        top.text
+                            .push_str(&text.xml_content(XmlVersion::Implicit1_0));
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    if let Some(top) = open.last_mut() {
+                        limits::push_reference(&mut top.text, &reference);
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -431,12 +437,12 @@ fn attach(root: &mut Option<Node>, open: &mut [Node], node: Node) {
 }
 
 fn element(start: &BytesStart) -> Node {
-    let name = local_name(start.name().as_ref());
+    let name = local_name(start.name().as_ref().as_bytes());
     let mut attributes = Vec::new();
     for attribute in start.attributes().flatten() {
-        let key = local_name(attribute.key.as_ref());
+        let key = local_name(attribute.key.as_ref().as_bytes());
         let value = attribute
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map(|value| value.into_owned())
             .unwrap_or_default();
         attributes.push((key, value));

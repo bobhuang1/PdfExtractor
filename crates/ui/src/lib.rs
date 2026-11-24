@@ -154,7 +154,8 @@ impl ImageExportMode {
     }
 }
 
-/// The environment variable the CLI reads `--pdf-password` from.
+/// The environment variable the CLI reads the PDF password from; it is the
+/// supported route, the CLI refusing a password given as an argument.
 pub const PDF_PASSWORD_ENV: &str = "PDFE_PDF_PASSWORD";
 
 /// The whole form: one input, one output, one settings panel.

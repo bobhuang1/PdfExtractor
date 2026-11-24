@@ -30,3 +30,6 @@ sentencepiece-rs = "0.2"
 # A tiktoken vocabulary is a rank file, not a full tokenizer; the ranks are
 # loaded into this implementation and counted with the same BPE rules.
 tiktoken-rs = { version = "0.12", default-features = false }
+
+[lints]
+workspace = true

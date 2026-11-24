@@ -8,9 +8,11 @@
 
 use anyhow::{bail, Result};
 use pdfextractor_chart::{ChartKind, ChartSeries, ChartShape};
+use pdfextractor_limits as limits;
 use pdfextractor_xlsx_parser::Sheet;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::io::Cursor;
 
 /// Read one embedded chart part.
@@ -222,18 +224,19 @@ impl Node {
                         stack.last_mut()?.children.push(node);
                     }
                 }
-                Ok(Event::Text(text)) => {
-                    stack
-                        .last_mut()?
-                        .text
-                        .push_str(text.unescape().ok()?.as_ref());
+                Ok(Event::Text(text)) => stack
+                    .last_mut()?
+                    .text
+                    .push_str(&text.xml_content(XmlVersion::Implicit1_0)),
+                // A reference between two runs of text is text too: `&amp;` in a
+                // title is one ampersand, and the reader reports it apart.
+                Ok(Event::GeneralRef(reference)) => {
+                    limits::push_reference(&mut stack.last_mut()?.text, &reference);
                 }
-                Ok(Event::CData(text)) => {
-                    stack
-                        .last_mut()?
-                        .text
-                        .push_str(&String::from_utf8_lossy(&text));
-                }
+                Ok(Event::CData(text)) => stack
+                    .last_mut()?
+                    .text
+                    .push_str(&text.xml_content(XmlVersion::Implicit1_0)),
                 Ok(Event::Eof) => break,
                 Ok(_) => {}
                 Err(_) => return None,
@@ -282,7 +285,7 @@ fn local_name(name: &[u8]) -> &[u8] {
 }
 
 fn local(element: &BytesStart<'_>) -> String {
-    String::from_utf8_lossy(local_name(element.name().as_ref())).into_owned()
+    String::from_utf8_lossy(local_name(element.name().as_ref().as_bytes())).into_owned()
 }
 
 fn attributes(element: &BytesStart<'_>) -> Vec<(String, String)> {
@@ -290,12 +293,16 @@ fn attributes(element: &BytesStart<'_>) -> Vec<(String, String)> {
         .attributes()
         .flatten()
         .filter_map(|attribute| {
-            attribute.unescape_value().ok().map(|value| {
-                (
-                    String::from_utf8_lossy(local_name(attribute.key.as_ref())).into_owned(),
-                    value.into_owned(),
-                )
-            })
+            attribute
+                .normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|value| {
+                    (
+                        String::from_utf8_lossy(local_name(attribute.key.as_ref().as_bytes()))
+                            .into_owned(),
+                        value.into_owned(),
+                    )
+                })
         })
         .collect()
 }

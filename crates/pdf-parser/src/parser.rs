@@ -374,6 +374,10 @@ impl PdfDocument {
 
     /// Authenticate the password against the trailer's `/Encrypt` and decrypt
     /// every object in place, or record in `locked` why that was not possible.
+    ///
+    /// The deadline is checked between objects: a file of many ciphered objects
+    /// can take the whole parse budget here, and without a check of its own the
+    /// refusal would only surface at whatever stage ran next.
     fn decrypt(&mut self, trailer: &HashMap<String, PdfValue>, password: Option<&str>) {
         let encrypt_ref = trailer.get("Encrypt").and_then(PdfValue::as_ref);
         let encrypt = match trailer.get("Encrypt").and_then(|v| self.resolve(v)) {
@@ -416,6 +420,13 @@ impl PdfDocument {
             return;
         }
         for (&(num, gen), value) in self.objects.iter_mut() {
+            // Decryption is a pass of its own, so the budget has to be checked
+            // inside it: a file of many ciphered objects would otherwise spend
+            // the whole timeout here, past the checks around the pass.
+            if let Err(error) = self.deadline.check("decrypting PDF objects") {
+                *self.limit_hit.borrow_mut() = Some(error);
+                return;
+            }
             // The `/Encrypt` dictionary's own strings (`/O`, `/U`) are never
             // ciphered.
             if Some((num, gen)) == encrypt_ref {
@@ -2182,6 +2193,7 @@ mod tests {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
     use std::io::Write as _;
+    use std::time::Duration;
 
     /// A PNG `Up` predictor with one byte per row: every data byte is deltaed
     /// against the one before it, so a decoder that skips the predictor gets
@@ -2221,6 +2233,45 @@ mod tests {
             decoded_bytes: Cell::new(0),
             #[cfg(test)]
             decodes: Cell::new(0),
+        }
+    }
+
+    /// The trailer a file holds, as the parser read it: the `/Encrypt`
+    /// reference and `/ID` a security handler authenticates against.
+    fn trailer_of(data: &[u8]) -> HashMap<String, PdfValue> {
+        let mut lexer = Lexer::new(data);
+        let (tokens, _) = lexer.tokenize_spanned_limited(Limits::default().max_pdf_tokens);
+        let mut i = tokens
+            .iter()
+            .position(|token| matches!(token.token, Token::Trailer))
+            .expect("the fixture's trailer")
+            + 1;
+        match PdfDocument::parse_value(&tokens, &mut i, data, Limits::default().max_pdf_nesting) {
+            Some(PdfValue::Dictionary(dict)) => dict,
+            other => panic!("the trailer is not a dictionary: {other:?}"),
+        }
+    }
+
+    /// A file of many ciphered objects is decrypted in one pass, so the budget
+    /// has to be checked inside that pass; otherwise the timeout is spent
+    /// decrypting and reported at whichever stage runs next. The refusal names
+    /// the decryption pass itself.
+    #[test]
+    fn a_decryption_that_runs_out_of_time_names_the_decryption_stage() {
+        let bytes = include_bytes!("../../../test-data/encrypted.pdf");
+        let mut doc = PdfDocument::parse(bytes).expect("the fixture opens with its empty password");
+        doc.deadline = Limits {
+            timeout: Duration::ZERO,
+            ..Limits::default()
+        }
+        .deadline();
+        doc.decrypt(&trailer_of(bytes), None);
+        let hit = doc.limit_hit.borrow();
+        match hit.as_ref() {
+            Some(LimitError::Timeout { stage, .. }) => {
+                assert_eq!(stage, "decrypting PDF objects", "{stage}")
+            }
+            other => panic!("expected a decryption timeout, got {other:?}"),
         }
     }
 

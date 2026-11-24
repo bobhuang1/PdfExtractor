@@ -8,7 +8,7 @@ The monitor for this plan is [progress.md](progress.md).*
 
 ## Where the project stands
 
-A Rust workspace (23 crates) that converts PDF, DOCX, legacy `.doc`, ODT/ODS/ODP,
+A Rust workspace (24 crates) that converts PDF, DOCX, legacy `.doc`, ODT/ODS/ODP,
 XLSX, PPTX, RTF, HTML, Markdown, text, CSV and images into Docling-compatible JSON,
 and writes Markdown, HTML, text, YAML and RAG chunks beside it; a Tauri window wraps
 the command line. OCR is Tesseract through `leptess`, on by default.
@@ -70,7 +70,8 @@ every test that skips for a missing tool.
 
 ### WS3 — CI-parity Linux run
 In a container from `ubuntu:24.04` with the packages `test.yml` installs and
-rustc 1.98.1: `cargo test --workspace --locked` (OCR on, window built),
+rustc 1.99.0 (the pinned toolchain): `cargo test --workspace --locked` (OCR on,
+window built),
 `cargo clippy --workspace --all-targets --locked -- -D warnings` (with and without
 default features), `cargo fmt --all --check`, and the compare gate
 (`pdfextractor-cli --compare` over `test-data/real`, `--ocr never`).
@@ -83,7 +84,8 @@ The standard security handler in `crates/pdf-parser/src/crypt.rs`: RC4 40–128
 and 6), user *and* owner passwords, `/EncryptMetadata false`, `/Crypt` identity
 streams; decryption before object streams are expanded; cipher primitives from
 RustCrypto (`md-5`, `sha2`, `aes`) under the reuse policy, key derivation ours.
-CLI: `--pdf-password` (or `PDFE_PDF_PASSWORD`); an empty user password opens
+CLI: `PDFE_PDF_PASSWORD` (the `--pdf-password` argument is refused, since `ps`
+shows it); an empty user password opens
 without asking; a wrong or missing password and an unsupported handler are refused
 by name with no output written. Fixtures from `test-data/make_encrypted_variants.py`,
 each read back by Poppler's `pdftotext -upw`/`-opw` before being committed.
@@ -116,7 +118,10 @@ the counts below to the suite).
 
 ## Suite facts (held by `documentation_test`)
 
-The workspace builds with zero warnings, and the suite holds 1,331 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
+built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
+
+The workspace builds with zero warnings, and the suite holds 1,339 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 There are 140 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
@@ -143,9 +148,36 @@ No reading changed in this round. The README's ⚠️ rows (threaded XLSX commen
 SmartArt and equations, ODT headers and footers, `.doc` character formatting without
 LibreOffice) and the *Deferred* list below remain the open capability work.
 
+## Dependency and gate round — 2026-11-23
+
+The dependencies, the toolchain, and the two checks that run on a schedule rather
+than on a push.
+
+| Change | Why |
+|---|---|
+| `quick-xml` 0.36.2 → 0.42.0, in the workspace and in `fuzz/` | the version `plist`/`tauri` already resolved, so the tree keeps one copy. The reader moved: `QName` is converted at the byte boundary, `normalized_value(XmlVersion::Implicit1_0)` replaces the deprecated `unescape_value`, text and CDATA arrive raw, and a reference is its own `Event::GeneralRef` (handled at every reader through the shared `limits::push_reference`). |
+| Text and CDATA read with `xml_content(XmlVersion::Implicit1_0)` at 17 sites | restores XML 1.0's EOL normalization (CRLF and a lone CR are one LF), which reading the event bytes directly had dropped. |
+| `test-data/crlf_text.docx`, `make_crlf_text_docx.py`, and the docx test `crlf_in_text_and_cdata_is_normalized_to_lf` | pins it: CRLF, a bare CR and an LF inside a `<w:t>` and inside a CDATA section. The test fails with the `as_ref()` reading (checked by reverting it), so a later simplification cannot pass silently. |
+| `unsafe_code = "forbid"` in `[workspace.lints.rust]`, with `[lints] workspace = true` in all 24 members | a new parser cannot bring `unsafe` in quietly; no dependency was added. |
+| `rust-toolchain.toml` pins 1.99.0 (clippy, rustfmt); README states the 1.92 minimum | one rustc for the suite, CI and a release. Both release jobs name 1.99.0 explicitly, because the toolchain action has no per-version tag. |
+| `.github/workflows/deny.yml` and `deny.toml` | weekly (Mondays, 05:23 UTC) and by hand: `cargo deny check advisories bans licenses` over the `all-features` graph, with the advisory database cached. |
+| `.github/workflows/fuzz.yml` | weekly (Mondays, 04:43 UTC) and by hand: six targets, a `seconds` bound of 1–600, the corpus seeded and cached, findings uploaded. The 90-minute job timeout covers 6 × 600 s plus the build, and a failing target no longer skips the rest: the step runs every target, then fails. |
+| `zip` 2.4.2 → 9.8.2 (`default-features = false, features = ["deflate"]`) and `cookie` 0.18.2 → 0.18.3 | the six zip advisories are all extraction paths — `extract()`, `ZipStreamReader`, symlink targets, WinZip AES — that this workspace never calls; upgrading clears them without putting a vulnerability in `deny.toml`, and narrowing the features drops the unused bzip2/LZMA/XZ/Zstd/PPMd/Deflate64 decoders, their licence and the AES path. `ZipFile::name()` is fallible now, so an undecodable entry name skips that entry (the package gate reports it as `LimitError::Zip`). `cookie` clears `RUSTSEC-2026-0594`. |
+
+`deny.toml` lists no vulnerability: its only ignore remains the unmaintained
+`chrono` (`RUSTSEC-2026-0543`), and the check ends `advisories ok, bans ok,
+licenses ok`.
+
+Checks run this round: `cargo clippy --workspace --all-targets --locked -- -D
+warnings` and `cargo fmt --all --check` clean; the limits, chart, docx, xlsx,
+pptx, odp, ods, odt and metafile suites green; `cli_test` 137 passed;
+`documentation_test` green with the count at 1,320; `cargo deny check advisories
+bans licenses` green. The full workspace suite was not re-run, and no workflow was
+dispatched.
+
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing the branch.** `main` is `origin/main` plus ten local commits —
+- **Pushing the branch.** `main` is `origin/main` plus eleven local commits —
   `f593eac` (budget flags and the derived-limits fuzz target), `1fdb79d` (the
   merge), `b59e0e3` (the review's hardening), the security and budget round
   (`4e635b5`), then three handler rounds (`2ae779a`, `ef205eb`, `94319fa`), the

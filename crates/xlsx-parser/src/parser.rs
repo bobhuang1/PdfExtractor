@@ -23,6 +23,7 @@ use chrono::{NaiveDate, TimeDelta, Timelike};
 use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 
@@ -227,23 +228,25 @@ fn read_workbook(bytes: &[u8]) -> Result<Book> {
     let mut date1904 = false;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local_name(e.name().as_ref()) {
-                b"workbookPr" => {
-                    date1904 = attr(&e, b"date1904")
-                        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-                        .unwrap_or(false);
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                match local_name(e.name().as_ref().as_bytes()) {
+                    b"workbookPr" => {
+                        date1904 = attr(&e, b"date1904")
+                            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+                    }
+                    b"sheet" => {
+                        let name = attr(&e, b"name").unwrap_or_else(|| "Sheet".to_string());
+                        let state = attr(&e, b"state").unwrap_or_else(|| "visible".to_string());
+                        sheets.push(SheetRef {
+                            name,
+                            state,
+                            relationship: attr_local(&e, b"id"),
+                        });
+                    }
+                    _ => {}
                 }
-                b"sheet" => {
-                    let name = attr(&e, b"name").unwrap_or_else(|| "Sheet".to_string());
-                    let state = attr(&e, b"state").unwrap_or_else(|| "visible".to_string());
-                    sheets.push(SheetRef {
-                        name,
-                        state,
-                        relationship: attr_local(&e, b"id"),
-                    });
-                }
-                _ => {}
-            },
+            }
             Ok(Event::Eof) => break,
             Err(e) => anyhow::bail!("malformed xl/workbook.xml: {e}"),
             _ => {}
@@ -284,7 +287,7 @@ fn read_relationships_in(
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if local_name(e.name().as_ref()) == b"Relationship" {
+                if local_name(e.name().as_ref().as_bytes()) == b"Relationship" {
                     let kind = attr(&e, b"Type").unwrap_or_default();
                     if only_kind.is_some_and(|wanted| !kind.ends_with(wanted)) {
                         buffer.clear();
@@ -367,7 +370,7 @@ fn read_comments(bytes: &[u8], sheet: usize) -> Result<Vec<SheetAnnotation>> {
     let mut phonetic = 0usize;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(e)) => match local_name(e.name().as_ref()) {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"author" => author = Some(String::new()),
                 b"comment" => {
                     current = Some(CommentRead {
@@ -386,12 +389,12 @@ fn read_comments(bytes: &[u8], sheet: usize) -> Result<Vec<SheetAnnotation>> {
             Ok(Event::Empty(e)) => {
                 // An empty author is a name the part does not state, and an
                 // empty comment has no words to be a remark.
-                if local_name(e.name().as_ref()) == b"author" {
+                if local_name(e.name().as_ref().as_bytes()) == b"author" {
                     authors.push(String::new());
                 }
             }
             Ok(Event::Text(e)) => {
-                let text = e.unescape().unwrap_or_default();
+                let text = e.xml_content(XmlVersion::Implicit1_0);
                 if let Some(author) = author.as_mut() {
                     author.push_str(&text);
                 } else if capture_text {
@@ -400,7 +403,20 @@ fn read_comments(bytes: &[u8], sheet: usize) -> Result<Vec<SheetAnnotation>> {
                     }
                 }
             }
-            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
+            // A reference between two runs of text is text too: `&amp;` in a
+            // comment is one ampersand, and the reader reports it apart.
+            Ok(Event::GeneralRef(reference)) => {
+                let mut text = String::new();
+                limits::push_reference(&mut text, &reference);
+                if let Some(author) = author.as_mut() {
+                    author.push_str(&text);
+                } else if capture_text {
+                    if let Some(comment) = current.as_mut() {
+                        comment.text.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"author" => {
                     authors.push(author.take().unwrap_or_default().trim().to_string());
                 }
@@ -680,7 +696,7 @@ fn worksheet_drawing(sheet: &[u8]) -> Option<String> {
             // A worksheet names its drawing after its cells, but the element is
             // taken wherever it is written rather than in one place.
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if local_name(e.name().as_ref()) == b"drawing" {
+                if local_name(e.name().as_ref().as_bytes()) == b"drawing" {
                     id = attr_local(&e, b"id");
                 }
             }
@@ -893,7 +909,7 @@ fn read_drawing(bytes: &[u8]) -> Result<Vec<DrawingAnchor>> {
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let name = local_name(e.name().as_ref()).to_vec();
+                let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                 if let Some(anchor) = current.as_mut() {
                     match name.as_slice() {
                         b"from" => anchor.place = Place::From,
@@ -928,13 +944,14 @@ fn read_drawing(bytes: &[u8]) -> Result<Vec<DrawingAnchor>> {
             }
             Ok(Event::Text(e)) => {
                 if let Some(anchor) = current.as_mut() {
-                    if let Ok(value) = e.unescape().unwrap_or_default().trim().parse::<f64>() {
+                    if let Ok(value) = e.xml_content(XmlVersion::Implicit1_0).trim().parse::<f64>()
+                    {
                         anchor.take(value);
                     }
                 }
             }
             Ok(Event::End(e)) => {
-                let name = local_name(e.name().as_ref()).to_vec();
+                let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                 match name.as_slice() {
                     b"from" | b"to" => {
                         if let Some(anchor) = current.as_mut() {
@@ -999,7 +1016,7 @@ fn read_shared_strings(bytes: &[u8]) -> Result<Vec<String>> {
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                match local_name(e.name().as_ref()) {
+                match local_name(e.name().as_ref().as_bytes()) {
                     b"si" => current = Some(String::new()),
                     // A phonetic guide is the reading of the text above it,
                     // not the text: Docling's reader does not keep it twice.
@@ -1011,11 +1028,18 @@ fn read_shared_strings(bytes: &[u8]) -> Result<Vec<String>> {
             Ok(Event::Text(e)) => {
                 if capture {
                     if let Some(current) = current.as_mut() {
-                        current.push_str(&e.unescape().unwrap_or_default());
+                        current.push_str(&e.xml_content(XmlVersion::Implicit1_0));
                     }
                 }
             }
-            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
+            Ok(Event::GeneralRef(reference)) => {
+                if capture {
+                    if let Some(current) = current.as_mut() {
+                        limits::push_reference(current, &reference);
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"si" => out.push(current.take().unwrap_or_default()),
                 b"rPh" => phonetic = phonetic.saturating_sub(1),
                 b"t" => capture = false,
@@ -1067,28 +1091,31 @@ fn read_styles(bytes: &[u8]) -> Result<Styles> {
     let mut in_cell_xfs = false;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local_name(e.name().as_ref()) {
-                b"numFmt" => {
-                    if let (Some(id), Some(code)) = (attr(&e, b"numFmtId"), attr(&e, b"formatCode"))
-                    {
-                        if let Ok(id) = id.parse() {
-                            styles.custom.insert(id, code);
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                match local_name(e.name().as_ref().as_bytes()) {
+                    b"numFmt" => {
+                        if let (Some(id), Some(code)) =
+                            (attr(&e, b"numFmtId"), attr(&e, b"formatCode"))
+                        {
+                            if let Ok(id) = id.parse() {
+                                styles.custom.insert(id, code);
+                            }
                         }
                     }
+                    b"cellXfs" => in_cell_xfs = true,
+                    // `cellStyleXfs` holds the same element for named styles; a
+                    // cell's `s` indexes `cellXfs`, so only that list is kept.
+                    b"xf" if in_cell_xfs => {
+                        let format = attr(&e, b"numFmtId")
+                            .and_then(|id| id.parse().ok())
+                            .unwrap_or(0);
+                        styles.formats.push(format);
+                    }
+                    _ => {}
                 }
-                b"cellXfs" => in_cell_xfs = true,
-                // `cellStyleXfs` holds the same element for named styles; a
-                // cell's `s` indexes `cellXfs`, so only that list is kept.
-                b"xf" if in_cell_xfs => {
-                    let format = attr(&e, b"numFmtId")
-                        .and_then(|id| id.parse().ok())
-                        .unwrap_or(0);
-                    styles.formats.push(format);
-                }
-                _ => {}
-            },
+            }
             Ok(Event::End(e)) => {
-                if local_name(e.name().as_ref()) == b"cellXfs" {
+                if local_name(e.name().as_ref().as_bytes()) == b"cellXfs" {
                     in_cell_xfs = false;
                 }
             }
@@ -1345,24 +1372,32 @@ impl<'a> SheetReader<'a> {
             }
             match reader.read_event_into(&mut buffer) {
                 Ok(Event::Start(e)) => {
-                    let name = local_name(e.name().as_ref()).to_vec();
+                    let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                     self.begin(&name, &e);
                 }
                 // An element written as `<x/>` is an open and a close at once;
                 // `<v/>` and `<c/>` both occur in real packages.
                 Ok(Event::Empty(e)) => {
-                    let name = local_name(e.name().as_ref()).to_vec();
+                    let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                     self.begin(&name, &e);
                     self.end(&name);
                 }
                 Ok(Event::Text(e)) => {
                     if self.capture.is_some() && self.cell.is_some() {
-                        let text = e.unescape().unwrap_or_default();
+                        let text = e.xml_content(XmlVersion::Implicit1_0);
                         self.capture.get_or_insert_with(String::new).push_str(&text);
                     }
                 }
+                Ok(Event::GeneralRef(reference)) => {
+                    if self.capture.is_some() && self.cell.is_some() {
+                        limits::push_reference(
+                            self.capture.get_or_insert_with(String::new),
+                            &reference,
+                        );
+                    }
+                }
                 Ok(Event::End(e)) => {
-                    let name = local_name(e.name().as_ref()).to_vec();
+                    let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                     self.end(&name);
                 }
                 Ok(Event::Eof) => break,
@@ -1633,10 +1668,10 @@ fn attr(element: &BytesStart, key: &[u8]) -> Option<String> {
     element
         .attributes()
         .flatten()
-        .find(|attribute| attribute.key.as_ref() == key)
+        .find(|attribute| attribute.key.as_ref().as_bytes() == key)
         .and_then(|attribute| {
             attribute
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .ok()
                 .map(|value| value.into_owned())
         })
@@ -1646,10 +1681,10 @@ fn attr_local(element: &BytesStart, key: &[u8]) -> Option<String> {
     element
         .attributes()
         .flatten()
-        .find(|attribute| local_name(attribute.key.as_ref()) == key)
+        .find(|attribute| local_name(attribute.key.as_ref().as_bytes()) == key)
         .and_then(|attribute| {
             attribute
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .ok()
                 .map(|value| value.into_owned())
         })
@@ -1670,7 +1705,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, body) in parts {
                 zip.start_file(*name, options).expect("start part");

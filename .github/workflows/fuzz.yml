@@ -1,0 +1,174 @@
+# The fuzz smoke: every target, briefly, on a schedule and by hand.
+#
+# The seven targets live in `fuzz/`, a workspace of their own, and build with
+# cargo-fuzz and libFuzzer on nightly. They are not a per-push gate: a bounded
+# run's value is that the targets still build and still take their seeds, and
+# that a short mutation pass finds nothing immediate; a longer run than this
+# spends runner minutes without proving more than the weekly one does. A
+# finding — a crash, a hang, an untyped refusal — is written under
+# `fuzz/artifacts/<target>/` and uploaded, so it survives the job's log.
+#
+# The corpus is machine-generated and stays out of the repository: only the
+# fixtures and the two PDF crash reproducers are committed. On a clean checkout
+# every target aborts with "The required directory fuzz/corpus/<target> does not
+# exist", so the job seeds the corpus exactly as `fuzz/README.md` says, then
+# restores the corpus the cache carried from earlier runs so the seeds are not
+# the only start.
+#
+# The bound is per target, not for the job: with the default 60 s the whole run
+# is seven minutes of fuzzing plus the build, and a manual run can ask for more
+# (the cap keeps a mistyped value from holding a runner for hours). The job
+# timeout is sized for the cap, and a target that fails does not stop the ones
+# after it: the run's point is every target, so the failure is reported at the
+# end and the findings from the targets that did run are still kept.
+
+name: the fuzz smoke
+
+on:
+  schedule:
+    - cron: '43 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Bounded seconds per target (1-600)
+        required: true
+        default: '60'
+        type: string
+
+# A manual run and the weekly run each get a group; a newer run of the same kind
+# cancels its predecessor instead of paying for both, without one cancelling the
+# other's coverage.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: every target, briefly
+    runs-on: ubuntu-24.04
+    # Seven targets at the 600 s maximum is 70 minutes of fuzzing; the build, the
+    # seeding and the artifact upload need the rest. The job's clock must not kill
+    # a legitimate manual maximum, so it is larger than the maximum run.
+    timeout-minutes: 110
+    env:
+      SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The input is a maintainer's, but it still lands in a shell variable in
+      # `-max_total_time=`; a value that is not a small whole number stops here.
+      - name: The bound is a whole number of seconds
+        run: |
+          case "$SECONDS_PER_TARGET" in
+            ''|*[!0-9]*)
+              echo "seconds must be a whole number, got '$SECONDS_PER_TARGET'"
+              exit 1
+              ;;
+          esac
+          if [ "$SECONDS_PER_TARGET" -lt 1 ] || [ "$SECONDS_PER_TARGET" -gt 600 ]; then
+            echo "seconds must be between 1 and 600, got $SECONDS_PER_TARGET"
+            exit 1
+          fi
+
+      # Fuzzing needs the nightly runtime for the sanitizer; the workspace's
+      # `rust-toolchain.toml` pins stable and is untouched by `+nightly`.
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Restored before seeding so the committed fixtures are added to whatever
+      # earlier runs grew rather than replacing it. A new run id keys the save.
+      - name: Cache the corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: ${{ runner.os }}-fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-corpus-
+
+      - name: Cache the fuzz build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-
+
+      # `fuzz/README.md`'s seeding recipe, unchanged: the committed fixtures,
+      # the two committed crash reproducers for `pdf`, a minimal XML document,
+      # two documents behind the 16-byte ceiling header `budgets` reads, and an
+      # encrypted file behind the same header plus a length-prefixed password.
+      - name: Seed the corpus
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/corpus/pdf fuzz/corpus/zip fuzz/corpus/image \
+            fuzz/corpus/xml fuzz/corpus/crypt fuzz/corpus/budgets \
+            fuzz/corpus/encrypted
+          cp test-data/*.pdf fuzz/corpus/pdf/
+          cp test-data/encrypted*.pdf fuzz/corpus/crypt/
+          cp fuzz/artifacts/pdf/* fuzz/corpus/pdf/
+          cp test-data/*.docx test-data/*.xlsx test-data/*.pptx test-data/*.odt \
+            fuzz/corpus/zip/ 2>/dev/null || true
+          cp test-data/*.png test-data/*.jpg test-data/*.tif fuzz/corpus/image/ \
+            2>/dev/null || true
+          printf '<a><b/></a>' > fuzz/corpus/xml/basic.xml
+          {
+            printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'
+            cat test-data/hello.pdf
+          } > fuzz/corpus/budgets/hello.pdf
+          {
+            printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'
+            cat test-data/brief.docx
+          } > fuzz/corpus/budgets/brief.docx
+          {
+            printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377'
+            printf '\003'
+            printf 'user'
+            cat test-data/encrypted_aes256.pdf
+          } > fuzz/corpus/encrypted/aes256.pdf
+
+      - name: Every target, bounded
+        run: |
+          set -uo pipefail
+          failed=""
+          for target in pdf zip xml image budgets crypt encrypted; do
+            echo "::group::$target"
+            started=$SECONDS
+            # No `set -e` here: one target's finding is that target's, and the
+            # next target's seeds are still taken this run. The failures are
+            # carried out of the loop and fail the step once every target ran.
+            if cargo +nightly fuzz run "$target" "fuzz/corpus/$target" -- \
+              -max_total_time="$SECONDS_PER_TARGET" \
+              -timeout=30 \
+              -rss_limit_mb=4096; then
+              echo "$target: $((SECONDS - started))s"
+            else
+              echo "$target: $((SECONDS - started))s — failed"
+              failed="$failed $target"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failed targets:$failed"
+            exit 1
+          fi
+
+      # A crash is written to fuzz/artifacts/<target>/ and is the run's point;
+      # keep it where it can be downloaded and reproduced.
+      - name: Keep the findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ github.run_id }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30

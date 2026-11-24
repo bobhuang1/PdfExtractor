@@ -21,9 +21,9 @@
 # plus the OCR data.
 #
 # LibreOffice is not installed, on purpose, and the suite is green without it.
-# That was measured by running the suite's binaries with an empty `PATH` — naming
-# a `PDFE_SOFFICE` that does not exist is not enough, because the lookup falls
-# through to `PATH` and finds a `soffice` that is installed:
+# The lookup reads only fixed install paths (`PATH` is never searched), so a
+# `PDFE_SOFFICE` naming a file that does not exist turns the bridge off even on
+# a machine that has LibreOffice installed:
 #
 # * the CLI suite's bridge tests return early and say so (`soffice_binary()`);
 # * the corpus report keeps the baseline entries of the documents it could not

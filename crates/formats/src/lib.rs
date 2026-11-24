@@ -38,8 +38,9 @@ use std::time::Duration;
 /// How often a running conversion is measured, while it runs.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// The environment variable a PDF password is read from (`--pdf-password`'s
-/// `env` in the command line, and what the window sets for its child).
+/// The environment variable a PDF password is read from (the command line's
+/// supported route — its `--pdf-password` argument is refused — and what the
+/// window sets for its child).
 ///
 /// A conversion hands a document to another program, and the password is a
 /// secret about a *different* document in the same run, so the bridge removes
@@ -501,36 +502,84 @@ fn contains_utf16(haystack: &[u8], text: &str) -> bool {
 
 // --- the bridge -----------------------------------------------------------
 
-/// LibreOffice's executable, if there is one.
+/// LibreOffice's executable, if this machine has it installed.
 ///
-/// `PDFE_SOFFICE` names it outright, which is what lets a machine with
-/// LibreOffice installed somewhere unusual — or a test — point this at the
-/// binary instead of hoping for a `PATH` that has it.
+/// `PDFE_SOFFICE` names the program outright — the override for an install in
+/// an unusual place, or for a test. When it is set it is the only place looked,
+/// so a value that names no program is refused rather than quietly replaced by
+/// something else.
+///
+/// Without it the lookup reads a fixed list of the paths the installers write
+/// ([`fixed_soffice_locations`]). `PATH` is deliberately not searched: it is
+/// read from the environment, so a planted `soffice` in any directory it names
+/// would run on every bridged document with the user's own privileges. A fixed
+/// install path cannot be planted without write access to the install itself.
 pub fn libreoffice() -> Option<PathBuf> {
-    resolve_soffice(
-        std::env::var_os("PDFE_SOFFICE").map(PathBuf::from),
-        std::env::var_os("PATH"),
-    )
+    resolve_soffice(std::env::var_os("PDFE_SOFFICE").map(PathBuf::from))
 }
 
-/// The lookup behind [`libreoffice`], with its inputs passed in so a test does
+/// The lookup behind [`libreoffice`], with its input passed in so a test does
 /// not have to touch the process environment.
-fn resolve_soffice(
-    explicit: Option<PathBuf>,
-    search: Option<std::ffi::OsString>,
-) -> Option<PathBuf> {
-    if let Some(path) = explicit {
-        return path.is_file().then_some(path);
+fn resolve_soffice(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    match explicit {
+        Some(path) => verified_soffice(&path),
+        None => fixed_soffice_locations()
+            .into_iter()
+            .find_map(|path| verified_soffice(&path)),
     }
-    for directory in std::env::split_paths(&search?) {
-        for name in ["soffice", "libreoffice"] {
-            let candidate = directory.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+}
+
+/// Where LibreOffice's installer puts its executable, by platform.
+///
+/// These are fixed paths on purpose — see [`libreoffice`]. `/usr/bin/soffice`
+/// is the link the Debian and RPM packages write, `/usr/lib/libreoffice/...`
+/// the program it points at, and the snap is the other package a distribution
+/// ships; macOS has one place an application can be, and Windows the two
+/// Program Files trees.
+fn fixed_soffice_locations() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![PathBuf::from(
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        )]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            PathBuf::from(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+            PathBuf::from(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        vec![
+            PathBuf::from("/usr/bin/soffice"),
+            PathBuf::from("/usr/bin/libreoffice"),
+            PathBuf::from("/usr/lib/libreoffice/program/soffice"),
+            PathBuf::from("/snap/bin/libreoffice"),
+        ]
+    }
+}
+
+/// `path`, when it is a file this process may execute.
+///
+/// This is the "verified" half of a location: a directory, a dangling link or
+/// a file with no execute bit is not a program, so it is not reported as one.
+/// A link is followed — `/usr/bin/soffice` in the packages is one — and the
+/// target is what has to be executable.
+fn verified_soffice(path: &Path) -> Option<PathBuf> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return None;
         }
     }
-    None
+    Some(path.to_path_buf())
 }
 
 /// A document LibreOffice wrote for us, and the scratch directory holding it.
@@ -572,8 +621,9 @@ pub fn bridge_with_limits(
 ) -> Result<Bridged> {
     let Some(soffice) = libreoffice() else {
         bail!(
-            "this is {label}; reading it needs LibreOffice (`soffice`), which is not on PATH — \
-             install LibreOffice, or {}",
+            "this is {label}; reading it needs LibreOffice (`soffice`), which is not at any \
+             location this looks in — install LibreOffice, set `PDFE_SOFFICE` to its \
+             executable, or {}",
             target.escape()
         );
     };
@@ -1257,22 +1307,47 @@ mod tests {
         )));
     }
 
+    /// An override is used or refused, and the file has to be a program this
+    /// process may execute: a missing name, a directory or a file with no
+    /// execute bit is none.
     #[test]
-    fn libreoffice_is_found_by_name_or_by_override() {
-        // An explicit override is used or refused; it never falls back to
-        // `PATH` behind the caller's back.
-        let missing = std::env::temp_dir().join("pdfe-no-such-soffice");
-        assert_eq!(resolve_soffice(Some(missing), None), None);
+    fn an_override_is_verified_and_never_falls_back() {
+        let missing =
+            std::env::temp_dir().join(format!("pdfe-no-such-soffice-{}", std::process::id()));
+        assert_eq!(resolve_soffice(Some(missing)), None);
         let real = std::env::current_exe().expect("the test binary");
-        assert_eq!(resolve_soffice(Some(real.clone()), None), Some(real));
-        // Without one, a directory on the search path holding `soffice` wins.
-        let directory = std::env::temp_dir().join(format!("pdfe-soffice-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).expect("scratch dir");
-        let fake = directory.join("soffice");
-        std::fs::write(&fake, b"#!/bin/sh\n").expect("fake binary");
-        let search = std::ffi::OsString::from(directory.as_os_str());
-        assert_eq!(resolve_soffice(None, Some(search)), Some(fake));
-        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(resolve_soffice(Some(real.clone())), Some(real));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let directory =
+                std::env::temp_dir().join(format!("pdfe-soffice-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).expect("scratch dir");
+            let fake = directory.join("soffice");
+            std::fs::write(&fake, b"#!/bin/sh\n").expect("fake binary");
+            assert_eq!(
+                resolve_soffice(Some(fake.clone())),
+                None,
+                "a file with no execute bit was taken as the program"
+            );
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+                .expect("make it executable");
+            assert_eq!(resolve_soffice(Some(fake.clone())), Some(fake));
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+    }
+
+    /// The implicit lookup is a list of install paths, not `PATH`: an
+    /// executable planted in a searched directory is never chosen.
+    #[test]
+    fn the_implicit_locations_are_absolute_install_paths() {
+        let locations = fixed_soffice_locations();
+        assert!(!locations.is_empty(), "no install location is checked");
+        assert!(
+            locations.iter().all(|path| path.is_absolute()),
+            "an implicit location is relative: {locations:?}"
+        );
     }
 
     /// The bridge is handed the document it is asked about, never a secret

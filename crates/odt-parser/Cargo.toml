@@ -22,3 +22,6 @@ quick-xml.workspace = true
 # The tests build a package in memory so a paragraph, a list, a table and a
 # picture can each be read without a fixture file.
 zip.workspace = true
+
+[lints]
+workspace = true

@@ -167,7 +167,7 @@ fn corpus_drawings(docx: &str) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
     for index in 0..zip.len() {
         let mut file = zip.by_index(index).unwrap();
-        let name = file.name().to_string();
+        let name = file.name().expect("a UTF-8 entry name").into_owned();
         let drawing =
             name.starts_with("word/media/") && (name.ends_with(".emf") || name.ends_with(".wmf"));
         if !drawing {

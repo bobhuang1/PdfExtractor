@@ -37,6 +37,7 @@ use pdfextractor_drawingml::{
 use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::collections::HashMap;
 use std::io::Cursor;
 
@@ -229,7 +230,10 @@ impl DocxDocument {
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
         for i in 0..archive.len() {
             let name = match archive.by_index(i) {
-                Ok(file) => file.name().to_string(),
+                Ok(file) => match file.name() {
+                    Ok(name) => name.into_owned(),
+                    Err(_) => continue,
+                },
                 Err(_) => continue,
             };
             if !name.starts_with("word/media/") {
@@ -246,7 +250,10 @@ impl DocxDocument {
         let mut charts: HashMap<String, Vec<u8>> = HashMap::new();
         for i in 0..archive.len() {
             let name = match archive.by_index(i) {
-                Ok(file) => file.name().to_string(),
+                Ok(file) => match file.name() {
+                    Ok(name) => name.into_owned(),
+                    Err(_) => continue,
+                },
                 Err(_) => continue,
             };
             if !name.starts_with("word/charts/") || !name.ends_with(".xml") {
@@ -261,7 +268,12 @@ impl DocxDocument {
         // is usually `a:fillRef`/`a:schemeClr`, not a literal colour — so the
         // theme part is read once and resolved by every drawing in the package.
         let theme = (0..archive.len())
-            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter_map(|i| {
+                archive
+                    .by_index(i)
+                    .ok()
+                    .and_then(|f| f.name().ok().map(|name| name.into_owned()))
+            })
             .filter(|name| name.starts_with("word/theme/") && name.ends_with(".xml"))
             .min()
             .and_then(|name| read_part(&mut archive, &name))
@@ -283,7 +295,12 @@ impl DocxDocument {
         // Headers and footers live in their own parts; report them as furniture
         // rather than dropping their text and images on the floor.
         let mut part_names: Vec<String> = (0..archive.len())
-            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter_map(|i| {
+                archive
+                    .by_index(i)
+                    .ok()
+                    .and_then(|f| f.name().ok().map(|name| name.into_owned()))
+            })
             .filter(|n| {
                 (n.starts_with("word/header") || n.starts_with("word/footer"))
                     && n.ends_with(".xml")
@@ -398,7 +415,7 @@ fn read_relationships(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if local_name(e.name().as_ref()) == b"Relationship" {
+                if local_name(e.name().as_ref().as_bytes()) == b"Relationship" {
                     // Only package-internal targets resolve inside the ZIP;
                     // an external one (`TargetMode="External"`) is a URL as
                     // written — exactly what a `w:hyperlink` points at — and
@@ -586,7 +603,7 @@ fn read_numbering(archive: &mut limits::Package<'_>) -> Numbering {
                      level: Option<NumberingLevel>| {
                         store_level(abstracts, overrides, abstract_id, override_at, index, level);
                     };
-                match local_name(e.name().as_ref()) {
+                match local_name(e.name().as_ref().as_bytes()) {
                     b"abstractNum" => {
                         close_level(&mut abstracts, current_abstract, level_index, level.take());
                         level_index = None;
@@ -713,7 +730,7 @@ fn read_numbering(archive: &mut limits::Package<'_>) -> Numbering {
                     _ => {}
                 }
             }
-            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
+            Ok(Event::End(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"lvl" => {
                     store_level(
                         &mut abstracts,
@@ -915,15 +932,23 @@ fn local_name(name: &[u8]) -> &[u8] {
 fn attr(e: &BytesStart, key: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
-        .find(|a| a.key.as_ref() == key)
-        .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()))
+        .find(|a| a.key.as_ref().as_bytes() == key)
+        .and_then(|a| {
+            a.normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|v| v.into_owned())
+        })
 }
 
 fn attr_local(e: &BytesStart, key: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
-        .find(|a| local_name(a.key.as_ref()) == key)
-        .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()))
+        .find(|a| local_name(a.key.as_ref().as_bytes()) == key)
+        .and_then(|a| {
+            a.normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|v| v.into_owned())
+        })
 }
 
 /// Where the tag that ends at `after` starts.
@@ -957,13 +982,13 @@ struct PendingPicture {
 
 /// Whether an element opens a `mc:Fallback` subtree (the duplicate copy).
 fn is_alternate_fallback(e: &BytesStart) -> bool {
-    is_markup_compatibility(e.name().as_ref(), b"Fallback")
+    is_markup_compatibility(e.name().as_ref().as_bytes(), b"Fallback")
 }
 
 /// Whether an element opens a `mc:AlternateContent` — the pair of a DrawingML
 /// shape and its VML copy.
 fn is_alternate_content(e: &BytesStart) -> bool {
-    is_markup_compatibility(e.name().as_ref(), b"AlternateContent")
+    is_markup_compatibility(e.name().as_ref().as_bytes(), b"AlternateContent")
 }
 
 fn is_markup_compatibility(qualified: &[u8], name: &[u8]) -> bool {
@@ -1090,13 +1115,13 @@ impl MathBuilder {
     /// (`<m:chr m:val="∑"/>`), not in child text.
     fn start(&mut self, e: &BytesStart) {
         let mut node = MathNode {
-            name: String::from_utf8_lossy(local_name(e.name().as_ref())).into_owned(),
+            name: String::from_utf8_lossy(local_name(e.name().as_ref().as_bytes())).into_owned(),
             ..Default::default()
         };
         for a in e.attributes().flatten() {
-            if let Ok(v) = a.unescape_value() {
+            if let Ok(v) = a.normalized_value(XmlVersion::Implicit1_0) {
                 node.attrs.push((
-                    String::from_utf8_lossy(local_name(a.key.as_ref())).into_owned(),
+                    String::from_utf8_lossy(local_name(a.key.as_ref().as_bytes())).into_owned(),
                     v.into_owned(),
                 ));
             }
@@ -1226,7 +1251,7 @@ impl<'a> Extractor<'a> {
                 // the document has, and its `w:pict` groups are read while the
                 // rest of the copy stays unread (its words came from the choice).
                 Event::Start(e) => {
-                    let name = local_name(e.name().as_ref()).to_vec();
+                    let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                     if let Some(depth) = self.fallback {
                         self.fallback = Some(depth + 1);
                         if name == b"pict" {
@@ -1276,10 +1301,14 @@ impl<'a> Extractor<'a> {
                     }
                 }
                 Event::End(e) => {
-                    let name = local_name(e.name().as_ref()).to_vec();
+                    let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                     if let Some(depth) = self.fallback {
                         if name == b"pict" && self.pict_depth > 0 {
-                            self.end(e.name().as_ref(), xml, reader.buffer_position() as usize);
+                            self.end(
+                                e.name().as_ref().as_bytes(),
+                                xml,
+                                reader.buffer_position() as usize,
+                            );
                         }
                         self.fallback = match depth {
                             1 => None,
@@ -1290,27 +1319,38 @@ impl<'a> Extractor<'a> {
                             Some(1) => self.skip_depth = None,
                             Some(depth) => self.skip_depth = Some(depth - 1),
                             None => {
-                                if is_markup_compatibility(e.name().as_ref(), b"AlternateContent") {
+                                if is_markup_compatibility(
+                                    e.name().as_ref().as_bytes(),
+                                    b"AlternateContent",
+                                ) {
                                     self.alternate_pictures.pop();
                                 }
-                                self.end(e.name().as_ref(), xml, reader.buffer_position() as usize);
+                                self.end(
+                                    e.name().as_ref().as_bytes(),
+                                    xml,
+                                    reader.buffer_position() as usize,
+                                );
                             }
                         }
                     }
                 }
                 Event::Text(e) => {
                     if self.skip_depth.is_none() && self.fallback.is_none() {
-                        if let Ok(text) = e.unescape() {
-                            self.text(&text);
-                        }
+                        self.text(&e.xml_content(XmlVersion::Implicit1_0));
+                    }
+                }
+                // A reference between two runs of text is text too: `&amp;` in a
+                // paragraph is one ampersand, and the reader reports it apart.
+                Event::GeneralRef(reference) => {
+                    if self.skip_depth.is_none() && self.fallback.is_none() {
+                        let mut text = String::new();
+                        limits::push_reference(&mut text, &reference);
+                        self.text(&text);
                     }
                 }
                 Event::CData(e) => {
                     if self.skip_depth.is_none() && self.fallback.is_none() {
-                        if let Ok(text) = std::str::from_utf8(&e) {
-                            let owned = text.to_string();
-                            self.text(&owned);
-                        }
+                        self.text(&e.xml_content(XmlVersion::Implicit1_0));
                     }
                 }
                 Event::Eof => break,
@@ -1323,7 +1363,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn start(&mut self, e: &BytesStart, at: Option<usize>) {
-        let name = local_name(e.name().as_ref()).to_vec();
+        let name = local_name(e.name().as_ref().as_bytes()).to_vec();
 
         // Inside math, everything is Office Math: grow the subtree instead.
         if let Some(math) = self.math.as_mut() {
@@ -1484,7 +1524,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn empty(&mut self, e: &BytesStart) {
-        let name = local_name(e.name().as_ref()).to_vec();
+        let name = local_name(e.name().as_ref().as_bytes()).to_vec();
 
         if let Some(math) = self.math.as_mut() {
             math.empty(e);
@@ -2364,7 +2404,7 @@ fn chart_title(xml: &[u8]) -> Option<String> {
         let event = reader.read_event_into(&mut buf).ok()?;
         match event {
             Event::Start(e) => {
-                let name = local_name(e.name().as_ref()).to_vec();
+                let name = local_name(e.name().as_ref().as_bytes()).to_vec();
                 match name.as_slice() {
                     b"title" => {
                         if in_title == 0 {
@@ -2376,7 +2416,7 @@ fn chart_title(xml: &[u8]) -> Option<String> {
                     _ => {}
                 }
             }
-            Event::End(e) => match local_name(e.name().as_ref()) {
+            Event::End(e) => match local_name(e.name().as_ref().as_bytes()) {
                 b"title" => {
                     in_title = in_title.saturating_sub(1);
                     if in_title == 0 {
@@ -2388,9 +2428,12 @@ fn chart_title(xml: &[u8]) -> Option<String> {
             },
             Event::Text(e) => {
                 if capturing && in_run_text > 0 {
-                    if let Ok(text) = e.unescape() {
-                        title.push_str(&text);
-                    }
+                    title.push_str(&e.xml_content(XmlVersion::Implicit1_0));
+                }
+            }
+            Event::GeneralRef(reference) => {
+                if capturing && in_run_text > 0 {
+                    limits::push_reference(&mut title, &reference);
                 }
             }
             Event::Eof => break,
@@ -3118,7 +3161,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             zip.start_file("word/document.xml", opts).expect("start");
             zip.write_all(document.as_bytes()).expect("write");
@@ -3136,6 +3179,32 @@ mod tests {
 
     const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     const M: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
+
+    /// XML normalizes line endings before a document is read: CRLF and a lone
+    /// CR each become one LF, and an LF stays one, in ordinary text and in a
+    /// CDATA section alike. `crlf_text.docx` carries all three forms in both
+    /// places, so reading the event's bytes unchanged fails here.
+    #[test]
+    fn crlf_in_text_and_cdata_is_normalized_to_lf() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/crlf_text.docx");
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let parsed = DocxDocument::parse_bytes(&bytes).expect("the fixture is a DOCX");
+        let texts: Vec<&str> = parsed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DocxItem::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["first\nsecond\nthird\nfourth", "fifth\nsixth\nseventh"],
+            "a line ending kept its carriage return"
+        );
+    }
 
     /// A spent deadline refuses the read by name rather than walking the part.
     #[test]
@@ -3267,7 +3336,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             zip.start_file("word/document.xml", opts).expect("start");
             zip.write_all(document.as_bytes()).expect("write");
@@ -3290,7 +3359,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, text) in [
                 ("word/document.xml", document),
@@ -3320,7 +3389,7 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(Cursor::new(&mut out));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, text) in [
                 ("word/document.xml", document),

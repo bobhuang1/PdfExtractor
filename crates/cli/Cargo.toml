@@ -78,3 +78,6 @@ zip.workspace = true
 # A TIFF whose directories state different orientations is written by the test,
 # so the page that must not inherit its neighbour's turn can be made here.
 tiff.workspace = true
+
+[lints]
+workspace = true

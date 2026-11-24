@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use pdfextractor_limits as limits;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::collections::HashMap;
 use std::io::Cursor;
 
@@ -304,7 +305,10 @@ fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String
     let mut parts = HashMap::new();
     for index in 0..archive.len() {
         let (name, is_dir) = match archive.by_index(index) {
-            Ok(file) => (file.name().to_string(), file.is_dir()),
+            Ok(file) => match file.name() {
+                Ok(name) => (name.into_owned(), file.is_dir()),
+                Err(_) => continue,
+            },
             Err(_) => continue,
         };
         if is_dir || !name.starts_with(prefix) {
@@ -323,7 +327,10 @@ fn read_object_parts(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u
     let mut objects = HashMap::new();
     for index in 0..archive.len() {
         let name = match archive.by_index(index) {
-            Ok(file) => file.name().to_string(),
+            Ok(file) => match file.name() {
+                Ok(name) => name.into_owned(),
+                Err(_) => continue,
+            },
             Err(_) => continue,
         };
         let Some(object) = name.strip_suffix("/content.xml") else {
@@ -1074,21 +1081,33 @@ impl Node {
                     }
                 }
                 Ok(Event::Text(text)) => {
-                    let text = text
-                        .unescape()
-                        .context("malformed text in an OpenDocument part")?;
                     stack
                         .last_mut()
                         .expect("a root")
                         .content
-                        .push(Content::Text(text.into_owned()));
+                        .push(Content::Text(
+                            text.xml_content(XmlVersion::Implicit1_0).into_owned(),
+                        ));
+                }
+                // A reference between two runs of text is text too: `&amp;` in a
+                // paragraph is one ampersand, and the reader reports it apart.
+                Ok(Event::GeneralRef(reference)) => {
+                    let mut text = String::new();
+                    limits::push_reference(&mut text, &reference);
+                    stack
+                        .last_mut()
+                        .expect("a root")
+                        .content
+                        .push(Content::Text(text));
                 }
                 Ok(Event::CData(text)) => {
                     stack
                         .last_mut()
                         .expect("a root")
                         .content
-                        .push(Content::Text(String::from_utf8_lossy(&text).into_owned()));
+                        .push(Content::Text(
+                            text.xml_content(XmlVersion::Implicit1_0).into_owned(),
+                        ));
                 }
                 Ok(Event::Eof) => break,
                 Ok(_) => {}
@@ -1153,7 +1172,7 @@ fn local_name(name: &[u8]) -> &[u8] {
 }
 
 fn local(element: &BytesStart<'_>) -> String {
-    String::from_utf8_lossy(local_name(element.name().as_ref())).into_owned()
+    String::from_utf8_lossy(local_name(element.name().as_ref().as_bytes())).into_owned()
 }
 
 fn attributes(element: &BytesStart<'_>) -> Vec<(String, String)> {
@@ -1161,12 +1180,16 @@ fn attributes(element: &BytesStart<'_>) -> Vec<(String, String)> {
         .attributes()
         .flatten()
         .filter_map(|attribute| {
-            attribute.unescape_value().ok().map(|value| {
-                (
-                    String::from_utf8_lossy(local_name(attribute.key.as_ref())).into_owned(),
-                    value.into_owned(),
-                )
-            })
+            attribute
+                .normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|value| {
+                    (
+                        String::from_utf8_lossy(local_name(attribute.key.as_ref().as_bytes()))
+                            .into_owned(),
+                        value.into_owned(),
+                    )
+                })
         })
         .collect()
 }

@@ -138,10 +138,11 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   document's directory, so an absolute path, a `..` climb or a symlink out
   names no picture. Decryption's plaintext is now charged to the
   whole-document budget before any of it is allocated (below). Left as
-  follow-ups: `--pdf-password` still appears in argv (the environment remains
-  the documented route), decryption still copies ciphertext before filters
-  rather than charging those copies too, and `soffice` is still found by `PATH`
-  (overridable with `PDFE_SOFFICE`).
+  follow-ups: `--pdf-password` appeared in argv (it is now refused; the
+  environment and `--pdf-password-file` are the routes), decryption still copies
+  ciphertext before filters rather than charging those copies too, and `soffice`
+  was found by `PATH` (now a fixed install path or `PDFE_SOFFICE`, never
+  `PATH`).
 - Crypt review: RC4-40/128, AES-128 and AES-256 (revisions 2–6) key derivation,
   padding, the `/Encrypt`-dictionary and object-stream exemptions, and the
   trailer-`/Root` choice hold up; `crypt_test` 5/5 at that point (6 with the
@@ -367,3 +368,43 @@ and two repository gates were already red.
   `./scripts/test.sh --self-test` green; `cargo fmt --all --check` clean; the workspace clippy
   run (`-D warnings`) clean; full workspace run **95 targets, 94 green** — the one failure was
   the probe litter above, and the target re-ran green once it was removed.
+
+### 2026-11-23 — quick-xml 0.42, workspace lints and the scheduled gates
+
+- `quick-xml` 0.36.2 → 0.42.0 in the workspace and in `fuzz/`: `plist`/`tauri` already
+  resolved 0.42, so the tree keeps one copy. Ten reader files moved to the new API:
+  `QName` converted at the byte boundary, `normalized_value(XmlVersion::Implicit1_0)` in
+  place of the deprecated `unescape_value` (12 sites), text and CDATA raw, and
+  `Event::GeneralRef` arms so a reference between two runs is still text — one shared
+  `limits::push_reference` instead of eight copies, with an undeclared entity keeping
+  its spelling.
+- EOL normalization restored: 17 text/CDATA sites read through
+  `xml_content(XmlVersion::Implicit1_0)` (docx body and chart title, pptx, xlsx, odt,
+  ods, odp, the ods chart and the chart reader). The fixture `test-data/crlf_text.docx`,
+  written by `make_crlf_text_docx.py`, carries CRLF, a bare CR and an LF in a `<w:t>` and
+  CRLF/CR in a CDATA section; `crlf_in_text_and_cdata_is_normalized_to_lf` fails if the
+  event bytes are read directly (verified by temporarily reverting the docx arms).
+- `unsafe_code = "forbid"` in `[workspace.lints.rust]`, every one of the 24 members opting
+  in with `[lints] workspace = true`; neither `crates/` nor `fuzz/src` contains `unsafe`.
+- Toolchain: `rust-toolchain.toml` pins 1.99.0 (clippy, rustfmt), README states the 1.92
+  minimum and the 1.99.0 build, and both release jobs install 1.99.0 explicitly — the
+  toolchain action publishes no per-version tag, so the version goes to its `toolchain`
+  input.
+- The dependency gate: `.github/workflows/deny.yml` (Mondays 05:23 UTC, dispatch,
+  cargo-deny 0.22.0, advisory-db cache) with `deny.toml` (`all-features`, licence allow
+  list, duplicate versions and wildcards warn). Its first runs found six zip advisories
+  and one cookie advisory: `zip` is 9.8.2 with only `deflate` enabled and `cookie` is
+  0.18.3, so the gate is green without an ignore list. `ZipFile::name()` being fallible is
+  threaded through the limits crate and the readers (an undecodable name skips the entry;
+  the package gate reports it as `LimitError::Zip`).
+- The fuzz smoke: `.github/workflows/fuzz.yml` (Mondays 04:43 UTC, dispatch, a `seconds`
+  bound of 1–600, six targets, corpus seeding and caches, findings uploaded for 30 days).
+  The timeout is 90 minutes so the 600 s maximum can finish, and a failing target no longer
+  skips the ones after it: the step collects the failures, runs the whole list, then fails.
+- Documentation: README's CI prose covers both gates and its `test-data` tree lists the CRLF
+  fixture; `fuzz/README.md` gained *The scheduled smoke*; `plan.md`'s crate count (24) is
+  held by `documentation_test`, and its stale local-commit count is corrected to eleven.
+- Checks: clippy (`-D warnings`) and `fmt --check` clean; limits, chart and the six office
+  readers' suites green; `cli_test` 137 passed; `documentation_test` green with 1,320;
+  `cargo deny check advisories bans licenses` green. The full workspace suite was not
+  re-run, and no workflow was dispatched.

@@ -14,3 +14,6 @@ image.workspace = true
 [dev-dependencies]
 # The corpus drawings live inside DOCX packages.
 zip.workspace = true
+
+[lints]
+workspace = true

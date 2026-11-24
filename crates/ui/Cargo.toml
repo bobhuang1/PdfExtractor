@@ -46,3 +46,6 @@ rfd = { version = "0.17", default-features = false, features = ["gtk3"], optiona
 name = "pdfextractor-ui"
 path = "src/main.rs"
 required-features = ["desktop"]
+
+[lints]
+workspace = true

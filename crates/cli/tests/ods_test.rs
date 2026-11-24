@@ -669,7 +669,7 @@ fn ods_with_chart_sheet(source: &Path, target: &Path, from: &str, to: &str) {
     let mut replaced = false;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).expect("a package entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("a UTF-8 entry name").into_owned();
         let options =
             zip::write::SimpleFileOptions::default().compression_method(entry.compression());
         if entry.is_dir() {
