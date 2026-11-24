@@ -259,7 +259,8 @@ impl PptxDocument {
             let slide = Node::parse(&bytes).with_context(|| format!("malformed {part}"))?;
             let hidden = matches!(slide.attr("show"), Some("0") | Some("false"));
             let slide_rels = read_relationships(&mut archive, part)?;
-            let style = SlideStyle::load(&mut archive, &slide_rels, &media, width, height)?;
+            let style =
+                SlideStyle::load(&mut archive, &slide_rels, &media, &budget, width, height)?;
             let context = ShapeContext {
                 width,
                 height,
@@ -622,6 +623,7 @@ impl SlideStyle {
         archive: &mut limits::Package<'_>,
         rels: &HashMap<String, Relationship>,
         media: &HashMap<String, Vec<u8>>,
+        limits: &limits::Limits,
         width: f64,
         height: f64,
     ) -> Result<Self> {
@@ -639,7 +641,8 @@ impl SlideStyle {
         let layout = Node::parse(&bytes).with_context(|| format!("malformed {layout_part}"))?;
 
         let layout_rels = read_relationships(archive, &layout_part)?;
-        style.layout_background = stated_background(&layout, &layout_rels, media, width, height);
+        style.layout_background =
+            stated_background(&layout, &layout_rels, media, limits, width, height);
 
         if let Some(tree) = layout.find("spTree") {
             for shape in tree.children_named("sp") {
@@ -671,7 +674,8 @@ impl SlideStyle {
         let master = Node::parse(&bytes).with_context(|| format!("malformed {master_part}"))?;
 
         let master_rels = read_relationships(archive, &master_part)?;
-        style.master_background = stated_background(&master, &master_rels, media, width, height);
+        style.master_background =
+            stated_background(&master, &master_rels, media, limits, width, height);
 
         if let Some(tree) = master.find("spTree") {
             for shape in tree.children_named("sp") {
@@ -1309,9 +1313,16 @@ fn slide_background(
     width: f64,
     height: f64,
 ) -> Option<PictureShape> {
-    let stated = stated_background(slide, context.rels, context.media, width, height)
-        .or_else(|| context.style.layout_background.clone())
-        .or_else(|| context.style.master_background.clone());
+    let stated = stated_background(
+        slide,
+        context.rels,
+        context.media,
+        &context.limits,
+        width,
+        height,
+    )
+    .or_else(|| context.style.layout_background.clone())
+    .or_else(|| context.style.master_background.clone());
     match stated {
         Some(StatedBackground::Picture(picture)) => Some(picture),
         _ => None,
@@ -1327,6 +1338,7 @@ fn stated_background(
     part: &Node,
     rels: &HashMap<String, Relationship>,
     media: &HashMap<String, Vec<u8>>,
+    limits: &limits::Limits,
     width: f64,
     height: f64,
 ) -> Option<StatedBackground> {
@@ -1335,7 +1347,7 @@ fn stated_background(
         .child("bgPr")
         .and_then(|properties| properties.child("blipFill"))
         .and_then(|fill| fill.child("blip"))
-        .and_then(|blip| blip_bytes_in(blip, rels, media))
+        .and_then(|blip| blip_bytes_in(blip, rels, media, limits))
         .map(|(mime, data)| {
             StatedBackground::Picture(PictureShape {
                 bbox: [0.0, 0.0, width, height],
@@ -1416,29 +1428,40 @@ fn bullet_pictures(shape: &Node, context: &ShapeContext) -> Vec<PictureShape> {
 /// here: the drawing when the blip states one, the raster otherwise, and pixels
 /// turned upright when their EXIF tag says PowerPoint shows them that way.
 fn blip_bytes(blip: &Node, context: &ShapeContext) -> Option<(&'static str, Vec<u8>)> {
-    blip_bytes_in(blip, context.rels, context.media)
+    blip_bytes_in(blip, context.rels, context.media, &context.limits)
 }
 
 /// [`blip_bytes`] for a part whose relationships and media are already in hand
 /// rather than behind a [`ShapeContext`] — a layout's or master's background,
 /// whose relationships are its own.
+///
+/// The turn is one more decode, so it takes `limits`: a picture past the run's
+/// image ceilings is left as the package stored it, as it is when it cannot be
+/// decoded at all, rather than turned anyway.
 fn blip_bytes_in(
     blip: &Node,
     rels: &HashMap<String, Relationship>,
     media: &HashMap<String, Vec<u8>>,
+    limits: &limits::Limits,
 ) -> Option<(&'static str, Vec<u8>)> {
     let (mime, data) = picture_bytes_in(blip, rels, media)?;
-    Some(match pdfextractor_image_parser::turn_upright(&data) {
-        Some(upright) => {
-            tracing::debug!(
-                "turned an embedded picture upright ({}x{})",
-                upright.width,
-                upright.height
-            );
-            (upright.mimetype, upright.data)
-        }
-        None => (mime, data),
-    })
+    Some(
+        match pdfextractor_image_parser::turn_upright_checked(&data, limits) {
+            Ok(Some(upright)) => {
+                tracing::debug!(
+                    "turned an embedded picture upright ({}x{})",
+                    upright.width,
+                    upright.height
+                );
+                (upright.mimetype, upright.data)
+            }
+            Ok(None) => (mime, data),
+            Err(refusal) => {
+                tracing::debug!("left an embedded picture as stored: {refusal}");
+                (mime, data)
+            }
+        },
+    )
 }
 
 /// The bytes a `a:blip` names, and their media type — the drawing first.
@@ -2735,6 +2758,65 @@ mod tests {
             (decoded.width(), decoded.height()),
             (1240, 1754),
             "the stored 1754 x 1240 grid is turned"
+        );
+    }
+
+    /// The EXIF turn is one more decode, so the run's image budgets hold it: a
+    /// one-pixel ceiling refuses the turn, and the picture is handed on as the
+    /// package stored it — tag and all — rather than turned anyway.
+    #[test]
+    fn a_one_pixel_ceiling_refuses_the_exif_turn_of_an_embedded_picture() {
+        let sideways = std::fs::read("../../test-data/photos/06_rotated.jpg")
+            .expect("the photographed corpus is generated");
+        let picture = format!(
+            r#"<p:pic><p:nvPicPr><p:cNvPr id="4" name="image"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+                 <p:blipFill><a:blip r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+                 <p:spPr>{}</p:spPr></p:pic>"#,
+            transform(914400, 914400, 3200400, 4526280)
+        );
+        let pkg = package_with_media(
+            &[
+                (
+                    "ppt/presentation.xml",
+                    presentation(r#"<p:sldId id="256" r:id="rId1"/>"#, "9144000"),
+                ),
+                (
+                    "ppt/_rels/presentation.xml.rels",
+                    relationships(&format!(
+                        r#"<Relationship Id="rId1" Type="{LAYOUT}" Target="slides/slide1.xml"/>"#
+                    )),
+                ),
+                (
+                    "ppt/slides/slide1.xml",
+                    format!(
+                        r#"<p:sld {P} {A} {R}><p:cSld><p:spTree>{picture}</p:spTree></p:cSld></p:sld>"#
+                    ),
+                ),
+                (
+                    "ppt/slides/_rels/slide1.xml.rels",
+                    relationships(&format!(
+                        r#"<Relationship Id="rId9" Type="{IMAGE}" Target="../media/image7.jpg"/>"#
+                    )),
+                ),
+            ],
+            &[("ppt/media/image7.jpg", &sideways)],
+        );
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let deck = PptxDocument::parse_bytes_with_limits(&pkg, tight).expect("the deck reads");
+        let Shape::Picture(picture) = &deck.slides[0].shapes[0] else {
+            panic!("expected a picture, got {:?}", deck.slides[0].shapes);
+        };
+
+        assert_eq!(
+            picture.mime, "image/jpeg",
+            "a refused turn keeps the stored type"
+        );
+        assert_eq!(
+            picture.data, sideways,
+            "the one-pixel ceiling turned the picture anyway"
         );
     }
 

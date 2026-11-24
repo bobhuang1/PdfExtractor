@@ -1,4 +1,6 @@
-use pdfextractor_image_parser::{upright_png_checked, ImageDocument, Orientation};
+use pdfextractor_image_parser::{
+    turn_upright_checked, upright_png_checked, ImageDocument, Orientation,
+};
 use pdfextractor_limits::{LimitError, Limits};
 
 /// A PNG signature and IHDR big enough for the header reader, with a grid that
@@ -103,6 +105,30 @@ fn the_exif_turn_is_held_to_the_callers_budget_and_returns_upright_pixels() {
         (2, 4),
         "a quarter turn must swap the page's axes"
     );
+}
+
+/// The coworkers' picture turn is a decode too: a picture the camera stored
+/// sideways is refused by a one-pixel ceiling with the budget's own error, and
+/// the same bytes turn at the defaults.
+#[test]
+fn a_one_pixel_ceiling_refuses_the_stored_picture_turn() {
+    let sideways = std::fs::read("../../test-data/photos/06_rotated.jpg")
+        .expect("the photographed corpus is generated");
+    let tight = Limits {
+        max_image_pixels: 1,
+        ..Limits::default()
+    };
+    let error = turn_upright_checked(&sideways, &tight)
+        .expect_err("a one-pixel ceiling turned a stored 1754 x 1240 picture upright");
+    assert!(
+        matches!(error, LimitError::ImageTooManyPixels { .. }),
+        "the refusal must be the budget's own error, not a decode failure: {error}"
+    );
+
+    let turned = turn_upright_checked(&sideways, &Limits::default())
+        .expect("the defaults decode the stored picture")
+        .expect("the fixture's tag says it is sideways");
+    assert_eq!((turned.width, turned.height), (1240, 1754));
 }
 
 #[test]

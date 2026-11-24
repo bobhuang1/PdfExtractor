@@ -2200,17 +2200,26 @@ impl<'a> Extractor<'a> {
         // Word shows a picture the way its EXIF orientation says, but the
         // package keeps the pixels the camera stored. Turn them here, so the
         // picture that leaves the parser is the one the document displays.
-        let (mime, data) = match pdfextractor_image_parser::turn_upright(&data) {
-            Some(upright) => {
-                tracing::debug!(
-                    "turned an embedded picture upright ({}x{})",
-                    upright.width,
-                    upright.height
-                );
-                (upright.mimetype, upright.data)
-            }
-            None => (mime, data),
-        };
+        // The turn is one more decode, so the run's image budgets hold it: a
+        // picture past `--max-image-pixels`, `--max-image-dimension` or the
+        // allocation ceiling is left as the package stored it, as it is when it
+        // cannot be decoded at all, rather than turned anyway.
+        let (mime, data) =
+            match pdfextractor_image_parser::turn_upright_checked(&data, &self.limits) {
+                Ok(Some(upright)) => {
+                    tracing::debug!(
+                        "turned an embedded picture upright ({}x{})",
+                        upright.width,
+                        upright.height
+                    );
+                    (upright.mimetype, upright.data)
+                }
+                Ok(None) => (mime, data),
+                Err(refusal) => {
+                    tracing::debug!("left an embedded picture as stored: {refusal}");
+                    (mime, data)
+                }
+            };
         Some(DocxItem::Picture {
             mime,
             data,
@@ -4356,6 +4365,45 @@ mod tests {
             (decoded.width(), decoded.height()),
             (1240, 1754),
             "the stored 1754 x 1240 grid is turned"
+        );
+    }
+
+    /// The EXIF turn is one more decode, so the run's image budgets hold it: a
+    /// one-pixel ceiling refuses the turn, and the picture is handed on as the
+    /// package stored it — tag and all — rather than turned anyway.
+    #[test]
+    fn a_one_pixel_ceiling_refuses_the_exif_turn_of_an_embedded_picture() {
+        let sideways = std::fs::read("../../test-data/photos/06_rotated.jpg")
+            .expect("the photographed corpus is generated");
+        let doc = format!(
+            r#"<w:document {W} xmlns:wp="x" xmlns:a="y"><w:body><w:p>
+                 <w:r><w:drawing><wp:extent cx="3200400" cy="4526280"/>
+                   <a:blip r:embed="rId7"/></w:drawing></w:r>
+               </w:p></w:body></w:document>"#
+        );
+        let rels = r#"<Relationships xmlns="z">
+            <Relationship Id="rId7" Type="image" Target="media/image1.jpg"/>
+          </Relationships>"#;
+        let pkg = package(&doc, rels, &[("word/media/image1.jpg", &sideways)]);
+        let tight = pdfextractor_limits::Limits {
+            max_image_pixels: 1,
+            ..pdfextractor_limits::Limits::default()
+        };
+        let parsed =
+            DocxDocument::parse_bytes_with_limits(&pkg, tight).expect("the document reads");
+        let (mime, data) = parsed
+            .items
+            .iter()
+            .find_map(|i| match i {
+                DocxItem::Picture { mime, data, .. } => Some((*mime, data)),
+                _ => None,
+            })
+            .expect("a picture");
+
+        assert_eq!(mime, "image/jpeg", "a refused turn keeps the stored type");
+        assert_eq!(
+            data, &sideways,
+            "the one-pixel ceiling turned the picture anyway"
         );
     }
 

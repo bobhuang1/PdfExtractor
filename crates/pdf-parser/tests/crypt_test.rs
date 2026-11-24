@@ -2,9 +2,14 @@
 //!
 //! The fixtures are written by `test-data/make_encrypted_pdf.py` (RC4 40-bit,
 //! revision 2, empty user password) and `test-data/make_encrypted_variants.py`
-//! (RC4 128-bit revision 3, AES-128 revision 4 and AES-256 revision 6, each with
-//! user password `user` and owner password `owner`). Poppler's `pdftotext`
-//! reads every one of them back, so these are files a real reader accepts.
+//! (RC4 128-bit revision 3, AES-128 revision 4 and AES-256 revisions 5 and 6,
+//! each with user password `user` and owner password `owner`).
+//! `encrypted_objstm.pdf` is the AES-256 one laid out the PDF 1.5 way:
+//! compressed objects in an encrypted object stream, and a cross-reference
+//! stream as its only trailer. `encrypted_encryptmetadata.pdf` leaves the
+//! metadata stream in the clear, and `encrypted_cryptfilter.pdf` gives its
+//! content stream a non-default `/Crypt` filter. Poppler's `pdftotext` reads
+//! every one of them back, so these are files a real reader accepts.
 
 use pdfextractor_limits::{LimitError, Limits};
 use pdfextractor_pdf_parser::crypt::CryptError;
@@ -31,10 +36,14 @@ fn info_title(doc: &PdfDocument) -> Option<String> {
     }
 }
 
-const VARIANTS: [&str; 3] = [
+const VARIANTS: [&str; 6] = [
     "encrypted_rc4_128.pdf",
     "encrypted_aes128.pdf",
     "encrypted_aes256.pdf",
+    // Revision 5 derives its password hash with one SHA-256 per salt, not 2.B.
+    "encrypted_r5.pdf",
+    "encrypted_encryptmetadata.pdf",
+    "encrypted_cryptfilter.pdf",
 ];
 
 #[test]
@@ -307,10 +316,122 @@ fn a_lowered_document_budget_refuses_decryption() {
     assert_eq!(doc.locked, None);
 }
 
+/// `/EncryptMetadata false` leaves the `/Type /Metadata` stream in the clear:
+/// reading it out of the parsed object alone would not show that, so the raw
+/// file is checked for the XML itself while the ciphered title stays absent.
+#[test]
+fn metadata_stays_in_the_clear_when_encrypt_metadata_is_false() {
+    let bytes = fixture("encrypted_encryptmetadata.pdf");
+    let doc = PdfDocument::parse_with_password(&bytes, Some("user")).expect("parse");
+    assert_eq!(doc.locked, None);
+
+    let PdfValue::Stream(_, payload) = doc.objects.get(&(8, 0)).expect("the metadata stream")
+    else {
+        panic!("object 8 is the /Type /Metadata stream");
+    };
+    let xml = String::from_utf8_lossy(payload);
+    assert!(xml.starts_with("<?xml"), "{xml:?}");
+    assert!(xml.contains("<x:xmpmeta"), "{xml:?}");
+
+    let marker = b"<x:xmpmeta";
+    assert!(
+        bytes.windows(marker.len()).any(|window| window == marker),
+        "the metadata XML is stored in the clear"
+    );
+    let title = b"Ciphered title";
+    assert!(
+        !bytes.windows(title.len()).any(|window| window == title),
+        "the /Info title is still ciphered"
+    );
+    assert_eq!(info_title(&doc).as_deref(), Some("Ciphered title"));
+    assert!(page_text(&doc).contains("Secret ledger"));
+}
+
+/// A stream may name its own `/Crypt` filter instead of taking `/StmF`. Here
+/// object 4 names `/AltCF`, a non-default `/CF` entry with `/CFM /None`, so its
+/// bytes are stored as written while the title is RC4-ciphered: a reader that
+/// applied `/StmF` to every stream would read the content as ciphertext.
+#[test]
+fn a_stream_naming_its_own_crypt_filter_is_read_with_it() {
+    let bytes = fixture("encrypted_cryptfilter.pdf");
+    let doc = PdfDocument::parse_with_password(&bytes, Some("user")).expect("parse");
+    assert_eq!(doc.locked, None);
+    assert!(
+        page_text(&doc).contains("Secret ledger"),
+        "{}",
+        page_text(&doc)
+    );
+    assert_eq!(info_title(&doc).as_deref(), Some("Ciphered title"));
+
+    let content = b"Secret ledger";
+    assert!(
+        bytes.windows(content.len()).any(|window| window == content),
+        "the content stream is in the clear under /AltCF"
+    );
+    let title = b"Ciphered title";
+    assert!(
+        !bytes.windows(title.len()).any(|window| window == title),
+        "the title still takes /StmF"
+    );
+}
+
 #[test]
 fn a_plain_file_is_neither_encrypted_nor_locked() {
     let doc = PdfDocument::parse(&fixture("hello.pdf")).expect("parse");
     assert!(!doc.encrypted);
     assert_eq!(doc.locked, None);
     assert_eq!(doc.opened_with, None);
+}
+
+/// An encrypted PDF 1.5 file: its page tree and `/Info` are compressed objects
+/// in an encrypted `/Type /ObjStm` stream, and its only trailer is a
+/// cross-reference stream. The specification encrypts the object stream whole
+/// and says the strings inside it are not separately encrypted (ISO 32000-1
+/// 7.5.8.2 and 7.6.1), so the title comes out of exactly one decryption — the
+/// stream's — and stays plaintext after the stream is expanded.
+#[test]
+fn a_string_in_an_encrypted_object_stream_is_decrypted_exactly_once() {
+    let bytes = fixture("encrypted_objstm.pdf");
+    let doc = PdfDocument::parse_with_password(&bytes, Some("user")).expect("parse");
+    assert!(doc.encrypted);
+    assert_eq!(doc.locked, None);
+    assert_eq!(doc.opened_with, Some("user password"));
+
+    // The page tree is a compressed object, so a page proves the stream was
+    // decrypted and expanded rather than read as ciphertext.
+    assert!(
+        page_text(&doc).contains("Object stream page"),
+        "{}",
+        page_text(&doc)
+    );
+
+    let title = match doc.objects.get(&(7, 0)).expect("the compressed /Info") {
+        PdfValue::Dictionary(dict) => match dict.get("Title").expect("the title") {
+            PdfValue::String(s) => s.clone(),
+            other => panic!("the title is a string, not {other:?}"),
+        },
+        other => panic!("object 7 is the /Info dictionary, not {other:?}"),
+    };
+    assert_eq!(title, "Object stream title");
+
+    // The file does not spell it in the clear: the title arrived by decryption.
+    assert!(
+        !bytes
+            .windows(title.len())
+            .any(|window| window == title.as_bytes()),
+        "the title is stored in the clear"
+    );
+
+    // And it was decrypted once, with its container: the stored object stream is
+    // the plaintext form, its header and the title inside it intact. A second
+    // decryption of the string would leave neither.
+    let PdfValue::Stream(_, payload) = doc.objects.get(&(8, 0)).expect("the object stream") else {
+        panic!("object 8 is the object stream");
+    };
+    let payload = String::from_utf8_lossy(payload);
+    assert!(payload.starts_with("2 0 "), "{payload:?}");
+    assert!(
+        payload.contains("/Title (Object stream title)"),
+        "{payload:?}"
+    );
 }

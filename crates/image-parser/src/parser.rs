@@ -139,26 +139,57 @@ pub struct PngPicture {
 ///
 /// This is what a consumer that writes a picture out has to use: the package
 /// keeps the pixels the camera stored, while the office application shows the
-/// picture turned the way the tag says.
+/// picture turned the way the tag says. The decode under the turn is a decode
+/// like any other, so a caller with its own policy wants
+/// [`turn_upright_checked`] rather than the default budget here.
 pub fn turn_upright(data: &[u8]) -> Option<UprightPicture> {
-    let document = ImageDocument::parse_bytes(data).ok()?;
-    let turn = document.orientation.turn()?;
-    let mut bitmap = decode(data)?;
+    turn_upright_checked(data, &Limits::default())
+        .ok()
+        .flatten()
+}
+
+/// [`turn_upright`] with an explicit pixel and allocation budget, and the
+/// refusal that stopped it.
+///
+/// The turn is one more decode, so it is held to the same image ceilings as
+/// every other: `--max-image-pixels`, `--max-image-dimension` and
+/// `--max-image-alloc-bytes` govern it. `Ok(None)` is a picture with nothing to
+/// turn — it is already upright, or its tag names no orientation this reader
+/// knows — while a grid past the caller's ceiling, or bytes that will not
+/// decode, is `Err`. The budget's own refusal is passed through as its
+/// [`LimitError`], which is the form that says which flag would raise it.
+pub fn turn_upright_checked(
+    data: &[u8],
+    limits: &Limits,
+) -> Result<Option<UprightPicture>, LimitError> {
+    let document = ImageDocument::parse_bytes_with_limits(data, limits).map_err(refusal)?;
+    let turn = match document.orientation.turn() {
+        Some(turn) => turn,
+        None => return Ok(None),
+    };
+    let mut bitmap = decode_checked(data, limits)?;
     bitmap.apply_orientation(turn);
     let (mimetype, encoded) = if document.mimetype == "image/jpeg" {
         let mut encoded = Vec::new();
         let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 90);
-        bitmap.write_with_encoder(encoder).ok()?;
+        bitmap
+            .write_with_encoder(encoder)
+            .map_err(|error| LimitError::ImageDecode {
+                detail: error.to_string(),
+            })?;
         ("image/jpeg", encoded)
     } else {
-        ("image/png", encode_png(&bitmap)?)
+        let encoded = encode_png(&bitmap).ok_or_else(|| LimitError::ImageDecode {
+            detail: "the upright picture could not be written as PNG".to_string(),
+        })?;
+        ("image/png", encoded)
     };
-    Some(UprightPicture {
+    Ok(Some(UprightPicture {
         width: bitmap.width(),
         height: bitmap.height(),
         data: encoded,
         mimetype,
-    })
+    }))
 }
 
 /// The pixels turned by an EXIF orientation, as a lossless PNG.

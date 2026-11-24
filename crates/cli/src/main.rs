@@ -4131,14 +4131,15 @@ fn convert_image(path: &Path, args: &Args) -> anyhow::Result<pdfextractor_core::
     if declared == pdfextractor_image_parser::Orientation::Normal
         && detected != QuarterTurn::AsStored
     {
-        match rotate_for_ocr(source, detected.degrees(), &budgets()) {
-            Some((png, _, _)) => {
+        match rotate_for_ocr_checked(source, detected.degrees(), &budgets()) {
+            Ok((png, _, _)) => {
                 upright = Some(png);
                 applied = detected;
             }
-            None => tracing::warn!(
-                "could not turn {} upright; OCR sees the stored pixels",
-                path.display()
+            Err(refusal) => tracing::warn!(
+                "could not turn {} upright; OCR sees the stored pixels{}",
+                path.display(),
+                flag_hint(&refusal.into())
             ),
         }
     }
@@ -5489,25 +5490,51 @@ fn picture_is_page(bbox: [f64; 4], page_width: f64, page_height: f64) -> bool {
 /// target box is measured in. `None` when the image cannot be decoded, which
 /// includes the run's image budgets refusing it: the turn is one more decode,
 /// so `--max-image-pixels` governs it as it governs every other. Tesseract's
-/// own decoder then gets the original bytes and its error policy applies.
+/// own decoder then gets the original bytes and its error policy applies. A
+/// caller that has to say which budget refused the turn wants
+/// [`rotate_for_ocr_checked`], whose error carries it.
 fn rotate_for_ocr(
     data: &[u8],
     degrees: i32,
     limits: &pdfextractor_limits::Limits,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    let bitmap = pdfextractor_image_parser::decode_checked(data, limits).ok()?;
+    rotate_for_ocr_checked(data, degrees, limits).ok()
+}
+
+/// [`rotate_for_ocr`] with the refusal that stopped it.
+///
+/// The turn is one more decode, so it is the run's image budgets that refuse
+/// it, and the budget's own [`pdfextractor_limits::LimitError`] is passed
+/// through rather than wrapped: that is the form that says which flag would
+/// raise the ceiling. A `degrees` that is not a quarter turn is a caller's bug
+/// rather than a budget's refusal, and comes back as
+/// [`pdfextractor_limits::LimitError::ImageDecode`].
+fn rotate_for_ocr_checked(
+    data: &[u8],
+    degrees: i32,
+    limits: &pdfextractor_limits::Limits,
+) -> Result<(Vec<u8>, u32, u32), pdfextractor_limits::LimitError> {
+    use pdfextractor_limits::LimitError;
+
+    let bitmap = pdfextractor_image_parser::decode_checked(data, limits)?;
     let turned = match degrees {
         90 => bitmap.rotate90(),
         180 => bitmap.rotate180(),
         270 => bitmap.rotate270(),
-        _ => return None,
+        _ => {
+            return Err(LimitError::ImageDecode {
+                detail: format!("{degrees} is not a quarter turn"),
+            })
+        }
     };
     let (width, height) = (turned.width(), turned.height());
     let mut png = Vec::new();
     turned
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some((png, width, height))
+        .map_err(|error| LimitError::ImageDecode {
+            detail: error.to_string(),
+        })?;
+    Ok((png, width, height))
 }
 
 /// Map an OCR box in image pixels into the box the image occupies on the page.
@@ -6379,7 +6406,8 @@ mod tests {
 
     /// The OCR page turn is a decode like any other, so the run's image budgets
     /// govern it. A ceiling of one pixel refuses a 2x2 page, and the same bytes
-    /// turn at the defaults: the refusal is the budget's, not the picture's.
+    /// turn at the defaults: the refusal is the budget's, not the picture's, and
+    /// it names the flag that would allow the turn.
     #[test]
     fn a_one_pixel_ceiling_refuses_the_page_turn() {
         let mut png = Vec::new();
@@ -6391,9 +6419,12 @@ mod tests {
             max_image_pixels: 1,
             ..pdfextractor_limits::Limits::default()
         };
-        assert!(
-            rotate_for_ocr(&png, 90, &limits).is_none(),
-            "a one-pixel ceiling turned a 2x2 page"
+        let refusal = rotate_for_ocr_checked(&png, 90, &limits)
+            .expect_err("a one-pixel ceiling turned a 2x2 page");
+        assert_eq!(
+            raise_flag(&refusal.into()),
+            Some("--max-image-pixels"),
+            "the refusal does not name the budget that refused the turn"
         );
 
         let (turned, width, height) =

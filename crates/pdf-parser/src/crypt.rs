@@ -918,6 +918,80 @@ mod tests {
         );
     }
 
+    fn hex(text: &str) -> Vec<u8> {
+        text.as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    /// NIST SP 800-38A F.2.1: AES-128-CBC over the four-block sample.
+    #[test]
+    fn aes_128_cbc_matches_nist_sp_800_38a_f2_1() {
+        let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+        let iv = hex("000102030405060708090a0b0c0d0e0f");
+        let plain = hex(concat!(
+            "6bc1bee22e409f96e93d7e117393172a",
+            "ae2d8a571e03ac9c9eb76fac45af8e51",
+            "30c81c46a35ce411e5fbc1191a0a52ef",
+            "f69f2445df4f9b17ad2b417be66c3710"
+        ));
+        let ciphertext = hex(concat!(
+            "7649abac8119b246cee98e9b12e9197d",
+            "5086cb9b507219ee95db113a917678b2",
+            "73bed6b8e3c1743b7116e69e22229516",
+            "3ff1caa1681fac09120eca307586e1a7"
+        ));
+
+        assert_eq!(aes128_cbc_encrypt(&key, &iv, &plain), ciphertext);
+
+        let mut data = iv;
+        data.extend(&ciphertext);
+        aes_cbc_decrypt_in_place(&key, &mut data);
+        assert_eq!(data, plain);
+    }
+
+    /// NIST SP 800-38A F.2.5: the same sample under AES-256-CBC.
+    #[test]
+    fn aes_256_cbc_matches_nist_sp_800_38a_f2_5() {
+        let key = hex(concat!(
+            "603deb1015ca71be2b73aef0857d7781",
+            "1f352c073b6108d72d9810a30914dff4"
+        ));
+        let iv = hex("000102030405060708090a0b0c0d0e0f");
+        let plain = hex(concat!(
+            "6bc1bee22e409f96e93d7e117393172a",
+            "ae2d8a571e03ac9c9eb76fac45af8e51",
+            "30c81c46a35ce411e5fbc1191a0a52ef",
+            "f69f2445df4f9b17ad2b417be66c3710"
+        ));
+        let ciphertext = hex(concat!(
+            "f58c4c04d6e5f1ba779eabfb5f7bfbd6",
+            "9cfc4e967edb808d679f777bc6702c7d",
+            "39f23369a9d9bacfa530e26304231461",
+            "b2eb05e2c39be9fcda6c19078c6a9d1b"
+        ));
+
+        assert_eq!(cbc_decrypt(&key, &iv, &ciphertext), plain);
+    }
+
+    /// Algorithm 2.B, pinned on the salts and passwords of the revision 6
+    /// fixtures. Poppler authenticates the same `/U` and `/O` with its own
+    /// implementation and reads those files, so the numbers are not only this
+    /// build agreeing with itself.
+    #[test]
+    fn algorithm_2b_matches_the_pinned_hashes() {
+        let u = hash_2b(b"user", b"uvalsalt", b"");
+        assert_eq!(
+            u,
+            hex("ffdf5f2ee6b251856d72c8a0f38f37e9a745f7895ba8fadbd314415cc10fef82")
+        );
+        assert_eq!(
+            hash_2b(b"owner", b"ovalsalt", &u),
+            hex("996ca37132d803c090a1900aab0157639d4006d416ae986a64da49681b17dd06")
+        );
+    }
+
     #[test]
     fn a_cf_entry_without_a_known_method_is_read_by_the_specification() {
         let mut cf = HashMap::new();
