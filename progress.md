@@ -139,10 +139,9 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   names no picture. Decryption's plaintext is now charged to the
   whole-document budget before any of it is allocated (below). Left as
   follow-ups: `--pdf-password` appeared in argv (it is now refused; the
-  environment and `--pdf-password-file` are the routes), decryption still copies
-  ciphertext before filters rather than charging those copies too, and `soffice`
-  was found by `PATH` (now a fixed install path or `PDFE_SOFFICE`, never
-  `PATH`).
+  environment and `--pdf-password-file` are the routes), the filters now read
+  the stored payload instead of copying it before decoding, and `soffice` was
+  found by `PATH` (now a fixed install path or `PDFE_SOFFICE`, never `PATH`).
 - Crypt review: RC4-40/128, AES-128 and AES-256 (revisions 2–6) key derivation,
   padding, the `/Encrypt`-dictionary and object-stream exemptions, and the
   trailer-`/Root` choice hold up; `crypt_test` 5/5 at that point (6 with the
@@ -252,7 +251,9 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   they are parsed. Decryption no longer charges the stream plaintext a second
   time — it decrypts in the buffer that copy already paid for — so
   `SecurityHandler::plaintext_len` counts only the string buffers decryption
-  rebuilds, and the budget is one charge per buffer. New tests
+  rebuilds, and the budget is one charge per buffer. The filter chain hands
+  back the stored payload as a borrow when no filter could read it, so the
+  fallback copy is charged before it is owned, not after. New tests
   `a_stream_payload_is_charged_when_the_parser_copies_it_out_of_the_file` and
   `expanding_an_object_stream_is_charged_for_its_decoded_copy`;
   `a_lowered_document_budget_refuses_decryption` still passes, the 32-byte

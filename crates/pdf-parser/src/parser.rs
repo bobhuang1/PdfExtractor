@@ -7,6 +7,7 @@ use crate::images::{self, PageImage};
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::objects::{ObjId, PdfValue};
 use pdfextractor_limits::{Deadline, LimitError, Limits};
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -530,6 +531,9 @@ impl PdfDocument {
             // a later stream could inherit.
             let decoded = self.decode_stream_uncapped(stream);
             self.charge_document(decoded.len() as u64, None);
+            // The expansion parses from a buffer of its own, so taking the
+            // borrowed bytes is a copy the budget has just been charged for.
+            let decoded = decoded.into_owned();
             let (tokens, truncated) =
                 Lexer::new(&decoded).tokenize_spanned_limited(self.limits.max_pdf_tokens);
             if truncated {
@@ -1835,9 +1839,15 @@ impl PdfDocument {
             _ => return Vec::new(),
         };
         if terminal_index == 0 {
+            // The copy is the length the ceiling keeps of it, so it is charged
+            // before it is made: a page of many such pictures allocates each
+            // buffer only once the document budget has seen it.
+            let kept = raw
+                .len()
+                .min(usize::try_from(self.limits.max_decoded_stream_bytes).unwrap_or(usize::MAX));
+            self.charge_document(kept as u64, Self::stream_key(value));
             let mut data = raw.clone();
             self.cap_stream(&mut data);
-            self.charge_document(data.len() as u64, Self::stream_key(value));
             return data;
         }
 
@@ -1874,10 +1884,14 @@ impl PdfDocument {
         prefix.remove("DP");
         // Decoded through the prefix but charged to the stream it came from:
         // the same image placed on a hundred pages is one expansion, which is
-        // why the key is `value` and not the temporary built here.
-        let data = self.decode_stream_uncapped(&PdfValue::Stream(prefix, raw.clone()));
+        // why the key is `value` and not the temporary built here. The payload
+        // is decoded where it is stored, so no copy of it is made either.
+        let data = self.decode_bytes(&prefix, raw);
+        // Charged before the stored payload is copied: a stream the prefix chain
+        // cannot read comes back borrowed, and owning it is a new buffer that the
+        // budget must have seen first.
         self.charge_document(data.len() as u64, Self::stream_key(value));
-        data
+        data.into_owned()
     }
 
     /// Return a stream's decoded bytes, applying `/Filter /FlateDecode`.
@@ -1895,6 +1909,8 @@ impl PdfDocument {
         let data = self.decode_stream_uncapped(value);
         #[cfg(test)]
         self.decodes.set(self.decodes.get() + 1);
+        // Charged before it is owned: a chain that cannot run hands the stored
+        // bytes back, and taking them is a copy that may not precede the check.
         self.charge_document(data.len() as u64, key);
         if let Some(key) = key {
             // Reuse is memory this run holds, so it may not outgrow what the
@@ -1906,12 +1922,12 @@ impl PdfDocument {
             if data.len() <= DECODED_CACHE_STREAM_BYTES && held + data.len() <= cap {
                 let mut decoded = self.decoded.borrow_mut();
                 if let std::collections::hash_map::Entry::Vacant(entry) = decoded.entry(key) {
-                    entry.insert(data.clone());
+                    entry.insert(data.to_vec());
                     self.decoded_bytes.set(held + data.len());
                 }
             }
         }
-        data
+        data.into_owned()
     }
 
     /// The name the whole-document total knows `value` by, when it is a stream
@@ -1935,12 +1951,26 @@ impl PdfDocument {
     }
 
     /// [`Self::decode_stream`] without the whole-document charge.
-    fn decode_stream_uncapped(&self, value: &PdfValue) -> Vec<u8> {
-        let (dict, raw) = match value {
-            PdfValue::Stream(d, b) => (d, b),
-            _ => return Vec::new(),
-        };
+    ///
+    /// Borrowed when the chain cannot read the stream, so the caller can charge
+    /// the bytes before owning them.
+    fn decode_stream_uncapped<'a>(&self, value: &'a PdfValue) -> Cow<'a, [u8]> {
+        match value {
+            PdfValue::Stream(dict, raw) => self.decode_bytes(dict, raw),
+            _ => Cow::Borrowed(&[]),
+        }
+    }
 
+    /// The filter chain over `raw`, the payload of the stream `dict` describes.
+    ///
+    /// Taking the parts rather than the whole value lets a caller that has
+    /// built a prefix dictionary — the image codec helpers — decode the stored
+    /// payload without building a temporary stream that copies it first.
+    ///
+    /// The result borrows `raw` whenever the chain leaves the payload as it is
+    /// (no filter, an unsupported one, or one that failed), so the caller owns —
+    /// and charges — the copy rather than the chain making it first.
+    fn decode_bytes<'a>(&self, dict: &HashMap<String, PdfValue>, raw: &'a [u8]) -> Cow<'a, [u8]> {
         let filter = self.stream_filters(dict);
 
         // Only well-defined filters are handled. Anything else is returned raw
@@ -1950,36 +1980,48 @@ impl PdfDocument {
         // to the filter that produced its input, so it is undone right after that
         // filter rather than once at the end.
         let parms = self.decode_params(dict, filter.len());
-        let mut data = raw.clone();
-        self.cap_stream(&mut data);
+        // The filters read the payload the document already holds: copying it
+        // into a working buffer first would be a second ciphertext-sized
+        // allocation per stream, made before `decode_stream` charges the bytes
+        // it gets back and before the whole-document ceiling could refuse them.
+        // Only a payload already over the per-stream decoded ceiling is copied,
+        // to be truncated as before.
+        let ceiling = self.limits.max_decoded_stream_bytes;
+        let mut data = if raw.len() as u64 > ceiling {
+            let mut capped = raw.to_vec();
+            self.cap_stream(&mut capped);
+            Cow::Owned(capped)
+        } else {
+            Cow::Borrowed(raw)
+        };
         for (index, f) in filter.iter().enumerate() {
             match f.as_str() {
                 "ASCIIHexDecode" | "AHx" => match filters::ascii_hex(&data) {
-                    Some(out) => data = out,
+                    Some(out) => data = Cow::Owned(out),
                     None => {
                         tracing::warn!("ASCIIHexDecode failed; using raw stream bytes");
-                        return raw.clone();
+                        return Cow::Borrowed(raw);
                     }
                 },
                 "ASCII85Decode" | "A85" => match filters::ascii85(&data) {
-                    Some(out) => data = out,
+                    Some(out) => data = Cow::Owned(out),
                     None => {
                         tracing::warn!("ASCII85Decode failed; using raw stream bytes");
-                        return raw.clone();
+                        return Cow::Borrowed(raw);
                     }
                 },
                 "LZWDecode" | "LZW" => match filters::lzw(&data, early_change) {
-                    Some(out) => data = out,
+                    Some(out) => data = Cow::Owned(out),
                     None => {
                         tracing::warn!("LZWDecode failed; using raw stream bytes");
-                        return raw.clone();
+                        return Cow::Borrowed(raw);
                     }
                 },
                 "RunLengthDecode" | "RL" => match filters::run_length(&data) {
-                    Some(out) => data = out,
+                    Some(out) => data = Cow::Owned(out),
                     None => {
                         tracing::warn!("RunLengthDecode failed; using raw stream bytes");
-                        return raw.clone();
+                        return Cow::Borrowed(raw);
                     }
                 },
                 "FlateDecode" | "Fl" => {
@@ -1988,17 +2030,17 @@ impl PdfDocument {
                     let mut decoder = flate2::read::ZlibDecoder::new(&data[..]).take(ceiling);
                     if decoder.read_to_end(&mut out).is_ok() {
                         self.cap_stream(&mut out);
-                        data = out;
+                        data = Cow::Owned(out);
                     } else {
                         // Some producers omit the zlib header; retry raw deflate.
                         let mut out2 = Vec::new();
                         let mut dec = flate2::read::DeflateDecoder::new(&data[..]).take(ceiling);
                         if dec.read_to_end(&mut out2).is_ok() {
                             self.cap_stream(&mut out2);
-                            data = out2;
+                            data = Cow::Owned(out2);
                         } else {
                             tracing::warn!("FlateDecode failed; using raw stream bytes");
-                            return raw.clone();
+                            return Cow::Borrowed(raw);
                         }
                     }
                 }
@@ -2007,10 +2049,12 @@ impl PdfDocument {
                 "Crypt" => {}
                 other => {
                     tracing::debug!("unsupported stream filter {other}; using raw bytes");
-                    return raw.clone();
+                    return Cow::Borrowed(raw);
                 }
             }
-            self.cap_stream(&mut data);
+            if let Cow::Owned(owned) = &mut data {
+                self.cap_stream(owned);
+            }
             // A predictor is defined for LZW and Flate, so it is only undone
             // after those two.
             if matches!(f.as_str(), "FlateDecode" | "Fl" | "LZWDecode" | "LZW") {
@@ -2022,12 +2066,12 @@ impl PdfDocument {
                         .unwrap_or(1.0) as i64;
                     if predictor > 1 {
                         match self.apply_predictor(&data, parms, dict, predictor) {
-                            Some(out) => data = out,
+                            Some(out) => data = Cow::Owned(out),
                             None => {
                                 tracing::warn!(
                                     "predictor could not be undone; using raw stream bytes"
                                 );
-                                return raw.clone();
+                                return Cow::Borrowed(raw);
                             }
                         }
                     }
