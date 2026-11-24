@@ -64,6 +64,7 @@ test-data/encrypted_cryptfilter.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_aggregate_streams.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/xref_encrypt_no_id.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/xref_encrypt_no_type.pdf	crates/pdf-parser/tests/crypt_test.rs
+test-data/encrypted_xref_no_type.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/compressed.pdf	crates/cli/tests/cli_test.rs
 
 test-data/inventory.xlsx	crates/xlsx-parser/tests/fixture_test.rs

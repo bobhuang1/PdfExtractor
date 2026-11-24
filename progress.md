@@ -318,6 +318,20 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   stream dictionary the same way. New fixture
   `test-data/xref_encrypt_no_type.pdf` and test
   `an_untyped_xref_stream_encrypt_is_refused_not_read`. Suite counts 1,314 / 133.
+- The same rule is now exercised on a whole file, not only a rebuilt one.
+  Detection must not depend on `/Type /XRef`: a stream that names `/Encrypt` is
+  a trailer, and a valid file can lose the marker while `startxref` and every
+  offset stay intact. The earlier fixture was hand-made around a lost xref
+  (`startxref 0`), so it only proved the repair path. qpdf 11.9.0 wrote
+  `test-data/encrypted_xref_no_type.pdf` with object streams, making its xref
+  stream the trailer; `/Type /XRef` was then blanked in place at equal length,
+  so what is left is a whole file with only the marker missing. Test
+  `a_valid_xref_stream_without_its_type_is_refused_not_read` checks that
+  `startxref` names the stream object and `/Encrypt` sits in its dictionary,
+  that the ciphertext is refused without a password, and that the same bytes
+  open with the file's own password — so the refusal is the encryption seen,
+  not an unindexable file. `test-data/make_xref_no_type.sh` regenerates it.
+  Suite counts 1,343.
 
 ### 2026-11-22 — full review of the workspace
 

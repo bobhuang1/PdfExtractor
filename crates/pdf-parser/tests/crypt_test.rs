@@ -246,6 +246,90 @@ fn an_untyped_xref_stream_encrypt_is_refused_not_read() {
     assert!(doc.extract().is_empty(), "no page is read from ciphertext");
 }
 
+/// qpdf wrote this file with object streams, so its cross-reference stream is
+/// the trailer and `startxref` points at that object: the ordinary shape of a
+/// PDF 1.5+ file, not a damaged one for the repair path to rebuild. Its
+/// `/Encrypt` entry lives in the stream's own dictionary, and the writer's
+/// `/Type /XRef` marker was blanked in place — the same number of bytes, so
+/// every offset stays valid. The encryption still has to be seen, and the file
+/// is otherwise whole: its own password opens it.
+#[test]
+fn a_valid_xref_stream_without_its_type_is_refused_not_read() {
+    let raw = fixture("encrypted_xref_no_type.pdf");
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    assert!(raw.starts_with(b"%PDF-1.7"), "qpdf's header");
+    assert!(
+        !text.contains("/Type /XRef"),
+        "the fixture's marker is the one this test is about"
+    );
+
+    // `startxref` names the cross-reference stream's object, not 0: this file
+    // is indexed, not reconstructed.
+    let tail = text.rfind("startxref").expect("a startxref") + "startxref".len();
+    let offset: usize = text[tail..]
+        .split_whitespace()
+        .next()
+        .expect("an offset")
+        .parse()
+        .expect("a number");
+    assert!(offset > 0, "the repair path's startxref 0 is not this file");
+    let object = &raw[offset..];
+    let line_end = object
+        .iter()
+        .position(|&b| b == b'\n')
+        .expect("an object header");
+    let header = std::str::from_utf8(&object[..line_end]).expect("an ASCII object header");
+    let mut words = header.split(' ');
+    assert!(
+        words.next().is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+        }) && words.next() == Some("0")
+            && words.next() == Some("obj"),
+        "startxref points at an object: {header:?}"
+    );
+    let dictionary_end = offset
+        + object
+            .windows(b"stream".len())
+            .position(|window| window == b"stream")
+            .expect("the stream keyword");
+    assert!(
+        String::from_utf8_lossy(&raw[offset..dictionary_end]).contains("/Encrypt "),
+        "the entry sits in that stream's dictionary"
+    );
+
+    let doc = PdfDocument::parse(&raw).expect("parse");
+    assert!(
+        doc.encrypted,
+        "the untyped xref stream still declares /Encrypt"
+    );
+    assert_eq!(doc.opened_with, None, "no password opened it");
+    assert_eq!(doc.locked, Some(CryptError::WrongPassword));
+
+    let error = doc
+        .extract_checked()
+        .expect_err("ciphertext must not be returned as text");
+    assert!(
+        error.to_string().contains("ciphertext"),
+        "the refusal says the pages were never decrypted: {error:#}"
+    );
+    assert!(
+        doc.extract().is_empty(),
+        "the un-fallible facade yields no pages either"
+    );
+
+    // The same bytes with the password prove the file itself is intact: the
+    // refusal above was the missing marker seen, not a file that could not be
+    // indexed at all.
+    let opened =
+        PdfDocument::parse_with_password(&raw, Some("user")).expect("parse with its password");
+    assert_eq!(opened.opened_with, Some("user password"));
+    assert!(
+        page_text(&opened).contains("Compressed Stream Works"),
+        "the page is read when the password is given: {:?}",
+        page_text(&opened)
+    );
+}
+
 /// qpdf wrote this revision 4 file with the password `Grüße`: the file holds it
 /// in PDFDocEncoding, so the same text has to be encoded that way before it is
 /// hashed — the argv's UTF-8 bytes are not it, and the file used to stay
