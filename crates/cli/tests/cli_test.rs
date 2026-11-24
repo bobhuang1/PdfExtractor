@@ -10577,6 +10577,161 @@ fn a_picture_path_cannot_climb_out_of_the_documents_directory() {
     );
 }
 
+/// The same rule for Markdown, the other format whose pictures the flow reader
+/// takes: a destination that is an absolute path names no picture, even when
+/// the file is real and the page is read without complaint. The markup stays as
+/// the words the page holds, and nothing is read or copied.
+#[test]
+fn a_markdown_picture_is_not_read_from_an_absolute_path() {
+    let ws = Workspace::new("markdown-picture-absolute");
+    let absolute = repository_root().join("test-data/images/scan.jpg");
+    assert!(absolute.is_file(), "the image fixture");
+    // The page is `source.md`, so the run's own `--to md` writes `page.md`
+    // rather than overwriting the document being read.
+    let input = ws.write(
+        "source.md",
+        format!(
+            "# Absolute\n\nBefore ![outside]({}) after.\n",
+            absolute.display()
+        )
+        .as_bytes(),
+    );
+
+    let json = ws.join("page.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        json.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&json);
+    assert_eq!(
+        doc["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "the Markdown page took a picture from an absolute path: {:#?}",
+        doc["pictures"]
+    );
+    assert!(
+        !ws.join("page_images").exists(),
+        "the picture outside the page's own directory was copied"
+    );
+    let markdown = std::fs::read_to_string(ws.join("page.md")).expect("the Markdown");
+    assert!(
+        markdown.contains(&format!("![outside]({})", absolute.display()))
+            && markdown.contains("Before")
+            && markdown.contains("after."),
+        "the page's own words were lost:\n{markdown}"
+    );
+}
+
+/// And a Markdown destination that climbs out with `..` is refused for the same
+/// reason: what a page may read is what its own directory holds, not the file
+/// above it.
+#[test]
+fn a_markdown_picture_path_cannot_climb_out_of_the_documents_directory() {
+    let ws = Workspace::new("markdown-picture-climb");
+    let bytes = fixture("images/scan.jpg");
+    ws.write("secret/scan.jpg", &bytes);
+    let input = ws.write(
+        "site/source.md",
+        b"# Climb\n\nBefore ![outside](../secret/scan.jpg) after.\n",
+    );
+
+    let json = ws.join("page.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        json.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&json);
+    assert_eq!(
+        doc["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "the Markdown page climbed out of its own directory: {:#?}",
+        doc["pictures"]
+    );
+    assert!(
+        !ws.join("page_images").exists(),
+        "the picture above the page's directory was copied"
+    );
+    let markdown = std::fs::read_to_string(ws.join("page.md")).expect("the Markdown");
+    assert!(
+        markdown.contains("![outside](../secret/scan.jpg)"),
+        "the page's own words were lost:\n{markdown}"
+    );
+}
+
+/// The third way a source can leave the document's directory is a name that is
+/// local but resolves elsewhere: a symlink standing inside the directory and
+/// pointing out of it. The canonical comparison is what refuses it, so the file
+/// the link leads to is neither read nor copied beside the output.
+#[cfg(unix)]
+#[test]
+fn a_markdown_picture_that_is_a_symlink_out_of_the_directory_is_not_read() {
+    let ws = Workspace::new("markdown-picture-symlink");
+    let bytes = fixture("images/scan.jpg");
+    ws.write("secret/scan.jpg", &bytes);
+    std::fs::create_dir_all(ws.join("site")).expect("create the page's directory");
+    std::os::unix::fs::symlink("../secret/scan.jpg", ws.join("site/link.jpg"))
+        .expect("create the symlink");
+    let input = ws.write(
+        "site/source.md",
+        b"# Link\n\nBefore ![outside](link.jpg) after.\n",
+    );
+
+    let json = ws.join("page.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        json.to_str().unwrap(),
+        "--to",
+        "json",
+        "--to",
+        "md",
+        "--ocr",
+        "never",
+    ]);
+
+    let doc = json_of(&json);
+    assert_eq!(
+        doc["pictures"].as_array().map(Vec::len),
+        Some(0),
+        "the Markdown page followed a symlink out of its directory: {:#?}",
+        doc["pictures"]
+    );
+    // A source read from `link.jpg` keeps that name beside the output, so an
+    // absent `page.json`-adjacent file is the copy that was not made.
+    assert!(
+        std::fs::symlink_metadata(ws.join("link.jpg")).is_err(),
+        "the file the symlink points at was copied beside the output"
+    );
+    assert!(
+        !ws.join("page_images").exists(),
+        "the picture the symlink names was copied under a run-made name"
+    );
+    let markdown = std::fs::read_to_string(ws.join("page.md")).expect("the Markdown");
+    assert!(
+        markdown.contains("![outside](link.jpg)"),
+        "the page's own words were lost:\n{markdown}"
+    );
+}
+
 /// A flow page's picture keeps the name the page gave it even when that name
 /// holds a space or a character HTML must escape. The page written from the
 /// document names the same file — `&` as `&amp;`, the apostrophe as its
