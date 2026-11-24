@@ -15,6 +15,9 @@ use pdfextractor_pdf_parser::crypt::{latin1_string, CryptError, SecurityHandler}
 use pdfextractor_pdf_parser::objects::PdfValue;
 use pdfextractor_pdf_parser::PdfDocument;
 
+/// The passwords the fixture side tries when the mutation is in `/Encrypt`.
+const PASSWORDS: [Option<&str>; 3] = [None, Some("user"), Some("owner")];
+
 const FIXTURES: [&str; 4] = [
     "encrypted.pdf",
     "encrypted_rc4_128.pdf",
@@ -199,10 +202,10 @@ fn every_mutation_is_read_or_refused_with_a_typed_error() {
             "{name}: the /Encrypt strings are reachable"
         );
         // The password the fixture actually opens with: a payload mutation
-        // leaves `/Encrypt` alone, so authentication must still succeed and the
+        // leaves `/Encrypt` alone, so authentication still succeeds and the
         // ciphertext reaches the cipher. `encrypted.pdf` has an empty user
         // password; the variants use `user`.
-        let good = if name == "encrypted.pdf" {
+        let opens_with = if name == "encrypted.pdf" {
             None
         } else {
             Some("user")
@@ -211,21 +214,30 @@ fn every_mutation_is_read_or_refused_with_a_typed_error() {
             let mut bytes = base.clone();
             // Three cases in four mutate only ciphertext; a hex case mutates
             // only `/Encrypt`, so authentication is what it exercises.
-            let payload_only = rng.below(4) != 0;
-            let pick = if payload_only { &payloads } else { &hex };
+            let encrypt_field = rng.below(4) == 0;
+            let pick = if encrypt_field { &hex } else { &payloads };
             for _ in 0..1 + rng.below(4) {
                 let at = pick[rng.below(pick.len())];
-                if payload_only {
-                    bytes[at] ^= (rng.next() as u8) | 1;
-                } else {
+                if encrypt_field {
                     bytes[at] = b"0123456789abcdef"[rng.below(16)];
+                } else {
+                    bytes[at] ^= (rng.next() as u8) | 1;
                 }
             }
-            for password in [None, Some("user"), Some("owner")] {
+            // A payload mutation cannot change which password opens the file,
+            // so one parse with that password reaches the cipher; the other
+            // two would repeat it. A hex mutation is a password question, so
+            // all three are tried.
+            let passwords: &[Option<&str>] = if encrypt_field {
+                &PASSWORDS
+            } else {
+                std::slice::from_ref(&opens_with)
+            };
+            for &password in passwords {
                 match PdfDocument::parse_with_limits_and_password(&bytes, limits.clone(), password)
                 {
                     Ok(document) => {
-                        if password == good && payload_only {
+                        if !encrypt_field {
                             assert!(
                                 document.locked.is_none(),
                                 "{name}: a payload mutation blocked authentication: {:?}",
@@ -262,7 +274,7 @@ fn every_mutation_is_read_or_refused_with_a_typed_error() {
                     let payload = rng.bytes(payload_len);
                     let mut stream = PdfValue::Stream(HashMap::new(), payload);
                     handler.decrypt_object(4, 0, &mut stream);
-                    let _plaintext = handler.plaintext_len(&stream);
+                    let _ = SecurityHandler::rebuilt_string_bytes(&stream);
                 }
                 Err(error) => assert!(
                     matches!(

@@ -181,7 +181,7 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   `an_absolute_picture_path_is_not_read_from_a_flow_page` and
   `a_picture_path_cannot_climb_out_of_the_documents_directory`; the existing
   in-directory picture tests still pass. Suite counts 1,296 / 133.
-- Decryption is charged before it allocates. `SecurityHandler::plaintext_len`
+- Decryption is charged before it allocates. The handler's plaintext length
   sums the payload of every stream the handler decrypts plus every string the
   file holds (stream dictionaries included); `PdfDocument::decrypt` charges
   that total to the whole-document budget, excluding the `/Encrypt` object's own
@@ -250,8 +250,8 @@ local `main`, signing, macOS, releasing) and *Deferred*.
   from the store rather than cloned, with its decoded contents charged before
   they are parsed. Decryption no longer charges the stream plaintext a second
   time — it decrypts in the buffer that copy already paid for — so
-  `SecurityHandler::plaintext_len` counts only the string buffers decryption
-  rebuilds, and the budget is one charge per buffer. The filter chain hands
+  `SecurityHandler::rebuilt_string_bytes` counts only the string buffers
+  decryption rebuilds, and the budget is one charge per buffer. The filter chain hands
   back the stored payload as a borrow when no filter could read it, so the
   fallback copy is charged before it is owned, not after. New tests
   `a_stream_payload_is_charged_when_the_parser_copies_it_out_of_the_file` and

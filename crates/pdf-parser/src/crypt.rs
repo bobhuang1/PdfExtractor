@@ -245,23 +245,27 @@ impl SecurityHandler {
         self.decrypt_strings(num, gen, value);
     }
 
-    /// The bytes decrypting `value` rebuilds in fresh buffers: every string
-    /// inside it, nested dictionaries and arrays included.
+    /// The bytes decrypting `value` rebuilds for its strings: each string goes
+    /// through a Latin-1 working buffer of one byte per character, and nested
+    /// dictionaries and arrays are counted with it.
     ///
-    /// The caller charges this before [`Self::decrypt_object`] runs, so a file
-    /// whose strings would not fit the whole-document budget is refused before
-    /// any of them is rebuilt. A stream's payload is not counted: it is
-    /// decrypted where it stands, in the buffer the parser charged when it
-    /// copied the payload out of the file.
-    pub fn plaintext_len(&self, value: &PdfValue) -> u64 {
+    /// This is not the plaintext size. A stream's payload is decrypted where it
+    /// stands, in the buffer the parser charged when it copied the payload out
+    /// of the file, so only the string buffers are new allocation. The caller
+    /// charges this before [`Self::decrypt_object`] runs, so a file whose
+    /// strings would not fit the whole-document budget is refused before any of
+    /// them is rebuilt.
+    ///
+    /// Nothing about it depends on the handler, which is why it takes no `self`.
+    pub fn rebuilt_string_bytes(value: &PdfValue) -> u64 {
         match value {
             PdfValue::String(s) => s.chars().count() as u64,
             PdfValue::Array(items) => items.iter().fold(0u64, |total, item| {
-                total.saturating_add(self.plaintext_len(item))
+                total.saturating_add(Self::rebuilt_string_bytes(item))
             }),
             PdfValue::Dictionary(dict) | PdfValue::Stream(dict, _) => {
                 dict.values().fold(0u64, |total, item| {
-                    total.saturating_add(self.plaintext_len(item))
+                    total.saturating_add(Self::rebuilt_string_bytes(item))
                 })
             }
             _ => 0,

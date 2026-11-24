@@ -142,13 +142,33 @@ fn a_locked_document_is_refused_rather_than_read_as_ciphertext() {
 }
 
 /// A PDF 1.5 file can state its encryption only in a cross-reference stream's
-/// own dictionary, which need not carry an `/ID`. The bytes are still
-/// ciphertext: the entry has to be detected on its own, and the handler's
-/// refusal — there is no `/ID` to authenticate against — has to be reported
-/// rather than the payload handed back as text.
+/// own dictionary, which need not carry an `/ID`. The entry has to be detected
+/// on its own, and the handler's refusal — there is no `/ID` to authenticate
+/// against — has to be reported rather than the payload handed back as text.
+/// The fixture's page is stored in the clear on purpose: a parser that missed
+/// the entry would return its readable text, so the empty extraction below is
+/// the flag doing its work rather than a page that had nothing to leak.
 #[test]
 fn an_xref_stream_encrypt_without_an_id_is_refused_not_read() {
-    let doc = PdfDocument::parse(&fixture("xref_encrypt_no_id.pdf")).expect("parse");
+    let raw = fixture("xref_encrypt_no_id.pdf");
+    assert!(
+        raw.windows(13).any(|window| window == b"Secret ledger"),
+        "the page really is readable if the entry goes undetected"
+    );
+    // The control: the same bytes without the entry parse as the plain file
+    // they are and hand the page back, so the refusal below is the entry being
+    // seen rather than a document that had no page to read.
+    let plain = String::from_utf8(raw.clone())
+        .expect("the fixture is ASCII")
+        .replace("/Encrypt 6 0 R", "");
+    let plain = PdfDocument::parse(plain.as_bytes()).expect("the control parses");
+    assert!(
+        plain.extract_text().contains("Secret ledger"),
+        "without the entry the page is read: {:?}",
+        plain.extract_text()
+    );
+
+    let doc = PdfDocument::parse(&raw).expect("parse");
     assert!(doc.encrypted, "an xref stream's /Encrypt is detected");
     assert_eq!(doc.opened_with, None, "no password opened it");
     assert_eq!(

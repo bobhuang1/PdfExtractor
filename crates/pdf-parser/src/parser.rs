@@ -407,16 +407,16 @@ impl PdfDocument {
         self.opened_with = Some(handler.opened_with);
         // Decryption rebuilds the document's strings in fresh buffers; a
         // stream's payload is decrypted where it stands, in the buffer the
-        // parser copied out of the file and charged then. Charge the strings
-        // before any is made, the way every decoded stream is charged.
-        let plaintext = self
+        // parser copied out of the file and charged then. Charge the rebuilt
+        // strings before any is made, the way every decoded stream is charged.
+        let rebuilt = self
             .objects
             .iter()
             .filter(|(id, _)| Some(**id) != encrypt_ref)
             .fold(0u64, |total, (_, value)| {
-                total.saturating_add(handler.plaintext_len(value))
+                total.saturating_add(crate::crypt::SecurityHandler::rebuilt_string_bytes(value))
             });
-        self.charge_document(plaintext, None);
+        self.charge_document(rebuilt, None);
         if self.limit_hit.borrow().is_some() {
             return;
         }
@@ -2447,6 +2447,65 @@ mod tests {
             Some(PdfValue::Stream(_, raw)) => {
                 assert_eq!(raw.as_slice(), payload, "the payload was truncated")
             }
+            other => panic!("expected a stream, got {other:?}"),
+        }
+    }
+
+    /// `/Length` longer than the terminator search found: the payload's own
+    /// buffer is reused, so only the growth is allocated, and that growth is
+    /// charged before it is made. A ceiling that holds the truncated payload
+    /// but not the grown one refuses instead of regrowing.
+    #[test]
+    fn growing_a_payload_to_its_declared_length_is_charged_before_it_is_made() {
+        let payload: &[u8] = b"(hidden) endstream (more)";
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(b"%PDF-1.4\n");
+        file.extend_from_slice(
+            format!("2 0 obj\n<< /Length {} >>\nstream\n", payload.len()).as_bytes(),
+        );
+        file.extend_from_slice(payload);
+        file.extend_from_slice(b"\nendstream\nendobj\n%%EOF\n");
+
+        // The terminator search stops at the embedded `endstream`; the rest of
+        // the payload is the growth `/Length` adds afterwards.
+        let found = b"(hidden) ".len() as u64;
+        assert!(found < payload.len() as u64);
+        let limit = found + 4;
+        let error = PdfDocument::parse_with_limits(
+            &file,
+            Limits {
+                max_document_bytes: limit,
+                ..Limits::default()
+            },
+        )
+        .expect_err("the grown payload crosses the ceiling");
+        match error.downcast_ref::<LimitError>() {
+            Some(LimitError::DocumentTooLarge {
+                actual,
+                limit: reported,
+            }) => {
+                assert_eq!(
+                    *actual,
+                    payload.len() as u64,
+                    "the charge is the truncated payload plus only its growth"
+                );
+                assert_eq!(*reported, limit);
+            }
+            other => panic!("expected the document ceiling, got {other:?}: {error}"),
+        }
+
+        // Exactly the grown payload fits: the growth is charged, not a second
+        // copy of the payload, and the stream is read whole at that ceiling.
+        let doc = PdfDocument::parse_with_limits(
+            &file,
+            Limits {
+                max_document_bytes: payload.len() as u64,
+                ..Limits::default()
+            },
+        )
+        .expect("a ceiling that holds the grown payload reads");
+        match doc.objects.get(&(2, 0)) {
+            Some(PdfValue::Stream(_, raw)) => assert_eq!(raw.as_slice(), payload),
             other => panic!("expected a stream, got {other:?}"),
         }
     }
