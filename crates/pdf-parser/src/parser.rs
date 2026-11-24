@@ -2390,6 +2390,44 @@ mod tests {
         );
     }
 
+    /// An object stream is decoded where it is stored: `decode_stream_uncapped`
+    /// hands the payload back as a borrow, so a payload the filters do not
+    /// change is never cloned before it is decoded. The expansion's own buffer
+    /// is then the only copy it makes, and that copy is charged first.
+    #[test]
+    fn an_object_stream_is_decoded_and_charged_without_a_payload_copy() {
+        let mut doc = document();
+        let body: Vec<u8> = b"9 0 [1]".to_vec();
+        let dict = HashMap::from([
+            ("Type".to_string(), PdfValue::Name("ObjStm".into())),
+            ("N".to_string(), PdfValue::Integer(1)),
+            ("First".to_string(), PdfValue::Integer(4)),
+            ("Length".to_string(), PdfValue::Integer(body.len() as i64)),
+        ]);
+        doc.objects.insert((3, 0), PdfValue::Stream(dict, body));
+        let PdfValue::Stream(_, stored) = &doc.objects[&(3, 0)] else {
+            unreachable!("object 3 is the stream")
+        };
+        let stored_at = stored.as_ptr();
+
+        match doc.decode_stream_uncapped(&doc.objects[&(3, 0)]) {
+            Cow::Borrowed(decoded) => assert!(
+                std::ptr::eq(decoded.as_ptr(), stored_at),
+                "the decoded bytes are the stored payload, not a clone"
+            ),
+            Cow::Owned(owned) => panic!("the payload was cloned into {} bytes", owned.len()),
+        }
+
+        doc.expand_object_streams()
+            .expect("the object stream expands");
+        assert_eq!(
+            doc.document_bytes.get(),
+            7,
+            "the expansion is charged once, for its own 7-byte payload"
+        );
+        assert_eq!(doc.objects.len(), 2, "object 9 was read out of the stream");
+    }
+
     /// The lexer ends a payload at the first `endstream` it sees, so a payload
     /// that contains those bytes would be truncated. `/Length` says where the
     /// payload really ends, and it wins as long as the terminator agrees.

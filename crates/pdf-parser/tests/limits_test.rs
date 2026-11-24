@@ -265,8 +265,11 @@ fn object_stream_pdf(body: &[u8]) -> Vec<u8> {
 }
 
 /// Expanding an object stream decodes its payload into a buffer of its own, and
-/// that buffer is charged before it is parsed. A ceiling that holds the payload
-/// copied out of the file but not that decoded copy refuses the file.
+/// that buffer is charged before it is parsed. With no filter the decoded bytes
+/// are the payload again, so the document is charged exactly twice: once when
+/// the payload is copied out of the file and once for the expansion. One byte
+/// below that refuses the file; the exact ceiling reads it, which would not
+/// hold if the expansion kept an uncharged third copy of the payload.
 #[test]
 fn expanding_an_object_stream_is_charged_for_its_decoded_copy() {
     let body = format!("[{}]", "1 ".repeat(1_024));
@@ -274,7 +277,7 @@ fn expanding_an_object_stream_is_charged_for_its_decoded_copy() {
     let payload = body.len() as u64 + 4;
 
     let limits = Limits {
-        max_document_bytes: payload + 512,
+        max_document_bytes: 2 * payload - 1,
         ..Limits::default()
     };
     let error = PdfDocument::parse_with_limits(&pdf, limits).unwrap_err();
@@ -288,7 +291,7 @@ fn expanding_an_object_stream_is_charged_for_its_decoded_copy() {
     );
 
     let limits = Limits {
-        max_document_bytes: 8 * payload,
+        max_document_bytes: 2 * payload,
         ..Limits::default()
     };
     PdfDocument::parse_with_limits(&pdf, limits)

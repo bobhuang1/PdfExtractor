@@ -379,6 +379,54 @@ fn a_lowered_document_budget_charges_every_encrypted_stream_together() {
     }
 }
 
+/// The whole-document ceiling is crossed while the ciphertext is copied out of
+/// the file, before the security handler is authenticated: the three-stream
+/// fixture is refused for the correct password and a wrong one alike, and the
+/// refusal is the budget's rather than the handler's. Authenticating first
+/// would make the wrong password a `CryptError` and leave the correct one
+/// opened, so this separates the two orders.
+#[test]
+fn an_aggregate_ceiling_refuses_before_the_handler_runs() {
+    let pdf = fixture("encrypted_aggregate_streams.pdf");
+    let opened = PdfDocument::parse_with_limits_and_password(&pdf, Limits::default(), Some("user"))
+        .expect("the fixture opens under the default budget");
+    let payloads: Vec<u64> = opened
+        .objects
+        .values()
+        .filter_map(|value| match value {
+            PdfValue::Stream(_, raw) => Some(raw.len() as u64),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(payloads.len(), 3, "three ciphered content streams");
+    let total: u64 = payloads.iter().sum();
+
+    for password in [Some("user"), Some("not-the-password")] {
+        let error = PdfDocument::parse_with_limits_and_password(
+            &pdf,
+            Limits {
+                max_document_bytes: total - 1,
+                ..Limits::default()
+            },
+            password,
+        )
+        .expect_err("a ceiling under the three payloads refuses the file before it opens");
+        match error.downcast_ref::<LimitError>() {
+            Some(LimitError::DocumentTooLarge { actual, .. }) => {
+                assert_eq!(
+                    *actual, total,
+                    "{password:?}: the refusal is the payload sum"
+                )
+            }
+            other => panic!("{password:?}: expected the ceiling, got {other:?}: {error}"),
+        }
+        assert!(
+            error.downcast_ref::<CryptError>().is_none(),
+            "{password:?}: the handler must not have refused first: {error}"
+        );
+    }
+}
+
 /// `/EncryptMetadata false` leaves the `/Type /Metadata` stream in the clear:
 /// reading it out of the parsed object alone would not show that, so the raw
 /// file is checked for the XML itself while the ciphered title stays absent.

@@ -109,27 +109,129 @@ fn security_dictionary(rng: &mut Rng) -> HashMap<String, PdfValue> {
     dict
 }
 
+/// The bytes a mutation may change without touching the file's syntax: every
+/// byte of every stream payload (what the handler decrypts), and every hex
+/// digit of the `/Encrypt` object's string fields (the salts and stored hashes
+/// authentication is computed from).
+///
+/// A mutation anywhere else spends a case on structure — a broken offset, a
+/// truncated dictionary — which never reaches the cipher, so the loop below
+/// picks from here instead, and picks one class per case: a payload case stays
+/// in the ciphertext, a hex case stays in `/Encrypt`, and neither can turn the
+/// other into a password refusal.
+fn targets(bytes: &[u8]) -> (Vec<usize>, Vec<usize>) {
+    let mut payloads = Vec::new();
+    let mut hex = Vec::new();
+
+    // Stream payloads: after the EOL that follows `stream`, up to `endstream`.
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(6).position(|w| w == b"stream") {
+        let keyword = at + found;
+        if keyword >= 3 && &bytes[keyword - 3..keyword] == b"end" {
+            at = keyword + 6;
+            continue;
+        }
+        let mut start = keyword + 6;
+        while start < bytes.len() && matches!(bytes[start], b'\r' | b'\n') {
+            start += 1;
+        }
+        let Some(end_found) = bytes[start..].windows(9).position(|w| w == b"endstream") else {
+            break;
+        };
+        let mut end = start + end_found;
+        while end > start && matches!(bytes[end - 1], b'\r' | b'\n') {
+            end -= 1;
+        }
+        payloads.extend(start..end);
+        at = start + end_found + 9;
+    }
+
+    if let Some(range) = encrypt_dictionary(bytes) {
+        let mut i = range.start;
+        while i < range.end {
+            if bytes[i] == b'<' && bytes.get(i + 1).is_some_and(|&next| next != b'<') {
+                if let Some(close) = bytes[i + 1..range.end].iter().position(|&b| b == b'>') {
+                    hex.extend(i + 1..i + 1 + close);
+                    i = i + 1 + close;
+                }
+            }
+            i += 1;
+        }
+    }
+    (payloads, hex)
+}
+
+/// The body of the object the trailer's `/Encrypt` names.
+fn encrypt_dictionary(bytes: &[u8]) -> Option<std::ops::Range<usize>> {
+    let at = bytes.windows(8).position(|w| w == b"/Encrypt")?;
+    let rest = &bytes[at + 8..];
+    let start = rest.iter().position(u8::is_ascii_digit)?;
+    let number: usize = rest[start..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .map(|&b| b as char)
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    let header = format!("{number} 0 obj");
+    let header_at = bytes
+        .windows(header.len())
+        .position(|w| w == header.as_bytes())?;
+    let dict_start = header_at + header.len();
+    let dict_end = dict_start
+        + bytes[dict_start..]
+            .windows(6)
+            .position(|w| w == b"endobj")?;
+    Some(dict_start..dict_end)
+}
+
 #[test]
 fn every_mutation_is_read_or_refused_with_a_typed_error() {
     let mut rng = Rng(0x0dec_0ded_5eed_1234);
     let limits = Limits::default();
 
-    // Mutated ciphertext inside a real file: `/Encrypt`, `/Length` and the
-    // structure are untouched, so the handler authenticates and then decrypts
-    // whatever the mutation left. Flipping a byte is the mutation; the file
-    // stays parseable, which is what puts the bytes in front of the cipher.
     for name in FIXTURES {
         let base = fixture(name);
+        let (payloads, hex) = targets(&base);
+        assert!(!payloads.is_empty(), "{name}: the ciphertext is reachable");
+        assert!(
+            !hex.is_empty(),
+            "{name}: the /Encrypt strings are reachable"
+        );
+        // The password the fixture actually opens with: a payload mutation
+        // leaves `/Encrypt` alone, so authentication must still succeed and the
+        // ciphertext reaches the cipher. `encrypted.pdf` has an empty user
+        // password; the variants use `user`.
+        let good = if name == "encrypted.pdf" {
+            None
+        } else {
+            Some("user")
+        };
         for _ in 0..64 {
             let mut bytes = base.clone();
+            // Three cases in four mutate only ciphertext; a hex case mutates
+            // only `/Encrypt`, so authentication is what it exercises.
+            let payload_only = rng.below(4) != 0;
+            let pick = if payload_only { &payloads } else { &hex };
             for _ in 0..1 + rng.below(4) {
-                let at = rng.below(bytes.len());
-                bytes[at] ^= (rng.next() as u8) | 1;
+                let at = pick[rng.below(pick.len())];
+                if payload_only {
+                    bytes[at] ^= (rng.next() as u8) | 1;
+                } else {
+                    bytes[at] = b"0123456789abcdef"[rng.below(16)];
+                }
             }
             for password in [None, Some("user"), Some("owner")] {
                 match PdfDocument::parse_with_limits_and_password(&bytes, limits.clone(), password)
                 {
                     Ok(document) => {
+                        if password == good && payload_only {
+                            assert!(
+                                document.locked.is_none(),
+                                "{name}: a payload mutation blocked authentication: {:?}",
+                                document.locked
+                            );
+                        }
                         if let Err(error) = document.extract_checked() {
                             assert!(
                                 typed(error.as_ref()),

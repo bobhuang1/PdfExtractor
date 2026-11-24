@@ -6,7 +6,7 @@ and libFuzzer, so they live outside the product workspace and are not part of
 
 | Target | Reaches |
 |---|---|
-| `pdf` | PDF object parsing, page tree, decoded streams, image XObjects, page limit and parser deadline. |
+| `pdf` | PDF object parsing, page tree, decoded streams, image XObjects, page limit and parser deadline; a second pass opens the same input with a password derived from it, so the security handler's key derivation and decryption run too. |
 | `zip` | The shared ZIP/XML gate, then DOCX, XLSX, PPTX, ODT, ODS or ODP according to the package's own parts. |
 | `xml` | XML size, nesting depth, DOCTYPE/entity rejection and the XML deadline. |
 | `image` | Image header limits, guarded decode, GIF/WebP/TIFF frame budgets and image deadlines. |
