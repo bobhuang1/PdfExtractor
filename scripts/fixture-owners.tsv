@@ -59,6 +59,7 @@ test-data/encrypted_pdfdoc.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_r6_saslprep.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_objstm.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_r5.pdf	crates/pdf-parser/tests/crypt_test.rs
+test-data/encrypted_r5_typed.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_encryptmetadata.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_cryptfilter.pdf	crates/pdf-parser/tests/crypt_test.rs
 test-data/encrypted_aggregate_streams.pdf	crates/pdf-parser/tests/crypt_test.rs
@@ -409,3 +410,5 @@ test-data/golden/compare-baseline.json	crates/ui/tests/compare_test.rs
 test-data/golden/compare-baseline.json	crates/ui/tests/corpus_report_test.rs
 test-data/golden/README.md	crates/cli/tests/documentation_test.rs
 test-data/golden/README.md	crates/cli/tests/tracked_fixtures_test.rs
+test-data/outline_headings.pdf	crates/cli/tests/md_golden_test.rs
+test-data/outline_headings.pdf	crates/cli/tests/tracked_fixtures_test.rs
