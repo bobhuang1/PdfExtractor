@@ -365,6 +365,34 @@ fn an_r6_password_is_prepared_with_saslprep() {
     }
 }
 
+/// qpdf 11.9 writes revision 5 only when forced, and it stores the password's
+/// UTF-8 as typed there: SASLprep is the revision 6 rule. The composed `päss`
+/// opens this file; the decomposed `pa\u{0308}ss` is a different byte string
+/// and must not, or preparing the password would have made two passwords one.
+#[test]
+fn a_revision_five_password_is_hashed_as_typed_not_prepared() {
+    let composed = "päss";
+    let decomposed = "pa\u{0308}ss";
+    assert_ne!(composed.as_bytes(), decomposed.as_bytes());
+
+    let doc = PdfDocument::parse_with_password(&fixture("encrypted_r5_typed.pdf"), Some(composed))
+        .expect("parse");
+    assert_eq!(doc.opened_with, Some("user password"));
+    assert_eq!(doc.locked, None);
+    assert!(
+        page_text(&doc).contains("Hello World"),
+        "{}",
+        page_text(&doc)
+    );
+
+    let doc =
+        PdfDocument::parse_with_password(&fixture("encrypted_r5_typed.pdf"), Some(decomposed))
+            .expect("a wrong password still parses the file");
+    assert_eq!(doc.opened_with, None);
+    assert_eq!(doc.locked, Some(CryptError::WrongPassword));
+    assert!(doc.extract().is_empty(), "a wrong password reads no page");
+}
+
 /// The refusal is the state, not only the recorded error: a file that says it
 /// is encrypted with no handler's success behind it is refused as well, so a
 /// gap in the parser cannot produce a partial read of ciphertext. The state is

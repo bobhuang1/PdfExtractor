@@ -1054,4 +1054,54 @@ mod tests {
         assert_eq!(saslprep("a\u{00A0}b"), "a b");
         assert_eq!(saslprep("pa\u{0308}ss"), "päss");
     }
+
+    /// A revision 5 handler hashes the password's UTF-8 as typed; SASLprep is
+    /// the revision 6 rule. The dictionary is built here, so the branch needs
+    /// no second file — the no-break space is a character SASLprep would turn
+    /// into a space, making the two behaviours distinguishable.
+    #[test]
+    fn a_revision_five_password_is_hashed_as_typed_without_saslprep() {
+        let typed = "a\u{00A0}b";
+        assert_eq!(
+            saslprep(typed),
+            "a b",
+            "revision 6 preparation would change this password"
+        );
+
+        let u_salt = [0x11u8; 8];
+        let ue_salt = [0x22u8; 8];
+        let mut u = sha256(&[typed.as_bytes(), &u_salt, b""].concat()).to_vec();
+        u.extend_from_slice(&u_salt);
+        u.extend_from_slice(&ue_salt);
+        let dictionary = HashMap::from([
+            ("Filter".to_string(), PdfValue::Name("Standard".into())),
+            ("V".to_string(), PdfValue::Integer(5)),
+            ("R".to_string(), PdfValue::Integer(5)),
+            ("P".to_string(), PdfValue::Integer(-4)),
+            (
+                "O".to_string(),
+                PdfValue::String(latin1_string(&[0x33; 48])),
+            ),
+            ("U".to_string(), PdfValue::String(latin1_string(&u))),
+            (
+                "OE".to_string(),
+                PdfValue::String(latin1_string(&[0x44; 32])),
+            ),
+            (
+                "UE".to_string(),
+                PdfValue::String(latin1_string(&[0x55; 32])),
+            ),
+        ]);
+
+        let handler = SecurityHandler::authenticate(&dictionary, &[0u8; 16], Some(typed))
+            .expect("the typed UTF-8 is what the file hashed");
+        assert_eq!(handler.opened_with, "user password");
+        assert!(
+            matches!(
+                SecurityHandler::authenticate(&dictionary, &[0u8; 16], Some("a b")),
+                Err(CryptError::WrongPassword)
+            ),
+            "a prepared password must not open a revision 5 file"
+        );
+    }
 }
