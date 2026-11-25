@@ -34,6 +34,22 @@ pub struct PageLink {
     pub uri: String,
 }
 
+/// One bookmark in the document's `/Outlines` tree.
+///
+/// An outline is the author's own table of contents: its titles and nesting are
+/// structure the page's geometry does not have to be guessed at. A destination
+/// that is a named destination cannot be resolved without the name tree and is
+/// left as `None` rather than followed to the wrong page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineEntry {
+    /// The bookmark's text, trimmed. Empty titles are not entries.
+    pub title: String,
+    /// The 1-based page the entry opens, when its destination names one directly.
+    pub page_no: Option<i32>,
+    /// 0 for a top-level bookmark; nesting is the author's hierarchy.
+    pub depth: i32,
+}
+
 /// A page with its extracted text spans and any embedded images.
 #[derive(Debug, Clone)]
 pub struct ExtractedPage {
@@ -1162,6 +1178,217 @@ impl PdfDocument {
             return Err(error.into());
         }
         Ok(pages)
+    }
+
+    /// The document's bookmarks, in outline order, with their nesting depth.
+    ///
+    /// This is best-effort structure, not extraction: a malformed tree, a cycle
+    /// or an exhausted budget stops the walk and keeps the entries already read.
+    /// A file whose strings were never decrypted has no readable titles and
+    /// returns none.
+    pub fn outline(&self) -> Vec<OutlineEntry> {
+        if self.encrypted && self.opened_with.is_none() {
+            return Vec::new();
+        }
+        let is_catalog = |value: &PdfValue| {
+            value.as_dict().is_some_and(|dict| {
+                dict.get("Type")
+                    .and_then(|t| self.resolve(t))
+                    .and_then(|t| t.as_name())
+                    == Some("Catalog")
+            })
+        };
+        let named = self
+            .root
+            .and_then(|id| self.objects.get(&id))
+            .filter(|value| is_catalog(value));
+        let root = named.or_else(|| {
+            self.objects
+                .iter()
+                .filter(|(_, value)| is_catalog(value))
+                .max_by_key(|(id, _)| **id)
+                .map(|(_, value)| value)
+        });
+        let Some(root) = root else {
+            return Vec::new();
+        };
+        let Some(first) = root
+            .get("Outlines")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.get("First"))
+        else {
+            return Vec::new();
+        };
+
+        let mut page_nodes = Vec::new();
+        if let Some(pages) = root.get("Pages") {
+            if self.collect_pages(pages, &mut page_nodes, 0).is_err() {
+                return Vec::new();
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_outline(first, 0, root, &page_nodes, &mut seen, &mut out);
+        out
+    }
+
+    /// Walk one level of the outline tree and the children hanging off it.
+    fn collect_outline(
+        &self,
+        first: &PdfValue,
+        depth: i32,
+        root: &PdfValue,
+        page_nodes: &[&PdfValue],
+        seen: &mut HashSet<usize>,
+        out: &mut Vec<OutlineEntry>,
+    ) {
+        if depth > 32 || out.len() >= 4096 {
+            return;
+        }
+        let mut current = first;
+        let mut visited = 0;
+        while visited < 4096 {
+            let Some(item) = self.resolve(current) else {
+                break;
+            };
+            // A direct dictionary that a malformed file points at twice would
+            // otherwise be walked twice; its address identifies it for this walk.
+            if !seen.insert(item as *const PdfValue as usize) {
+                break;
+            }
+            if out.len() >= 4096 {
+                break;
+            }
+            if let Some(PdfValue::String(title)) = item.get("Title").and_then(|v| self.resolve(v)) {
+                let title = title.trim();
+                if !title.is_empty() {
+                    out.push(OutlineEntry {
+                        title: title.to_string(),
+                        page_no: self.outline_page(item, root, page_nodes),
+                        depth,
+                    });
+                }
+            }
+            if let Some(kids) = item.get("First") {
+                self.collect_outline(kids, depth + 1, root, page_nodes, seen, out);
+            }
+            match item.get("Next") {
+                Some(next) => current = next,
+                None => break,
+            }
+            visited += 1;
+        }
+    }
+
+    /// The page an outline item opens.
+    ///
+    /// A destination is either written inline as a page array or named; the name
+    /// is looked up in the catalog's `/Dests` dictionary or `/Names /Dests` tree,
+    /// which is where most producers put their bookmarks.
+    fn outline_page(
+        &self,
+        item: &PdfValue,
+        root: &PdfValue,
+        page_nodes: &[&PdfValue],
+    ) -> Option<i32> {
+        let goto = item
+            .get("A")
+            .and_then(|v| self.resolve(v))
+            .filter(|action| {
+                action
+                    .get("S")
+                    .and_then(|v| self.resolve(v))
+                    .and_then(|v| v.as_name())
+                    == Some("GoTo")
+            })
+            .and_then(|action| action.get("D"));
+        let dest = item.get("Dest").or(goto).and_then(|v| self.resolve(v))?;
+        // A destination may be written as a dictionary with `/D`.
+        let dest = match dest.get("D") {
+            Some(inner) => self.resolve(inner)?,
+            None => dest,
+        };
+        let dest = match dest {
+            PdfValue::String(name) => self.named_destination(root, name)?,
+            PdfValue::Name(name) => self.named_destination(root, name)?,
+            other => other,
+        };
+        let dest = match dest.get("D") {
+            Some(inner) => self.resolve(inner)?,
+            None => dest,
+        };
+        self.dest_page(dest, page_nodes)
+    }
+
+    /// Look a named destination up in the catalog.
+    ///
+    /// Older files keep a plain `/Dests` dictionary of name to destination;
+    /// newer ones keep a `/Names /Dests` name tree. Both are searched, because a
+    /// file may have either and the name is the author's, not a guess.
+    fn named_destination<'a>(&'a self, root: &'a PdfValue, name: &str) -> Option<&'a PdfValue> {
+        if let Some(direct) = root
+            .get("Dests")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.as_dict())
+            .and_then(|d| d.get(name))
+            .and_then(|v| self.resolve(v))
+        {
+            return Some(direct);
+        }
+        let tree = root
+            .get("Names")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.get("Dests"))
+            .and_then(|v| self.resolve(v))?;
+        let mut visited = 0usize;
+        self.named_in_tree(tree, name, 0, &mut visited)
+    }
+
+    fn named_in_tree<'a>(
+        &'a self,
+        node: &'a PdfValue,
+        name: &str,
+        depth: usize,
+        visited: &mut usize,
+    ) -> Option<&'a PdfValue> {
+        *visited += 1;
+        if depth > self.limits.max_pdf_nesting || *visited > 4096 {
+            return None;
+        }
+        let dict = self.resolve(node)?.as_dict()?;
+        if let Some(pairs) = dict
+            .get("Names")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.as_array())
+        {
+            for pair in pairs.chunks(2) {
+                let [key, value] = pair else {
+                    continue;
+                };
+                let key = self.resolve(key);
+                let matches = match key {
+                    Some(PdfValue::String(key)) => key == name,
+                    Some(PdfValue::Name(key)) => key == name,
+                    _ => false,
+                };
+                if matches {
+                    return self.resolve(value);
+                }
+            }
+        }
+        if let Some(kids) = dict
+            .get("Kids")
+            .and_then(|v| self.resolve(v))
+            .and_then(|v| v.as_array())
+        {
+            for kid in kids {
+                if let Some(found) = self.named_in_tree(kid, name, depth + 1, visited) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 
     /// Refuse a decoded byte sequence that grew past its budget.

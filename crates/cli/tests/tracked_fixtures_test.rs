@@ -1,4 +1,4 @@
-//! Every fixture the golden suites read is in the git index.
+//! Every fixture under `test-data/` is in the git index.
 //!
 //! The suites read files rather than name them in code: a reference is anything
 //! in `test-data/golden/docling/`, a render golden is anything under the four
@@ -7,9 +7,10 @@
 //! why a fixture can be *present* on the machine that wrote it and absent from
 //! the repository: a rule in `.gitignore` hides it, `git status` never mentions
 //! it, and a fresh checkout runs the suites with a document or a reference
-//! missing. This test is the check that cannot happen silently: every file those
-//! directories hand a suite has to be in the index, and one that is not fails
-//! here naming the rule that hid it, or saying it was never added.
+//! missing. This test is the check that cannot happen silently: every file in
+//! `test-data/` has to be in the index — not only the golden directories — and
+//! one that is not fails here naming the rule that hid it, or saying it was
+//! never added.
 //!
 //! It holds the other half of the same promise. A golden is named after the
 //! document it pins, so the document is part of the fixture: a golden whose
@@ -17,10 +18,13 @@
 //! whichever suite happens to look for it first.
 //!
 //! It knows nothing about *why* a file is not tracked; that is the point. A file
-//! the suites read belongs in the repository, whether it is hand-written or
+//! in `test-data/` belongs in the repository, whether it is hand-written or
 //! generated — the fixtures written by `test-data/make_*.py` are committed on
-//! purpose — and the generator scripts themselves are the one kind of file in
-//! `test-data/` a suite does not read.
+//! purpose. The exceptions are the files the repository deliberately ignores as
+//! litter rather than source: interpreter bytecode, and the JSON and `*_images/`
+//! directories a hand-run conversion leaves beside a document. Ignored files are
+//! still fixtures inside the directories a suite reads whole, so a rule that
+//! hides one cannot pass as litter.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -135,34 +139,61 @@ fn goldens_without_a_document(root: &Path) -> Vec<(String, Vec<PathBuf>)> {
         .collect()
 }
 
-/// The files the golden suites read.
+/// Every file under `test-data/`, in a stable order: a suite may read any of
+/// them, so any of them can be the fixture that is missing from a checkout.
+fn all_files(root: &Path) -> Vec<PathBuf> {
+    files_below(&root.join("test-data"))
+}
+
+/// Whether `path` is inside a directory a suite reads whole.
 ///
-/// Gathered the way the suites gather them, rather than from a list that would
-/// have to be kept in step: the schema, the oracle script and the ratchet's
-/// memory they open by name; every file in the directories they walk; and the
-/// document behind every golden, found by its stem. A golden whose document is
-/// nowhere is reported by `goldens_without_a_document` instead of here: there is
-/// nothing to gather for a document the tree does not hold.
-fn fixtures(root: &Path) -> Vec<PathBuf> {
-    let golden = root.join("test-data/golden");
-    let mut paths = vec![
-        golden.join("DoclingDocument.json"),
-        golden.join("validate_with_docling.py"),
-        golden.join("compare-baseline.json"),
-    ];
-    for directory in READ_WHOLE.iter().chain(RENDER_GOLDENS.iter()) {
-        paths.extend(files_below(&root.join(directory)));
-    }
+/// An ignored file there is a fixture a rule hid, not the litter a conversion
+/// leaves; outside those directories the repository's ignore rules decide what
+/// is output.
+fn in_a_read_directory(root: &Path, path: &Path) -> bool {
+    READ_WHOLE
+        .iter()
+        .chain(RENDER_GOLDENS.iter())
+        .map(|directory| root.join(directory))
+        .chain(std::iter::once(root.join("test-data/golden")))
+        .any(|directory| path.starts_with(directory))
+}
 
-    for stem in goldens_by_stem(root).into_keys() {
-        if let Some(document) = document_named(root, &stem) {
-            paths.push(document);
+/// The files under `test-data/` that are present but not in the index, with
+/// the rule that hid each one where an ignore rule is responsible.
+///
+/// Ignored files outside the directories a suite reads whole are the litter a
+/// hand-run conversion leaves, which `.gitignore` excludes on purpose; every
+/// other file is a fixture that has to be in the repository. The check is by
+/// index membership rather than by name, so a fixture a new test starts reading
+/// is covered the moment it is written beside the others.
+fn untracked_fixtures(root: &Path) -> Vec<String> {
+    let tracked = tracked(root);
+    let mut untracked = Vec::new();
+    for fixture in all_files(root) {
+        let relative = fixture
+            .strip_prefix(root)
+            .unwrap_or_else(|_| panic!("{} is not under the repository", fixture.display()))
+            .to_path_buf();
+        if tracked.contains(&relative) {
+            continue;
         }
+        let hiding = hiding_rule(root, &relative);
+        if hiding.is_some() && !in_a_read_directory(root, &relative) {
+            continue;
+        }
+        untracked.push(match hiding {
+            Some(rule) => format!(
+                "{}: hidden by `{rule}` — a fresh checkout would not have it",
+                relative.display()
+            ),
+            None => format!(
+                "{}: not in the index — it has never been added",
+                relative.display()
+            ),
+        });
     }
-
-    paths.sort();
-    paths.dedup();
-    paths
+    untracked
 }
 
 /// The files in the index, as paths from the repository root.
@@ -233,7 +264,7 @@ fn is_a_checkout(root: &Path) -> bool {
 }
 
 #[test]
-fn every_fixture_the_golden_suites_read_is_tracked() {
+fn every_fixture_under_test_data_is_tracked() {
     let root = repository_root();
     if !is_a_checkout(&root) {
         println!(
@@ -243,13 +274,13 @@ fn every_fixture_the_golden_suites_read_is_tracked() {
         return;
     }
 
-    let fixtures = fixtures(&root);
+    let fixtures = all_files(&root);
     // The walk has to have found the tree, not a mistyped path: a test that
     // checks nothing passes for the wrong reason.
     assert!(
-        fixtures.len() >= 150,
-        "the walk found {} fixture(s), where the tree it reads holds more than 150 — a \
-         directory it walks has moved",
+        fixtures.len() >= 400,
+        "the walk found {} file(s) under test-data, where the tree holds more than 400 — \
+         `test-data/` has moved or the walk stopped early",
         fixtures.len()
     );
 
@@ -287,33 +318,61 @@ fn every_fixture_the_golden_suites_read_is_tracked() {
             .join("\n  ")
     );
 
-    let tracked = tracked(&root);
-    let mut untracked = Vec::new();
-    for fixture in &fixtures {
-        let relative = fixture
-            .strip_prefix(&root)
-            .unwrap_or_else(|_| panic!("{} is not under the repository", fixture.display()));
-        if tracked.contains(relative) {
-            continue;
-        }
-        untracked.push(match hiding_rule(&root, relative) {
-            Some(rule) => format!(
-                "{}: hidden by `{rule}` — a fresh checkout would not have it",
-                relative.display()
-            ),
-            None => format!(
-                "{}: not in the index — it has never been added",
-                relative.display()
-            ),
-        });
-    }
-
+    let untracked = untracked_fixtures(&root);
     assert!(
         untracked.is_empty(),
-        "{} file(s) the golden suites read are not tracked by git:\n  {}\n\
-         Commit them, or fix the rule that hides them: a fixture a suite reads belongs in \
-         the repository, whether it is hand-written or written by a `test-data/make_*.py`.",
+        "{} file(s) under `test-data/` are not tracked by git:\n  {}\n\
+         Commit them, or fix the rule that hides them: a fixture in `test-data/` belongs \
+         in the repository, whether it is hand-written or written by a `test-data/make_*.py`.",
         untracked.len(),
         untracked.join("\n  ")
     );
+}
+
+/// A fixture written beside the others but never added is what this test is
+/// for; the temporary repository holds one tracked and one untracked file, so
+/// the walk has to name the untracked one and only it.
+#[test]
+fn a_fixture_in_the_tree_but_not_in_the_index_is_named() {
+    if Command::new("git").arg("--version").output().is_err() {
+        println!("skipped: git is not installed, so there is no index to ask");
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("pdfe-tracked-fixtures-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("test-data")).expect("the fixture directory");
+    std::fs::write(root.join("test-data/tracked.pdf"), b"tracked").expect("a tracked fixture");
+    std::fs::write(root.join("test-data/untracked.pdf"), b"untracked")
+        .expect("an untracked fixture");
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .expect("run git")
+    };
+    let init = git(&["init", "-q"]);
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let add = git(&["add", "test-data/tracked.pdf"]);
+    assert!(
+        add.status.success(),
+        "git add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let untracked = untracked_fixtures(&root);
+    assert_eq!(untracked.len(), 1, "{untracked:#?}");
+    assert!(
+        untracked[0].starts_with("test-data/untracked.pdf: not in the index"),
+        "the untracked fixture is the one named: {}",
+        untracked[0]
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }

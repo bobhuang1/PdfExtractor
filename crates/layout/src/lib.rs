@@ -67,6 +67,19 @@ pub struct Span {
     pub rotated: bool,
 }
 
+/// A heading the document's own outline names, for one page.
+///
+/// The outline is the author's table of contents: it says a line is a heading
+/// and how deep it sits, which is structure the page's font sizes do not have
+/// to agree with. Matching is on the words, not the box, so a heading that the
+/// content stream merged into its following paragraph is still found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadingHint {
+    pub title: String,
+    /// 1 for a top-level bookmark, 2 for its children, and so on.
+    pub level: i32,
+}
+
 /// One element in reading order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Element {
@@ -702,6 +715,84 @@ struct LogicalLine {
     rotated: bool,
 }
 
+/// The words of a heading, with case, spacing and punctuation removed.
+///
+/// PDF extraction inserts spaces from glyph placement and small-caps headings
+/// arrive as `B ACKGROUND`, so only the letters and digits are compared.
+fn outline_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Find an outline title at the start or end of a paragraph and split it off.
+///
+/// Only whole lines take part: a title that ends in the middle of a line cannot
+/// be given the heading's own box without guessing at where the glyphs stop, so
+/// it is left in the paragraph. A title that is the whole group forces the whole
+/// group to the outline's level.
+fn groups_with_outline<'a>(
+    groups: Vec<Vec<&'a LogicalLine>>,
+    hints: &mut Vec<HeadingHint>,
+) -> Vec<(Vec<&'a LogicalLine>, Option<i32>)> {
+    let mut out = Vec::new();
+    for group in groups {
+        match outline_split(&group, hints) {
+            Some((0, end, level)) if end < group.len() => {
+                out.push((group[..end].to_vec(), Some(level)));
+                out.push((group[end..].to_vec(), None));
+            }
+            Some((start, end, level)) if start > 0 && end == group.len() => {
+                out.push((group[..start].to_vec(), None));
+                out.push((group[start..].to_vec(), Some(level)));
+            }
+            Some((_, _, level)) => out.push((group, Some(level))),
+            None => out.push((group, None)),
+        }
+    }
+    out
+}
+
+/// The split an unused outline title makes in `group`, as `(start, end, level)`.
+fn outline_split(
+    group: &[&LogicalLine],
+    hints: &mut Vec<HeadingHint>,
+) -> Option<(usize, usize, i32)> {
+    for index in 0..hints.len() {
+        let key = outline_key(&hints[index].title);
+        // A one- or two-letter title matches too much prose to be a signal.
+        if key.chars().count() < 4 {
+            continue;
+        }
+
+        let mut acc = String::new();
+        for (line, logical) in group.iter().enumerate() {
+            acc.push_str(&outline_key(&logical.text));
+            if acc == key {
+                let level = hints.remove(index).level;
+                return Some((0, line + 1, level));
+            }
+            if !key.starts_with(&acc) {
+                break;
+            }
+        }
+
+        let mut acc = String::new();
+        for (line, logical) in group.iter().enumerate().rev() {
+            acc = outline_key(&logical.text) + &acc;
+            if acc == key {
+                let level = hints.remove(index).level;
+                return Some((line, group.len(), level));
+            }
+            if !key.ends_with(&acc) {
+                break;
+            }
+        }
+    }
+    None
+}
+
 /// Group a leaf's runs into paragraphs, then label them.
 ///
 /// `page_no`, `page_max` and `page_height` decide whether a block may be the
@@ -713,6 +804,7 @@ fn paragraphs_in(
     page_max: f64,
     page_size: [f64; 2],
     title_taken: &mut bool,
+    hints: &mut Vec<HeadingHint>,
 ) -> Vec<Element> {
     if runs.is_empty() {
         return Vec::new();
@@ -786,8 +878,9 @@ fn paragraphs_in(
         }
     }
 
+    let groups = groups_with_outline(groups, hints);
     let mut out = Vec::new();
-    for group in groups {
+    for (group, forced_level) in groups {
         let bbox = union_bbox(group.iter().map(|l| l.bbox));
         let page_height = page_size[1];
         let font_size = group.iter().map(|l| l.font_size).fold(0.0_f64, f64::max);
@@ -834,6 +927,8 @@ fn paragraphs_in(
             } else {
                 "section_header"
             }
+        } else if forced_level.is_some() {
+            "section_header"
         } else if starts_with_word(
             &text,
             &["figure", "fig.", "table", "tab.", "listing", "algorithm"],
@@ -851,7 +946,8 @@ fn paragraphs_in(
             "paragraph"
         };
 
-        let level = (label == "section_header").then(|| heading_level(marker.as_deref()));
+        let level = (label == "section_header")
+            .then(|| forced_level.unwrap_or_else(|| heading_level(marker.as_deref())));
         // A heading's numbering is structure, its bullet is not: keep the marker
         // only where it genuinely labels the item.
         let marker = match label {
@@ -911,6 +1007,27 @@ pub fn analyze_page(
     rules: &[[f64; 4]],
     page_no: i32,
 ) -> Vec<Element> {
+    analyze_page_with_headings(spans, page_size, pictures, rules, page_no, &[])
+}
+
+/// Analyse one page with the headings its outline names.
+///
+/// A hint is matched against a paragraph's lines at a line boundary, so a
+/// bookmark whose title the page set as its own line is recovered even when the
+/// line was grouped with the paragraph after it. A paragraph that begins or ends
+/// with the title is split there; the heading half is labelled `section_header`
+/// with the outline's depth, and the other half is labelled as it would have
+/// been. Every hint is used once, so two sections with the same title do not
+/// both claim the first one.
+pub fn analyze_page_with_headings(
+    spans: &[Span],
+    page_size: [f64; 2],
+    pictures: &[[f64; 4]],
+    rules: &[[f64; 4]],
+    page_no: i32,
+    headings: &[HeadingHint],
+) -> Vec<Element> {
+    let mut hints: Vec<HeadingHint> = headings.to_vec();
     let rows = to_rows(spans);
     if rows.is_empty() {
         return pictures
@@ -1048,6 +1165,7 @@ pub fn analyze_page(
                         page_max,
                         page_size,
                         &mut title_taken,
+                        &mut hints,
                     ));
                     pending.clear();
                     out.push(Element::Table {
@@ -1067,6 +1185,7 @@ pub fn analyze_page(
                         page_max,
                         page_size,
                         &mut title_taken,
+                        &mut hints,
                     ));
                     pending.clear();
                     for row in note_rows {
@@ -1078,6 +1197,7 @@ pub fn analyze_page(
                             page_max,
                             page_size,
                             &mut title_taken,
+                            &mut hints,
                         ));
                     }
                 }
@@ -1090,6 +1210,7 @@ pub fn analyze_page(
             page_max,
             page_size,
             &mut title_taken,
+            &mut hints,
         ));
     }
 

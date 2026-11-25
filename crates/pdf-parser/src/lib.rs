@@ -12,7 +12,7 @@ pub mod parser;
 
 pub use content::{ContentParser, TextSpan};
 pub use images::PageImage;
-pub use parser::{ExtractedPage, PageLink, PdfDocument, PlacedImage};
+pub use parser::{ExtractedPage, OutlineEntry, PageLink, PdfDocument, PlacedImage};
 
 #[derive(Debug, Default)]
 pub struct PdfParser {}

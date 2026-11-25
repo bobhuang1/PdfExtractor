@@ -1,0 +1,70 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /Names << /Dests 11 0 R >> /PageMode /UseOutlines >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+5 0 obj
+<< /Length 1097 >>
+stream
+BT
+/F1 10 Tf 1 0 0 1 72 680 Tm (1. Introduction) Tj
+/F1 10 Tf 1 0 0 1 72 662 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 648 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 620 Tm (I. Scope) Tj
+/F1 10 Tf 1 0 0 1 72 602 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 584 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 556 Tm (2. Method) Tj
+/F1 10 Tf 1 0 0 1 72 538 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 524 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 496 Tm (II. Details) Tj
+/F1 10 Tf 1 0 0 1 72 478 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+/F1 10 Tf 1 0 0 1 72 464 Tm (This body line is long enough to read as a full paragraph line in this fixture. ) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Outlines /First 7 0 R /Last 9 0 R /Count 4 >>
+endobj
+7 0 obj
+<< /Title (1. Introduction) /Parent 6 0 R /First 8 0 R /Last 8 0 R /Count 1 /Next 9 0 R /Dest [3 0 R /XYZ 0 680 0] >>
+endobj
+8 0 obj
+<< /Title (I. Scope) /Parent 7 0 R /Dest (scope) >>
+endobj
+9 0 obj
+<< /Title (2. Method) /Parent 6 0 R /Prev 7 0 R /First 10 0 R /Last 10 0 R /Count 1 /Dest [3 0 R /XYZ 0 556 0] >>
+endobj
+10 0 obj
+<< /Title (II. Details) /Parent 9 0 R /Dest (details) >>
+endobj
+11 0 obj
+<< /Names [(scope) [3 0 R /XYZ 0 620 0] (details) [3 0 R /XYZ 0 496 0]] >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000130 00000 n 
+0000000187 00000 n 
+0000000313 00000 n 
+0000000381 00000 n 
+0000001529 00000 n 
+0000001600 00000 n 
+0000001733 00000 n 
+0000001800 00000 n 
+0000001929 00000 n 
+0000002002 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+2093
+%%EOF
