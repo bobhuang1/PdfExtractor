@@ -225,15 +225,20 @@ impl DocxDocument {
             .map_err(|e| anyhow::anyhow!("not a DOCX (ZIP) package: {e}"))?;
         budget.check_zip(archive.archive_mut())?;
 
+        // Every part this reading wants is found from one walk of the directory:
+        // the names are already in memory, so the four scans that follow read
+        // the list rather than asking the archive again.
+        let entries = archive.entries();
+
         // Snapshot every media part up front. Holding the archive open while the
         // extractor walks the XML would tangle the mutable borrows for no gain.
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
-        for (name, _) in archive.entries() {
+        for (name, _) in &entries {
             if !name.starts_with("word/media/") {
                 continue;
             }
-            if let Some(buf) = archive.read_name(&name) {
-                media.insert(name, buf);
+            if let Some(buf) = archive.read_name(name) {
+                media.insert(name.clone(), buf);
             }
         }
 
@@ -241,22 +246,21 @@ impl DocxDocument {
         // part is the only place the words are written down. Docling reports
         // them, and dropping them loses text a reader sees (bug 46).
         let mut charts: HashMap<String, Vec<u8>> = HashMap::new();
-        for (name, _) in archive.entries() {
+        for (name, _) in &entries {
             if !name.starts_with("word/charts/") || !name.ends_with(".xml") {
                 continue;
             }
-            if let Some(buf) = archive.read_name(&name) {
-                charts.insert(name, buf);
+            if let Some(buf) = archive.read_name(name) {
+                charts.insert(name.clone(), buf);
             }
         }
 
         // A DrawingML shape's colours are the package's theme — a shape's fill
         // is usually `a:fillRef`/`a:schemeClr`, not a literal colour — so the
         // theme part is read once and resolved by every drawing in the package.
-        let theme = archive
-            .entries()
-            .into_iter()
-            .map(|(name, _)| name)
+        let theme = entries
+            .iter()
+            .map(|(name, _)| name.clone())
             .filter(|name| name.starts_with("word/theme/") && name.ends_with(".xml"))
             .min()
             .and_then(|name| read_part(&mut archive, &name))
@@ -277,10 +281,9 @@ impl DocxDocument {
         doc.items = extractor.items;
         // Headers and footers live in their own parts; report them as furniture
         // rather than dropping their text and images on the floor.
-        let mut part_names: Vec<String> = archive
-            .entries()
-            .into_iter()
-            .map(|(name, _)| name)
+        let mut part_names: Vec<String> = entries
+            .iter()
+            .map(|(name, _)| name.clone())
             .filter(|n| {
                 (n.starts_with("word/header") || n.starts_with("word/footer"))
                     && n.ends_with(".xml")
