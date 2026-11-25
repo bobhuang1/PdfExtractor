@@ -549,3 +549,24 @@ and two repository gates were already red.
   `--all-targets --no-default-features` green (the test-only paths still compile),
   the default build green (the single-hop forward works), `cli_test` 140 passed —
   unchanged — and `documentation_test` 4 passed. The workspace listing stays 1,360.
+
+### 2026-11-25 — the corpus ratchet's outline-round delta accepted, with the argument
+
+- **What moved.** The outline round changed two corpus documents. `math_batchnorm`:
+  `4.2.1 Accelerating BN Networks` is split off the paragraph it was glued to (the
+  reference holds it as its own `section_header`). `math_seq2seq`: nine paragraphs the
+  document's own outline names become `section_header`, and `B.1 PARAMETER
+  INITIALIZATION` is split off the line of arrows that follows it.
+- **Why the counters moved.** Both splits are what the reference does. `math_batchnorm`
+  ends with 2 fewer rows, one more `same`, 2 fewer `oursOnly`, 3 fewer `theirsOnly` and
+  3 more `differs` — the `differs` are a pairing shift on page 6, where both readings
+  garble the same two columns, so items that were one-sided now pair. `math_seq2seq`
+  gains one `oursOnly`: the arrow line, a figure the reference carries no text for.
+- **Decision.** Accepted, not "fixed": the reading is closer to the reference in both
+  documents, no reference item was lost, and nothing was read differently — the split
+  itself is the whole delta. Rewriting it would mean undoing correct structure to hold
+  a counter. The baseline was regenerated with `CORPUS_BASELINE=update` and its `note`
+  records this argument, so the diff of `test-data/golden/compare-baseline.json` is the
+  record a reviewer reads beside the change.
+- **Checks.** `cargo test -p pdfextractor-ui --test corpus_report_test` green (11
+  passed) against the regenerated baseline; the diff touches those two documents only.

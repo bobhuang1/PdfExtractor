@@ -1,5 +1,5 @@
 {
-  "note": "The Compare mode's numbers per document, as measured by crates/ui/tests/corpus_report_test.rs over test-data/real with --ocr never. No document may get worse than this file: more `differs`, more `oursOnly`/`theirsOnly`, a lower `agreement`, fewer of the reference's placed items, or a form line placed as more rows (or drawn as more page pictures) for the same items fails the test. Regenerate deliberately with CORPUS_BASELINE=update and let the diff of this file be the argument. See test-data/golden/README.md.",
+  "note": "The Compare mode's numbers per document, as measured by crates/ui/tests/corpus_report_test.rs over test-data/real with --ocr never. No document may get worse than this file: more `differs`, more `oursOnly`/`theirsOnly`, a lower `agreement`, fewer of the reference's placed items, or a form line placed as more rows (or drawn as more page pictures) for the same items fails the test. Regenerate deliberately with CORPUS_BASELINE=update and let the diff of this file be the argument. See test-data/golden/README.md. Accepted 2026-11-25 for the outline round, deliberately: that round splits a heading off the paragraph it was glued to and labels the headings the document's own outline names. math_batchnorm then holds 2 fewer rows, one more `same`, 2 fewer `oursOnly` and 3 fewer `theirsOnly`, and 3 more `differs` from a pairing shift on page 6, where both readings garble two columns; math_seq2seq holds one more `oursOnly`, a figure's arrow line split off the B.1 heading and carried by no reference item. No reference item was lost, and every change is the split itself, not words read differently.",
   "measured": {
     "by": "crates/ui/tests/corpus_report_test.rs",
     "corpus": "test-data/real",
@@ -638,18 +638,18 @@
       "agreement": 1.0
     },
     "math_batchnorm": {
-      "rows": 278,
-      "same": 16,
+      "rows": 276,
+      "same": 17,
       "notation": 0,
-      "differs": 86,
-      "contained": 16,
-      "oursOnly": 88,
-      "theirsOnly": 72,
+      "differs": 89,
+      "contained": 15,
+      "oursOnly": 86,
+      "theirsOnly": 69,
       "placed": 0,
       "placedItems": 0,
       "placedBoxes": 0,
       "placedPagePictures": 0,
-      "joined": 14,
+      "joined": 15,
       "agreement": 0.9993454379873641
     },
     "math_gan": {
@@ -683,12 +683,12 @@
       "agreement": 0.9993201710902756
     },
     "math_seq2seq": {
-      "rows": 366,
+      "rows": 367,
       "same": 50,
       "notation": 0,
       "differs": 121,
       "contained": 51,
-      "oursOnly": 99,
+      "oursOnly": 100,
       "theirsOnly": 36,
       "placed": 9,
       "placedItems": 11,
