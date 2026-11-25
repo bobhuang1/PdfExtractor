@@ -116,6 +116,48 @@ the old plan that the code closes noted in progress.md.
 **Exit:** `cargo test -p pdfextractor-cli --test documentation_test` green (it holds
 the counts below to the suite).
 
+### WS8 — The conversion as a library (pipeline extraction)
+`crates/pipeline` (`pdfextractor-pipeline`) holds the conversion and nothing of the
+command line's interface: `build_document`/`build_document_with_format`, the reader
+dispatch they choose between, the worker OCR engine cache, picture extraction, the
+preview writer, `relabel` and the run's budgets. It takes `ConvertOptions` instead of
+clap's `Args`, so a caller converts a document without spawning the binary; the CLI
+keeps argument parsing, the input walk, the output writers, compare and redline, the
+extension gate and its refusals.
+
+**Why a crate and not a `[lib]` target in the CLI.** The one thing the extraction buys
+is a dependency graph an embedder can take: the pipeline excludes clap, rayon,
+`tracing-subscriber`, `pdfextractor-ui` (the gate and the comparison) and the two
+exporters. A library target inside `crates/cli` would drag all of them into any
+consumer, which is the cost the split exists to avoid. The window does not embed it — it
+spawns the binary and reads its `--progress` records — so the crate's value is the
+future embedder, and the plan should not pretend to more than that.
+
+**Phases.** Each phase ends on the same parity checks, so an unfinished phase is a red
+check rather than a judgment call. Nothing here restates the counts below; those are the
+suite's.
+
+| Phase | What it moves | Parity that must be green |
+|---|---|---|
+| P1 — the reading (landed in the working tree; the round note below records it) | `build_document`, `build_document_with_format`, the reader dispatch, the worker engine cache, pictures, preview, budgets, `relabel`; `ConvertOptions` replaces clap's `Args`; `crates/cli/src/preview.rs` moves in | `cli_test` unchanged and green — the file not moving is the proof, because it runs the built binary as a child and cannot see a new API; the conversion unit tests move beside the code rather than being rewritten; the CLI's extension and limit-refusal tests stay where they are |
+| P2 — the manifest trim | the reader crates the CLI no longer calls: `[dev-dependencies]` for the ones only `limits_matrix_test` uses (`pdf-parser`, `docx-parser`, `odt-parser`, `ods-parser`, `odp-parser`, `doc-parser`, `xlsx-parser`, `pptx-parser`, `text-parser`), and deletion for the ones nothing under `crates/cli` names (`chart`, `svg`, `layout`, `ocr-engine`) | the same `cli_test` run, plus `cargo check -p pdfextractor-cli --all-targets --no-default-features`: a binary that no longer links the readers must still convert every fixture, and the test-only paths must still compile |
+| P3 — a caller-chosen picture and preview location | `image_base: Option<&Path>` and `preview: Option<&Path>` on `ConvertOptions`; `output_path` stops being a required argument to the reading; `image_dir_for` moves back to the CLI as its naming helper | `cli_test`'s picture and `--preview` cases unchanged; the `-o -` note that names the folder still prints the same path; `md-exporter`'s existing `image_base` is the only base an export resolves a relative URI against |
+| P4 — a typed boundary and per-conversion limits | `PipelineError` at the two public entry points (`Limit(LimitError)`, `Encrypted`, `UnsupportedFormat`, `PageRange`, `OcrLangEmpty`, `Io`, `Other(anyhow::Error)`), with `anyhow` left inside the readers; `limits: Limits` on `ConvertOptions` in place of the `OnceLock` and `set_limits`; the flag-named refusals (`--ocr-lang`, `--psm`, `--page-range`) formatted in the CLI | the CLI's exit status `3` for a budget refusal still comes from matching the typed case; `is_limit_refusal` has one definition, in the CLI, and the public one is gone; two documents converted in one process with different ceilings each get their own |
+| Not in this workstream | exporters (`md-exporter`, `json-exporter`), compare/redline/gate (`pdfextractor_ui`), `--progress`, cancellation, publishing the crate | each already has a home, so moving it would duplicate a library that exists; cancellation has no design to extract, and a phase for it would be an API invention rather than a move |
+
+**Parity checks, every phase.** `cargo test -p pdfextractor-cli --test cli_test`;
+`cargo test -p pdfextractor-cli --test documentation_test` (this section's crate count is
+one of the numbers that test holds, so a new member and this sentence move together);
+`cargo build -p pdfextractor-cli --no-default-features` (the `ocr` feature is forwarded
+twice — to the engine and to the pipeline — and a broken forward is only visible in that
+build); `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo fmt
+--all --check`.
+
+**Order.** P2 first: it is the cheapest, and it is what makes the dependency cut real
+rather than nominal. P3 and P4 are independent of each other and each is smaller than
+two of the per-file phases a horizontal plan would have produced, which is why the
+workstream is four phases and not eight.
+
 ## Suite facts (held by `documentation_test`)
 
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
@@ -157,12 +199,12 @@ than on a push.
 |---|---|
 | `quick-xml` 0.36.2 → 0.42.0, in the workspace and in `fuzz/` | the version `plist`/`tauri` already resolved, so the tree keeps one copy. The reader moved: `QName` is converted at the byte boundary, `normalized_value(XmlVersion::Implicit1_0)` replaces the deprecated `unescape_value`, text and CDATA arrive raw, and a reference is its own `Event::GeneralRef` (handled at every reader through the shared `limits::push_reference`). |
 | Text and CDATA read with `xml_content(XmlVersion::Implicit1_0)` at 17 sites | restores XML 1.0's EOL normalization (CRLF and a lone CR are one LF), which reading the event bytes directly had dropped. |
-| `test-data/crlf_text.docx`, `make_crlf_text_docx.py`, and the docx test `crlf_in_text_and_cdata_is_normalized_to_lf` | pins it: CRLF, a bare CR and an LF inside a `<w:t>` and inside a CDATA section. The test fails with the `as_ref()` reading (checked by reverting it), so a later simplification cannot pass silently. |
-| `unsafe_code = "forbid"` in `[workspace.lints.rust]`, with `[lints] workspace = true` in all 24 members | a new parser cannot bring `unsafe` in quietly; no dependency was added. |
-| `rust-toolchain.toml` pins 1.99.0 (clippy, rustfmt); README states the 1.92 minimum | one rustc for the suite, CI and a release. Both release jobs name 1.99.0 explicitly, because the toolchain action has no per-version tag. |
+| `test-data/crlf_text.docx`, `test-data/make_crlf_text_docx.py`, and the docx test `crlf_in_text_and_cdata_is_normalized_to_lf` | pins it: CRLF, a bare CR and an LF inside a `<w:t>` and inside a CDATA section. The test fails with the `as_ref()` reading (checked by reverting it), so a later simplification cannot pass silently. |
+| `unsafe_code = "forbid"` in `[workspace.lints.rust]`, with `[lints] workspace = true` in every member (24 then, 25 once `crates/pipeline` joined) | a new parser cannot bring `unsafe` in quietly; no dependency was added. |
+| `rust-toolchain.toml` pins 1.99.0 (clippy, rustfmt); README states the 1.92 minimum | one rustc for the suite, CI and a release. Every job that runs `cargo` installs the pin in a step of its own — `dtolnay/rust-toolchain`, since its automatic install is deprecated — rather than leaving rustup to fetch it. The gates name 1.99.0 on the action's `toolchain` input; fmt and both release legs read the channel out of `rust-toolchain.toml` and pass it to the action, so a bumped pin cannot leave the formatter or a release on the old toolchain while the file stays the one place the version is written. Fuzz stays on nightly through `cargo +nightly`, which never resolves the pin. |
 | `.github/workflows/deny.yml` and `deny.toml` | weekly (Mondays, 05:23 UTC) and by hand: `cargo deny check advisories bans licenses` over the `all-features` graph, with the advisory database cached. |
-| `.github/workflows/fuzz.yml` | weekly (Mondays, 04:43 UTC) and by hand: six targets, a `seconds` bound of 1–600, the corpus seeded and cached, findings uploaded. The 90-minute job timeout covers 6 × 600 s plus the build, and a failing target no longer skips the rest: the step runs every target, then fails. |
-| `zip` 2.4.2 → 9.8.2 (`default-features = false, features = ["deflate"]`) and `cookie` 0.18.2 → 0.18.3 | the six zip advisories are all extraction paths — `extract()`, `ZipStreamReader`, symlink targets, WinZip AES — that this workspace never calls; upgrading clears them without putting a vulnerability in `deny.toml`, and narrowing the features drops the unused bzip2/LZMA/XZ/Zstd/PPMd/Deflate64 decoders, their licence and the AES path. `ZipFile::name()` is fallible now, so an undecodable entry name skips that entry (the package gate reports it as `LimitError::Zip`). `cookie` clears `RUSTSEC-2026-0594`. |
+| `.github/workflows/fuzz.yml` | weekly (Mondays, 04:43 UTC) and by hand: seven targets, a `seconds` bound of 1–600, the corpus seeded and cached, findings uploaded for 30 days. The 110-minute job timeout covers 7 × 600 s plus the build, the seeding and the upload, and a failing target no longer skips the rest: the step runs every target, then fails. README's CI prose and `fuzz/README.md` state these figures, including the 30-day retention. |
+| `zip` 2.4.2 → 9.8.2 (`default-features = false, features = ["deflate"]`) and `cookie` 0.18.2 → 0.18.3 | the eight advisories the database lists for `zip` are all in paths this workspace never reaches — `extract()`, `ZipStreamReader`, symlink targets, WinZip AES, the legacy Shrink/Reduce/Implode decoders — and 9.8.2 is above every patched floor they state; upgrading clears them without an ignore in `deny.toml`, and the deflate-only build leaves those paths out of the binary at all. `ZipFile::name()` is fallible now, so an undecodable entry name skips that entry (the package gate reports it as `LimitError::Zip`). `cookie` 0.18.3 clears the advisory the first gate run reported for it. |
 
 `deny.toml` lists no vulnerability: its only ignore remains the unmaintained
 `chrono` (`RUSTSEC-2026-0543`), and the check ends `advisories ok, bans ok,
@@ -175,14 +217,67 @@ pptx, odp, ods, odt and metafile suites green; `cli_test` 137 passed;
 bans licenses` green. The full workspace suite was not re-run, and no workflow was
 dispatched.
 
+## Outline heading round — 2026-11-24
+
+- **Measured first.** Across the nine corpus PDFs, six carry outlines: 89 entries.
+  67 already agreed with a `section_header` (62 on the same page, 66 at the
+  outline's depth); 15 more sat inside a paragraph block the font heuristic had
+  not split; 7 were not in the extracted text at all. The unnamed destinations
+  were the reason the first implementation saw nothing on five of the six: the
+  parser now reads `/Dests` and `/Names /Dests`, not only inline page arrays.
+- **Implementation.** `PdfDocument::outline()` reads titles, nesting and direct
+  or named destinations; layout takes per-page `HeadingHint`s, matches them on
+  letters and digits at a line boundary, splits a heading off a merged paragraph
+  and sets its level from the bookmark depth. The old heuristics remain for
+  documents with no outline.
+- **On the corpus.** Headings 158 -> 167: seq2seq's appendix `A.1`-`B.2`
+  recovered at levels 2/3, and one batch-normalization heading no longer carries
+  its following body line. No heading changed on the four outline-less PDFs.
+- **Pinned.** `test-data/outline_headings.pdf` (generated by
+  `make_outline_headings.py`) has four 10 pt headings that only the outline
+  names, nested one level; `test-data/golden/markdown/outline_headings.md` pins
+  the `##`/`###` hierarchy.
+
+## OCR engine reuse round — 2026-11-24
+
+- **Benchmark first.** A small std-clock bench (`engine_cost`, no framework) on a
+  real scan measured engine construction at **173–176 ms** against **~460–475 ms**
+  for one page (20 iterations, release, Linux x86-64). A document that built its
+  own engine therefore spent about a quarter of its OCR time on construction.
+- **Reuse.** A thread-local engine per Rayon worker now outlives one document and
+  is lent to the next; language and page-segmentation mode are part of the slot,
+  so a changed setting rebuilds it. A non-OCR document does not start Tesseract.
+- **After.** Ten documents through one engine vs ten fresh builds: **667 ms ->
+  468 ms median per document (-29.8%)** in the final bench run; earlier runs of
+  the same bench measured 593 -> 503 ms and 606 -> 485 ms, so the range is about
+  -15% to -30% on this machine. End-to-end debug batch of 16 scans on 4 workers:
+  **~37.0 s -> ~35.9 s** (two runs each), with byte-identical output.
+
+## Pipeline extraction round — 2026-11-24
+
+- **Started with `build_document`.** The conversion code now lives in
+  `pdfextractor-pipeline`: `build_document`/`build_document_with_format` and the
+  readers they dispatch to, OCR engine cache, picture extraction, preview
+  writer, budgets and `relabel`. The crate takes `ConvertOptions` instead of
+  clap's `Args`, so a caller converts a file without spawning the binary.
+- **What stayed.** Argument parsing, input walking, output writers, compare and
+  redline, the extension gate and its user-facing refusals. That gate calls the
+  library only after the name is accepted, so its messages are unchanged.
+- **Parity.** `crates/cli/tests/cli_test.rs` is untouched and runs against the
+  binary built on the pipeline. The conversion unit tests moved beside the code
+  to the new crate; the CLI keeps its extension and limit-error tests.
+- **What remains.** WS8 above holds the phases still to land (manifest trim,
+  caller-chosen picture and preview location, typed boundary and per-conversion
+  limits) and the checks each one ends on.
+
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing the branch.** `main` is `origin/main` plus eleven local commits —
-  `f593eac` (budget flags and the derived-limits fuzz target), `1fdb79d` (the
-  merge), `b59e0e3` (the review's hardening), the security and budget round
-  (`4e635b5`), then three handler rounds (`2ae779a`, `ef205eb`, `94319fa`), the
-  `/Encrypt`-in-a-stream round and the review round of 2026-11-22 — and nothing
-  here pushes without the owner asking.
+- **Pushing the branch.** `main` is `origin/main` plus twenty local commits, from
+  `f593eac` (budget flags and the derived-limits fuzz target), `1fdb79d` (the merge)
+  and `b59e0e3` (the review's hardening) through the security and budget round, the
+  three handler rounds, the `/Encrypt` rounds and the review, dependency, outline,
+  OCR and pipeline rounds recorded above — and nothing here pushes without the owner
+  asking.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.
@@ -196,8 +291,8 @@ Linux OCR floors, or ML; the old plan's text for each is in
 
 - OCR: deskew/despeckle preprocessing; full-page OCR
   of vector-only pages (rasteriser); non-English and fax fixtures.
-- PDF: outlines as a heading signal; table cells and spans; heuristic formula
-  regions; a rotation angle on boxes; captions as furniture.
+- PDF: table cells and spans; heuristic formula regions; a rotation angle on
+  boxes; captions as furniture.
 - Formats: EPUB and e-mail; `.doc` character formatting without LibreOffice; DOCX
   page geometry; slide transitions.
 - GPU (Phase 9), a custom OCR engine, a service mode, model-based layout.

@@ -46,16 +46,29 @@ jobs:
       - uses: actions/checkout@v4
 
       # rustfmt is a toolchain component rather than a crate; the pinned toolchain
-      # with it added is the whole of this job's setup. The pin is installed
-      # rather than left to rustup: `rust-toolchain.toml` names 1.99.0, and
-      # rustup's automatic install of a toolchain it is missing is deprecated —
-      # a future rustup would end this job instead of fetching it. `@stable` is
-      # the action's own ref; the `toolchain` input is the pin. (The runner image
-      # still floats: rustfmt compiles nothing, so a new image changes no reading.)
+      # with it added is the whole of this job's setup. The version is read from
+      # `rust-toolchain.toml` rather than repeated here, so the rustfmt that judges
+      # the tree is the one that builds it even after a bump — and it is installed
+      # explicitly, because rustup's automatic install of a missing toolchain is
+      # deprecated, and a future rustup would end this job instead of fetching it.
+      # `@stable` is the action's own ref; the `toolchain` input is the pin. (The
+      # runner image still floats: rustfmt compiles nothing, so a new image changes
+      # no reading.)
+      - name: The channel `rust-toolchain.toml` pins
+        id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\([^"]*\)"/\1/p' rust-toolchain.toml)
+          if [ -z "$channel" ]; then
+            echo "rust-toolchain.toml names no channel" >&2
+            exit 1
+          fi
+          echo "formatting with $channel, the channel rust-toolchain.toml pins"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: The pinned toolchain, with rustfmt
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.99.0
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt
 
       - name: rustfmt, with drift refused

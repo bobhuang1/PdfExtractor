@@ -15,14 +15,26 @@ all-features = true
 # it is waiting, so a new one still fails the gate. No vulnerability is listed:
 # a vulnerable crate fails the gate until it is upgraded.
 #
-# The six zip extraction advisories are absent for that reason, not by oversight.
-# They are all extraction paths — `extract()`, `ZipStreamReader`, symlink targets,
-# WinZip AES — and the graph is on zip 9 with `default-features = false, features =
-# ["deflate"]`, which clears them (the features drop the bzip2/LZMA/XZ/Zstd/PPMd/
-# Deflate64 decoders and the AES path as well). The readers never call an extraction
-# path at any version: they list entries and read the one they ask for out of a
-# package they hold in memory (`ZipArchive::by_name`/`by_index`). An ignore here
-# would silence a fix the tree already has.
+# The zip advisories are absent for the same reason, and are named here rather than
+# listed as ignores: the graph is already above every patched floor the database
+# states for them, so an entry would name an advisory that does not match the tree —
+# cargo-deny reports an ignore it never met, and the entry would silence a real hit
+# if the dependency ever moved back.
+#
+#   RUSTSEC-2026-0367  extraction keeps SUID/SGID bits              patch >= 9.0.0
+#   RUSTSEC-2026-0368  extract() writes symlinks outside the root   patch >= 9.0.0
+#   RUSTSEC-2026-0369  extract() applies modes through symlinks     patch >= 9.0.0
+#   RUSTSEC-2026-0546  extract() follows absolute symlink targets   patch >= 9.0.0
+#   RUSTSEC-2026-0548  ZipStreamReader trusts local-header names    patch >= 9.0.5
+#   RUSTSEC-2026-0545  AES entry skips its authentication code      AES not built here
+#   RUSTSEC-2026-0547  legacy decoders trust the declared size      not built here
+#   RUSTSEC-2025-0168  extraction canonicalizes paths wrongly       patch >= 2.3.0
+#
+# Two reasons beyond the versions: no reader calls an extraction path at any
+# version — they list entries and read the one they ask for out of a package they
+# hold in memory (`ZipArchive::by_name`/`by_index`) — and the build compiles only
+# `deflate` (`default-features = false`), which leaves out the AES authenticator and
+# the legacy Shrink/Reduce/Implode decoders that two of the entries above name.
 ignore = [
     # chrono is unmaintained (not vulnerable), and no release replaces it yet.
     # The xlsx reader's date parsing is the only use; moving it to a maintained

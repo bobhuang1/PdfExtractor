@@ -125,6 +125,11 @@ cargo test  --workspace      # the whole suite (`DOCLING_PY` or `DOCLING_SKIP_OR
 cargo clippy --workspace --all-targets -- -D warnings   # no warnings
 cargo fmt --all --check      # formatted as rustfmt reads it
 
+# OCR engine cost, measured rather than assumed: construction against one
+# page's recognition, then ten documents built fresh against ten read through
+# one worker engine. BENCH_ITERS overrides the iteration count (default 20).
+cargo bench -p pdfextractor-ocr-engine --bench engine_cost
+
 # The compatibility suite, held to real Docling. The schema layer always runs;
 # pointing DOCLING_PY at a Python with docling-core installed adds the layer that
 # loads every document with Docling's own model. Without it that layer fails
@@ -259,13 +264,16 @@ database from the cache, so the weekly run is an incremental fetch.
 
 `.github/workflows/fuzz.yml` runs every fuzz target briefly, also weekly (Mondays, 04:43 UTC)
 and by hand. A manual run takes a `seconds` bound — 60 by default, 1–600 — and each of the
-six targets gets that many seconds of libFuzzer after the corpus is seeded with the recipe in
+seven targets gets that many seconds of libFuzzer after the corpus is seeded with the recipe in
 [`fuzz/README.md`](fuzz/README.md) and the corpus and the fuzz build are restored from the
 cache; a value that is not a small whole number stops before anything is built. It is not a
 per-push gate for the same kind of reason: a bounded pass proves that the targets still build,
 still take their seeds, and that a short mutation run finds nothing immediate, and a longer
 one does not prove more than that. A finding — a crash, a hang, a refusal without a type — is
-written under `fuzz/artifacts/<target>/` and uploaded, so it survives the log it printed in.
+written under `fuzz/artifacts/<target>/` and uploaded as a run artifact kept for 30 days, so it
+survives the log it printed in. A target that fails does not skip the ones after it: the job
+runs the whole list, then fails, so every target still takes its seeds and every finding the
+run produced is kept.
 
 ### Compatibility with Docling
 
@@ -1314,12 +1322,16 @@ crates/
 │                  # by the run, the `--compare` gate and the corpus report alike
 ├── layout/        # rows/runs, XY-cut columns, reading order, labels, tables
 ├── ocr-engine/    # Tesseract OCR (required, default-on); TSV word/line boxes
+├── pipeline/      # build_document and its reading as a library: the conversion
+│                  # without the command line, so a tool can embed it
 ├── json-exporter/ # Docling JSON serialization
 ├── cli/           # command line interface over the parsers and the gate
 └── ui/            # Tauri window (static frontend in ui/dist) over the CLI
 test-data/
 ├── hello.pdf, compressed.pdf, scanned.pdf   # hand-made fixtures
 ├── hello_added_picture.pdf                  # hello.pdf plus a page with a picture
+├── outline_headings.pdf                     # four headings only the PDF outline names,
+│                                            #   nested one level (make_outline_headings.py)
 ├── inventory.xlsx                           # workbook fixture (make_inventory_xlsx.py)
 ├── worksheet_pictures.xlsx                  # workbook that draws pictures (make_pictures_xlsx.py)
 ├── shape_deck.pptx                          # shapes PowerPoint paints itself (make_shape_deck.py)

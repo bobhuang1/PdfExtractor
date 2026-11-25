@@ -387,7 +387,7 @@ and two repository gates were already red.
 ### 2026-11-23 — quick-xml 0.42, workspace lints and the scheduled gates
 
 - `quick-xml` 0.36.2 → 0.42.0 in the workspace and in `fuzz/`: `plist`/`tauri` already
-  resolved 0.42, so the tree keeps one copy. Ten reader files moved to the new API:
+  resolved 0.42, so the tree keeps one copy. The nine reader files that moved to the new API:
   `QName` converted at the byte boundary, `normalized_value(XmlVersion::Implicit1_0)` in
   place of the deprecated `unescape_value` (12 sites), text and CDATA raw, and
   `Event::GeneralRef` arms so a reference between two runs is still text — one shared
@@ -396,25 +396,26 @@ and two repository gates were already red.
 - EOL normalization restored: 17 text/CDATA sites read through
   `xml_content(XmlVersion::Implicit1_0)` (docx body and chart title, pptx, xlsx, odt,
   ods, odp, the ods chart and the chart reader). The fixture `test-data/crlf_text.docx`,
-  written by `make_crlf_text_docx.py`, carries CRLF, a bare CR and an LF in a `<w:t>` and
+  written by `test-data/make_crlf_text_docx.py`, carries CRLF, a bare CR and an LF in a `<w:t>` and
   CRLF/CR in a CDATA section; `crlf_in_text_and_cdata_is_normalized_to_lf` fails if the
   event bytes are read directly (verified by temporarily reverting the docx arms).
 - `unsafe_code = "forbid"` in `[workspace.lints.rust]`, every one of the 24 members opting
   in with `[lints] workspace = true`; neither `crates/` nor `fuzz/src` contains `unsafe`.
 - Toolchain: `rust-toolchain.toml` pins 1.99.0 (clippy, rustfmt), README states the 1.92
-  minimum and the 1.99.0 build, and both release jobs install 1.99.0 explicitly — the
+  minimum and the 1.99.0 build, and both release jobs install the pin explicitly — the
   toolchain action publishes no per-version tag, so the version goes to its `toolchain`
-  input.
+  input. Since 2026-11-25 the release legs and `fmt.yml` read the channel out of
+  `rust-toolchain.toml` instead of repeating it.
 - The dependency gate: `.github/workflows/deny.yml` (Mondays 05:23 UTC, dispatch,
   cargo-deny 0.22.0, advisory-db cache) with `deny.toml` (`all-features`, licence allow
-  list, duplicate versions and wildcards warn). Its first runs found six zip advisories
-  and one cookie advisory: `zip` is 9.8.2 with only `deflate` enabled and `cookie` is
+  list, duplicate versions and wildcards warn). Its first runs found the zip advisories
+  (eight ids, named by id in `deny.toml`) and one cookie advisory: `zip` is 9.8.2 with only `deflate` enabled and `cookie` is
   0.18.3, so the gate is green without an ignore list. `ZipFile::name()` being fallible is
   threaded through the limits crate and the readers (an undecodable name skips the entry;
   the package gate reports it as `LimitError::Zip`).
 - The fuzz smoke: `.github/workflows/fuzz.yml` (Mondays 04:43 UTC, dispatch, a `seconds`
-  bound of 1–600, six targets, corpus seeding and caches, findings uploaded for 30 days).
-  The timeout is 90 minutes so the 600 s maximum can finish, and a failing target no longer
+  bound of 1–600, seven targets, corpus seeding and caches, findings uploaded for 30 days).
+  The timeout is 110 minutes so the 600 s maximum can finish, and a failing target no longer
   skips the ones after it: the step collects the failures, runs the whole list, then fails.
 - Documentation: README's CI prose covers both gates and its `test-data` tree lists the CRLF
   fixture; `fuzz/README.md` gained *The scheduled smoke*; `plan.md`'s crate count (24) is
@@ -423,3 +424,105 @@ and two repository gates were already red.
   readers' suites green; `cli_test` 137 passed; `documentation_test` green with 1,320;
   `cargo deny check advisories bans licenses` green. The full workspace suite was not
   re-run, and no workflow was dispatched.
+- PDF outlines as a heading signal. Measured first: six of the nine corpus PDFs carry
+  outlines (89 entries); 67 already agreed with a `section_header`, 15 sat in an
+  unsplit paragraph, 7 were absent from the extracted text. `PdfDocument::outline()`
+  reads titles, nesting and both inline and named (`/Dests`, `/Names /Dests`)
+  destinations, which is what five of the six files use; layout takes per-page
+  `HeadingHint`s, matches on letters and digits at a line boundary, splits a heading
+  off a merged paragraph and sets its level from the bookmark depth. Corpus headings
+  158 -> 167 (seq2seq appendix `A.1`-`B.2` at levels 2/3; one batchnorm heading no
+  longer carries the body line that followed it), no change on the four outline-less
+  PDFs. Pinned by `test-data/outline_headings.pdf` (four 10 pt headings only the
+  outline names, direct and named destinations, nested one level;
+  `make_outline_headings.py`) and `test-data/golden/markdown/outline_headings.md`
+  (`##`/`###` hierarchy). `md_golden_test`, `tracked_fixtures_test`, layout tests,
+  clippy and fmt green.
+- OCR engine reuse, measured first. `crates/ocr-engine/benches/engine_cost.rs` (std
+  clock, `harness = false`, `cargo bench -p pdfextractor-ocr-engine --bench
+  engine_cost`) times construction and one-page recognition, then ten documents
+  with a fresh engine against ten through one. Release medians on `01_flat.png`:
+  construction 173-176 ms, one page 458-476 ms; fresh documents 593-667 ms,
+  worker engine 468-503 ms (-15% to -30% across runs). The CLI now keeps a
+  thread-local engine per Rayon worker, keyed by language and psm; PDF and image
+  readers borrow it instead of constructing one per document, and non-OCR formats
+  never start Tesseract. The file-size ceiling is still checked before `detect`
+  reads the input. End-to-end debug batch (16 scans, `-p 4`): ~37.0 s before,
+  ~35.9 s after, byte-identical output. Checks: `pdfextractor-ocr-engine` 5
+  passed, CLI `scan` 3, `image` 6, `ocr_languages` 1, bench run, clippy/fmt.
+
+### 2026-11-24 — pipeline extraction
+
+- **The conversion is a library.** `crates/pipeline` (`pdfextractor-pipeline`)
+  now holds `build_document`, `build_document_with_format`, every reader dispatch
+  and its helpers, the OCR worker cache, picture extraction, the preview writer,
+  `relabel` and the run's budgets (`limits`/`set_limits`). It takes
+  `ConvertOptions` instead of clap's `Args`, so an embedder converts without
+  spawning the binary.
+- **The CLI keeps its edges.** Argument parsing, the input walk, output writers,
+  compare/redline, the extension gate and its refusals stay in `main.rs`; the
+  gate calls the library after the name is accepted. `crates/cli/src/preview.rs`
+  moved into the crate.
+- **Checks.** `cli_test` unchanged: **140 passed, 0 failed** (the parity proof;
+  Works case skipped without `PDFE_WORKS_SAMPLES`). Pipeline unit tests **23
+  passed**, CLI binary unit tests **12 passed**, `documentation_test` **4 passed**
+  with the workspace count at 25; focused clippy `-D warnings` clean and
+  `cargo fmt --all --check` clean. The full workspace suite was not re-run.
+
+### 2026-11-25 — the toolchain in every gate, and the zip decision recorded
+
+- **Every cargo job installs the pin, and says which.** rustup's automatic install of
+  a missing toolchain is deprecated, so the pin is fetched by a step that either
+  succeeds or fails on its own line. Clippy, both test jobs, both compare-gate jobs,
+  bridge and deny name `toolchain: 1.99.0` (with `clippy`/`rustfmt` components where the
+  job uses them). `fmt.yml` and the two release legs read the channel out of
+  `rust-toolchain.toml`, pass it to the action's `toolchain` input and log it: the
+  install stays explicit, and a bumped pin cannot leave the formatter or a release on
+  the old one. `fmt.yml` had been installing floating stable that `rust-toolchain.toml`
+  then overrode. Fuzz stays on nightly (`@nightly`, `cargo +nightly`), which never
+  resolves the pin. No job, matrix leg or path filter was added; the install is the
+  cached one.
+- **The zip advisories are documented, not ignored.** `deny.toml` names them by id
+  with their patched floors; the zip entry below records the eight ids and why none can
+  apply. They are absent from `ignore` on purpose: an ignore cargo-deny never meets
+  would silence a real hit if the dependency moved back.
+- **The smoke, as it now stands.** Seven targets, a 110-minute job timeout so a manual
+  600 s maximum can finish, findings kept 30 days, and a failing target does not skip
+  the rest. README's CI prose was corrected to those numbers and `fuzz/README.md`
+  already matched.
+- **Checks.** `cargo deny check advisories bans licenses` green with `chrono` the only
+  ignore; `cargo test -p pdfextractor-cli --test cli_test` 140 passed; the zip-reading
+  crates' suites green; `documentation_test` green with the suite at 1,352 then (1,358
+  after the six CRLF tests added later) and the workspace at 25 crates; focused clippy
+  `-D warnings` and `cargo fmt --all --check` clean. The full workspace suite ran
+  separately at that point: 1,347 passed with the corpus ratchet's two heading-driven
+  regressions still open.
+
+### 2026-11-25 — zip 2.4.2 → 9.8.2
+
+- **One version, not two.** `zip` moved to 9.8.2 in the workspace and in `fuzz/`;
+  `cargo tree -d` reports no duplicate, so the readers and the fuzzer build the same
+  copy.
+- **Deflate only.** `default-features = false, features = ["deflate"]` leaves out the
+  bzip2/LZMA/XZ/Zstd/PPMd/Deflate64 decoders and the WinZip AES path — code none of
+  the readers calls, and their licences with it.
+- **A fallible entry name.** `ZipFile::name()` returns a `Result` in this release, so
+  an entry whose name cannot be decoded is skipped rather than panicking, and the
+  package gate reports the same condition as `LimitError::Zip`; every reader goes
+  through that one wrapper instead of repeating the rule.
+- **The weekly gate is green without an ignore.** The extraction advisories the first
+  `cargo deny` run found — `extract()`, `ZipStreamReader`, symlink targets, AES — are
+  all paths this workspace never calls, and 9.8.2 sits above every patched floor the
+  database states for them (the highest is `>= 9.0.5`). `deny.toml` names all eight ids
+  with those floors instead of ignoring them, and `cargo deny check advisories bans
+  licenses` ends `advisories ok, bans ok, licenses ok`.
+- **So no zip id sits in `ignore`, and none should be added.** An ignore is only right
+  for an advisory the tree actually matches; these no longer match, and cargo-deny
+  reports an ignore it never met, so one here would make the gate noise today and go
+  on silencing a real hit if `zip` ever moved back below a floor. The ids live in the
+  comment block beside `ignore` for that reason — read it before re-adding one.
+- **Checks.** The zip-reading crates (`docx`, `xlsx`, `odt`, `ods`, `odp`, `pptx`,
+  `metafile`, `limits`) green, and the full workspace suite ran to completion with the
+  oracle live: 1,351 passed then, the only failure the corpus ratchet's two
+  heading-driven regressions (the six CRLF tests added afterwards bring the workspace
+  listing to 1,358).
