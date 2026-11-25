@@ -30,5 +30,11 @@ tesseract = ["leptess"]
 # Used by the end-to-end OCR test to pull an embedded image out of a fixture.
 pdfextractor-pdf-parser = { path = "../pdf-parser" }
 
+# A hand-rolled benchmark rather than a framework: the suite must stay small,
+# and std's own clock covers two measured operations.
+[[bench]]
+name = "engine_cost"
+harness = false
+
 [lints]
 workspace = true
