@@ -141,7 +141,7 @@ suite's.
 |---|---|---|
 | P1 — the reading (landed in the working tree; the round note below records it) | `build_document`, `build_document_with_format`, the reader dispatch, the worker engine cache, pictures, preview, budgets, `relabel`; `ConvertOptions` replaces clap's `Args`; `crates/cli/src/preview.rs` moves in | `cli_test` unchanged and green — the file not moving is the proof, because it runs the built binary as a child and cannot see a new API; the conversion unit tests move beside the code rather than being rewritten; the CLI's extension and limit-refusal tests stay where they are |
 | P2 — the manifest trim (landed; the round note in `progress.md` records it) | the reader crates the CLI no longer calls: `[dev-dependencies]` for the ones only `limits_matrix_test` uses (`pdf-parser`, `docx-parser`, `odt-parser`, `ods-parser`, `odp-parser`, `doc-parser`, `xlsx-parser`, `pptx-parser`, `text-parser`), and deletion for the ones nothing under `crates/cli` names (`chart`, `svg`, `layout`, `ocr-engine`) | the same `cli_test` run, plus `cargo check -p pdfextractor-cli --all-targets --no-default-features`: a binary that no longer links the readers must still convert every fixture, and the test-only paths must still compile |
-| P3 — a caller-chosen picture and preview location | `image_base: Option<&Path>` and `preview: Option<&Path>` on `ConvertOptions`; `output_path` stops being a required argument to the reading; `image_dir_for` moves back to the CLI as its naming helper | `cli_test`'s picture and `--preview` cases unchanged; the `-o -` note that names the folder still prints the same path; `md-exporter`'s existing `image_base` is the only base an export resolves a relative URI against |
+| P3 — a caller-chosen picture and preview location (landed; the round note in `progress.md` records it) | `image_base: Option<&Path>` and `preview: Option<&Path>` on `ConvertOptions`; `output_path` stops being a required argument to the reading; `image_dir_for` moves back to the CLI as its naming helper | `cli_test`'s picture and `--preview` cases unchanged; the `-o -` note that names the folder still prints the same path; `md-exporter`'s existing `image_base` is the only base an export resolves a relative URI against |
 | P4 — a typed boundary and per-conversion limits | `PipelineError` at the two public entry points (`Limit(LimitError)`, `Encrypted`, `UnsupportedFormat`, `PageRange`, `OcrLangEmpty`, `Io`, `Other(anyhow::Error)`), with `anyhow` left inside the readers; `limits: Limits` on `ConvertOptions` in place of the `OnceLock` and `set_limits`; the flag-named refusals (`--ocr-lang`, `--psm`, `--page-range`) formatted in the CLI | the CLI's exit status `3` for a budget refusal still comes from matching the typed case; `is_limit_refusal` has one definition, in the CLI, and the public one is gone; two documents converted in one process with different ceilings each get their own |
 | Not in this workstream | exporters (`md-exporter`, `json-exporter`), compare/redline/gate (`pdfextractor_ui`), `--progress`, cancellation, publishing the crate | each already has a home, so moving it would duplicate a library that exists; cancellation has no design to extract, and a phase for it would be an API invention rather than a move |
 
@@ -268,9 +268,9 @@ dispatched.
 - **Parity.** `crates/cli/tests/cli_test.rs` is untouched and runs against the
   binary built on the pipeline. The conversion unit tests moved beside the code
   to the new crate; the CLI keeps its extension and limit-error tests.
-- **What remains.** WS8 above holds the phases still to land (caller-chosen
-  picture and preview location, typed boundary and per-conversion limits) and the
-  checks each one ends on.
+- **What remains.** WS8 above holds the one phase still to land (typed boundary
+  and per-conversion limits: P4) and the checks it ends on. P3 landed the
+  caller-chosen picture and preview location.
 
 ## Blocked — needs a decision only the owner can make
 

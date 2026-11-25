@@ -46,8 +46,17 @@ pub struct ConvertOptions<'a> {
     pub page_range: Option<&'a page_range::PageRange>,
     /// The password of an encrypted PDF.
     pub pdf_password: Option<&'a str>,
-    /// Write the HTML bounding-box preview beside the output.
-    pub preview: bool,
+    /// The directory this conversion writes its extracted pictures into, or
+    /// `None` to report a picture's place and facts without pixels on disk.
+    ///
+    /// The path is the folder itself, not the stem beside it: the caller names
+    /// the folder — the command line puts it beside the output, `<stem>_images`
+    /// — and a document's picture URIs name it from there.
+    pub image_base: Option<&'a Path>,
+    /// The output a preview is written beside, as `<stem>.preview.html`, or
+    /// `None` for no preview. The pages drawn behind its boxes go into a
+    /// `<stem>_pages` sibling.
+    pub preview: Option<&'a Path>,
     /// Resolution for the preview's page backdrop.
     pub preview_dpi: u32,
 }
@@ -60,7 +69,8 @@ impl Default for ConvertOptions<'_> {
             psm: None,
             page_range: None,
             pdf_password: None,
-            preview: false,
+            image_base: None,
+            preview: None,
             preview_dpi: 110,
         }
     }
@@ -112,32 +122,30 @@ pub fn is_limit_refusal(error: &anyhow::Error) -> bool {
 }
 
 /// Convert one file, deciding its format from its bytes.
-pub fn build_document(
-    path: &Path,
-    output_path: &Path,
-    options: &ConvertOptions<'_>,
-) -> Result<DoclingDocument> {
+///
+/// Where the conversion may write — the pictures' folder and the preview's
+/// output — is the options', so an embedder that wants none of it passes
+/// neither and still gets the document.
+pub fn build_document(path: &Path, options: &ConvertOptions<'_>) -> Result<DoclingDocument> {
     check_input_size(path)?;
     let detected = detect(path)?;
-    build_document_with_format(path, output_path, &detected, options)
+    build_document_with_format(path, &detected, options)
 }
 
 /// Convert one file whose format the caller has already decided.
 ///
 /// The command line sniffs once, refuses a name its gate does not accept, and
 /// then calls this; an embedder normally calls [`build_document`].
+///
+/// The output file itself is the caller's: this writes only the pictures and
+/// the preview its options name, so an output directory is created by whoever
+/// writes the document, not here.
 pub fn build_document_with_format(
     path: &Path,
-    output_path: &Path,
     detected: &Format,
     options: &ConvertOptions<'_>,
 ) -> Result<DoclingDocument> {
     check_input_size(path)?;
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
     let paginated = matches!(
         detected,
         Format::Pdf
@@ -164,10 +172,10 @@ pub fn build_document_with_format(
     if matches!(detected, Format::Pdf | Format::Image { .. }) {
         let langs = tesseract_langs(options.ocr_lang)?;
         with_worker_ocr_engine(options.ocr, &langs, options.psm, |engine| {
-            build_with_engine(path, output_path, detected, options, engine)
+            build_with_engine(path, detected, options, engine)
         })
     } else {
-        build_with_engine(path, output_path, detected, options, None)
+        build_with_engine(path, detected, options, None)
     }
 }
 
@@ -180,11 +188,11 @@ fn check_input_size(path: &Path) -> Result<()> {
 
 fn build_with_engine(
     path: &Path,
-    output_path: &Path,
     detected: &Format,
     options: &ConvertOptions<'_>,
     engine: Option<&mut OcrEngine>,
 ) -> Result<DoclingDocument> {
+    let image_base = options.image_base;
     let doc = match detected {
         Format::Pdf => convert_pdf(
             path,
@@ -193,57 +201,57 @@ fn build_with_engine(
                 range: options.page_range,
                 password: options.pdf_password,
             },
-            output_path,
+            image_base,
             options.preview,
             options.preview_dpi,
             engine,
         )?,
         Format::Docx => {
             note_flow_format(options.preview, path);
-            convert_docx(path, output_path)?
+            convert_docx(path, image_base)?
         }
         Format::Odt => {
             note_flow_format(options.preview, path);
-            convert_odt(path, output_path)?
+            convert_odt(path, image_base)?
         }
         Format::Ods => {
-            if options.preview {
+            if options.preview.is_some() {
                 tracing::info!(
                     "{}: the preview draws page images; a workbook has none, skipping",
                     path.display()
                 );
             }
-            convert_ods(path, output_path, options.page_range)?
+            convert_ods(path, image_base, options.page_range)?
         }
         Format::Odp => {
-            if options.preview {
+            if options.preview.is_some() {
                 tracing::info!(
                     "{}: the preview draws PDF page images; a presentation has none, skipping",
                     path.display()
                 );
             }
-            convert_odp(path, output_path, options.page_range)?
+            convert_odp(path, image_base, options.page_range)?
         }
         Format::Xlsx => {
-            if options.preview {
+            if options.preview.is_some() {
                 tracing::info!(
                     "{}: the preview draws page images; a workbook has none, skipping",
                     path.display()
                 );
             }
-            convert_xlsx(path, output_path, options.page_range)?
+            convert_xlsx(path, image_base, options.page_range)?
         }
         Format::Pptx => {
-            if options.preview {
+            if options.preview.is_some() {
                 tracing::info!(
                     "{}: the preview draws PDF page images; a presentation has none, skipping",
                     path.display()
                 );
             }
-            convert_pptx(path, output_path, options.page_range)?
+            convert_pptx(path, image_base, options.page_range)?
         }
         Format::Image { .. } => {
-            if options.preview {
+            if options.preview.is_some() {
                 tracing::info!(
                     "{}: the preview draws PDF page images; an image is its own page, skipping",
                     path.display()
@@ -264,7 +272,7 @@ fn build_with_engine(
                         "{}: a legacy Word document, read through LibreOffice as docx",
                         path.display()
                     );
-                    let doc = convert_docx(bridged.path(), output_path)?;
+                    let doc = convert_docx(bridged.path(), image_base)?;
                     relabel(doc, path, "application/msword")?
                 }
                 Err(error) => {
@@ -276,13 +284,13 @@ fn build_with_engine(
                         "{}: reading the legacy Word document with the built-in reader",
                         path.display()
                     );
-                    convert_doc(path, output_path)?
+                    convert_doc(path, image_base)?
                 }
             }
         }
         Format::Flow(flow) => {
             note_flow_format(options.preview, path);
-            convert_text(flow, path, output_path)?
+            convert_text(flow, path, image_base)?
         }
         Format::Bridge {
             target,
@@ -291,7 +299,7 @@ fn build_with_engine(
         } => {
             match target {
                 BridgeTarget::Pptx => {
-                    if options.preview {
+                    if options.preview.is_some() {
                         tracing::info!(
                             "{}: the preview draws PDF page images; a presentation has none, skipping",
                             path.display()
@@ -307,14 +315,10 @@ fn build_with_engine(
                 target.extension()
             );
             let doc = match target {
-                BridgeTarget::Docx => convert_docx(bridged.path(), output_path)?,
-                BridgeTarget::Xlsx => {
-                    convert_xlsx(bridged.path(), output_path, options.page_range)?
-                }
-                BridgeTarget::Csv => convert_text("csv", bridged.path(), output_path)?,
-                BridgeTarget::Pptx => {
-                    convert_pptx(bridged.path(), output_path, options.page_range)?
-                }
+                BridgeTarget::Docx => convert_docx(bridged.path(), image_base)?,
+                BridgeTarget::Xlsx => convert_xlsx(bridged.path(), image_base, options.page_range)?,
+                BridgeTarget::Csv => convert_text("csv", bridged.path(), image_base)?,
+                BridgeTarget::Pptx => convert_pptx(bridged.path(), image_base, options.page_range)?,
             };
             relabel(doc, path, mimetype)?
         }
@@ -376,22 +380,13 @@ fn relabel(
 
 /// Note once, when a preview was asked for, why a flow-based format has none:
 /// its blocks carry no page rectangle to draw a box on.
-fn note_flow_format(preview: bool, path: &Path) {
-    if preview {
+fn note_flow_format(preview: Option<&Path>, path: &Path) {
+    if preview.is_some() {
         tracing::info!(
             "{}: preview needs page geometry; this format is flow-based, skipping",
             path.display()
         );
     }
-}
-
-/// Directory holding a document's extracted images, sibling to its JSON.
-pub fn image_dir_for(output_path: &Path) -> PathBuf {
-    let stem = output_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("document");
-    output_path.with_file_name(format!("{stem}_images"))
 }
 
 /// Extension matching an image MIME type.
@@ -506,8 +501,8 @@ struct PdfReading<'a> {
 fn convert_pdf(
     path: &Path,
     reading: &PdfReading<'_>,
-    output_path: &Path,
-    want_preview: bool,
+    image_base: Option<&Path>,
+    preview: Option<&Path>,
     preview_dpi: u32,
     mut engine: Option<&mut OcrEngine>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
@@ -914,7 +909,7 @@ fn convert_pdf(
                             let name = format!("pg{}_{}", page.page_no, image_seq);
                             let uri = write_image(
                                 &mut image_dir,
-                                output_path,
+                                image_base,
                                 &name,
                                 placed.image.mime,
                                 &placed.image.data,
@@ -959,23 +954,28 @@ fn convert_pdf(
         }
     }
 
-    if want_preview && !overlay.is_empty() {
-        write_preview(&mut overlay, path, output_path, preview_dpi);
+    if let Some(preview) = preview {
+        if !overlay.is_empty() {
+            write_preview(&mut overlay, path, preview, preview_dpi);
+        }
     }
 
     Ok(builder.build())
 }
 
 /// Render page backdrops where possible, then write the overlay HTML.
-fn write_preview(overlay: &mut preview::Preview, pdf: &Path, output_path: &Path, dpi: u32) {
-    let dir = preview_dir_for(output_path);
+///
+/// `output` is the document's own output, the path the caller handed in; the
+/// overlay lands beside it as `<stem>.preview.html`, as it always has.
+fn write_preview(overlay: &mut preview::Preview, pdf: &Path, output: &Path, dpi: u32) {
+    let dir = preview_dir_for(output);
     let backdrops = preview::render_pages(pdf, &dir, &overlay.pages, dpi);
     for (page, backdrop) in overlay.pages.iter_mut().zip(backdrops) {
         page.backdrop = backdrop;
     }
 
-    let html_path = output_path.with_extension("preview.html");
-    let name = output_path
+    let html_path = output.with_extension("preview.html");
+    let name = output
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("document");
@@ -986,32 +986,33 @@ fn write_preview(overlay: &mut preview::Preview, pdf: &Path, output_path: &Path,
 }
 
 /// Directory holding a document's rendered page images, sibling to its JSON.
-fn preview_dir_for(output_path: &Path) -> PathBuf {
-    let stem = output_path
+fn preview_dir_for(output: &Path) -> PathBuf {
+    let stem = output
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("document");
-    output_path.with_file_name(format!("{stem}_pages"))
+    output.with_file_name(format!("{stem}_pages"))
 }
 
-/// Write an extracted image beside the JSON and return its relative URI.
+/// Write an extracted image into the folder the caller named and return its
+/// relative URI, or `None` when the caller named no folder.
 ///
-/// The directory is created on first use. A write failure is logged and the
+/// The folder is created on first use. A write failure is logged and the
 /// picture is still reported, just without pixels.
 fn write_image(
     dir: &mut Option<PathBuf>,
-    output_path: &Path,
+    image_base: Option<&Path>,
     name: &str,
     mime: &str,
     data: &[u8],
 ) -> Option<String> {
+    let base = image_base?;
     if dir.is_none() {
-        let path = image_dir_for(output_path);
-        if let Err(err) = std::fs::create_dir_all(&path) {
-            tracing::warn!("cannot create {}: {err}", path.display());
+        if let Err(err) = std::fs::create_dir_all(base) {
+            tracing::warn!("cannot create {}: {err}", base.display());
             return None;
         }
-        *dir = Some(path);
+        *dir = Some(base.to_path_buf());
     }
     let directory = dir.as_ref()?;
     let file_name = format!("{name}.{}", ext_for_mime(mime));
@@ -1088,15 +1089,17 @@ fn kept_picture_path(source: &str, mimetype: &str) -> Option<PathBuf> {
     Some(parts.iter().collect())
 }
 
-/// Write a picture to the relative path its page named, beside `output_path`.
+/// Write a picture to the relative path its page named, beside the folder the
+/// extraction writes its pictures into — which sits beside the document.
 ///
 /// The path is the page's own, so the page written from the document names the
 /// same file again; the answer is the reference in the form both writers use
 /// (forward slashes, relative to the document). A name with a space or a
 /// character needing an escape travels through this unchanged: the writers
 /// escape it where their own syntax asks them to.
-fn write_kept_image(output_path: &Path, relative: &Path, data: &[u8]) -> Option<String> {
-    let directory = output_path.parent()?;
+fn write_kept_image(image_base: Option<&Path>, relative: &Path, data: &[u8]) -> Option<String> {
+    // The document's own directory: the picture folder's parent.
+    let directory = image_base?.parent()?;
     let target = directory.join(relative);
     if let Some(parent) = target.parent() {
         if let Err(err) = std::fs::create_dir_all(parent) {
@@ -1122,7 +1125,7 @@ fn write_kept_image(output_path: &Path, relative: &Path, data: &[u8]) -> Option<
 /// Build a `DoclingDocument` from a DOCX file path.
 fn convert_docx(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
     let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes_with_limits(&data, budgets())?;
@@ -1154,7 +1157,7 @@ fn convert_docx(
         emit_docx_item(
             &mut builder,
             item,
-            output_path,
+            image_base,
             &mut image_dir,
             &mut image_seq,
         );
@@ -1166,7 +1169,7 @@ fn convert_docx(
         if let Some(reference) = emit_furniture_item(
             &mut builder,
             item,
-            output_path,
+            image_base,
             &mut image_dir,
             &mut image_seq,
         ) {
@@ -1184,7 +1187,7 @@ fn convert_docx(
 /// sits on a page a reader could point at, so the document publishes none.
 fn convert_odt(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
     let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes_with_limits(&data, budgets())?;
@@ -1209,7 +1212,7 @@ fn convert_odt(
         emit_odt_item(
             &mut builder,
             item,
-            output_path,
+            image_base,
             &mut image_dir,
             &mut image_seq,
         );
@@ -1222,7 +1225,7 @@ fn convert_odt(
 fn emit_odt_item(
     builder: &mut DocumentBuilder,
     item: &pdfextractor_odt_parser::OdtItem,
-    output_path: &Path,
+    image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
 ) {
@@ -1245,7 +1248,7 @@ fn emit_odt_item(
             );
         }
         OdtItem::Table(table) => {
-            let grid = odt_grid(table, output_path, image_dir, image_seq);
+            let grid = odt_grid(table, image_base, image_dir, image_seq);
             builder.add_table_grid(&grid);
         }
         OdtItem::Picture {
@@ -1257,7 +1260,7 @@ fn emit_odt_item(
             *image_seq += 1;
             let name = format!("pg1_{}", image_seq);
             let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
-            let image = write_image(image_dir, output_path, &name, mime, &data)
+            let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             builder.add_picture_plain("picture", image);
         }
@@ -1268,7 +1271,7 @@ fn emit_odt_item(
 /// placed at its row and column with the spans the document declares.
 fn odt_grid(
     table: &pdfextractor_odt_parser::OdtTable,
-    output_path: &Path,
+    image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
 ) -> GridTable {
@@ -1290,7 +1293,7 @@ fn odt_grid(
                         picture.width_pt,
                         picture.height_pt,
                     );
-                    write_image(image_dir, output_path, &name, mime, &data).map(|uri| {
+                    write_image(image_dir, image_base, &name, mime, &data).map(|uri| {
                         describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
                     })
                 })
@@ -1298,7 +1301,7 @@ fn odt_grid(
             let tables = cell
                 .tables
                 .iter()
-                .map(|nested| odt_grid(nested, output_path, image_dir, image_seq))
+                .map(|nested| odt_grid(nested, image_base, image_dir, image_seq))
                 .collect();
             cells.push(GridCell {
                 text: cell.text.clone(),
@@ -1323,7 +1326,7 @@ fn odt_grid(
 /// Build a `DoclingDocument` from an XLSX workbook.
 fn convert_xlsx(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
@@ -1333,7 +1336,7 @@ fn convert_xlsx(
         &parsed.annotations,
         &data,
         path,
-        output_path,
+        image_base,
         range,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -1346,7 +1349,7 @@ fn convert_xlsx(
 /// the `invisible` layer, and `--page-range` names sheets the same way.
 fn convert_ods(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
@@ -1356,7 +1359,7 @@ fn convert_ods(
         &parsed.annotations,
         &data,
         path,
-        output_path,
+        image_base,
         range,
         "application/vnd.oasis.opendocument.spreadsheet",
     )
@@ -1377,7 +1380,7 @@ fn convert_workbook(
     annotations: &[pdfextractor_xlsx_parser::SheetAnnotation],
     data: &[u8],
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
     mimetype: &str,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
@@ -1525,7 +1528,7 @@ fn convert_workbook(
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
                             &mut image_dir,
-                            output_path,
+                            image_base,
                             &format!("sheet{page_no}_{image_seq}"),
                             mime,
                             &data,
@@ -1729,7 +1732,7 @@ fn chart_table(chart: &pdfextractor_chart::ChartShape) -> Option<GridTable> {
 /// number is still the slide's number in the document.
 fn convert_pptx(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
@@ -1805,7 +1808,7 @@ fn convert_pptx(
             let image = image_dimensions(&data).and_then(|(width, height)| {
                 let uri = write_image(
                     &mut image_dir,
-                    output_path,
+                    image_base,
                     &format!("slide{page_no}_background"),
                     mime,
                     &data,
@@ -1929,7 +1932,7 @@ fn convert_pptx(
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
                             &mut image_dir,
-                            output_path,
+                            image_base,
                             &format!("slide{page_no}_{image_seq}"),
                             mime,
                             &data,
@@ -1977,7 +1980,7 @@ fn convert_pptx(
 /// number is still the slide's number in the document.
 fn convert_odp(
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
@@ -2125,7 +2128,7 @@ fn convert_odp(
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
                             &mut image_dir,
-                            output_path,
+                            image_base,
                             &format!("slide{page_no}_{image_seq}"),
                             mime,
                             &data,
@@ -2701,7 +2704,7 @@ fn convert_image(
 /// Build a `DoclingDocument` from a legacy `.doc` file path.
 fn convert_doc(
     path: &Path,
-    _output_path: &Path,
+    _image_base: Option<&Path>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
     let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes_with_limits(&data, budgets())?;
@@ -2757,7 +2760,7 @@ fn convert_doc(
 fn convert_text(
     ext: &str,
     path: &Path,
-    output_path: &Path,
+    image_base: Option<&Path>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let data = read_input(path)?;
     // A flow file is untrusted input like any other: the shared budgets bound
@@ -2949,12 +2952,12 @@ fn convert_text(
                     // cannot spell is written under a name of this run's, the
                     // way every other format's pictures are.
                     let uri = match kept_picture_path(source, picture.mimetype) {
-                        Some(relative) => write_kept_image(output_path, &relative, &picture.data),
+                        Some(relative) => write_kept_image(image_base, &relative, &picture.data),
                         None => {
                             image_seq += 1;
                             write_image(
                                 &mut image_dir,
-                                output_path,
+                                image_base,
                                 &format!("img{image_seq}"),
                                 picture.mimetype,
                                 &picture.data,
@@ -3231,7 +3234,7 @@ fn mimetype_for_ext(ext: &str) -> &'static str {
 fn emit_docx_item(
     builder: &mut DocumentBuilder,
     item: &pdfextractor_docx_parser::DocxItem,
-    output_path: &Path,
+    image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
 ) {
@@ -3260,7 +3263,7 @@ fn emit_docx_item(
             let grid = grid_table(
                 &table.rows,
                 table.num_cols,
-                output_path,
+                image_base,
                 image_dir,
                 image_seq,
                 "pg1_",
@@ -3280,7 +3283,7 @@ fn emit_docx_item(
             // picture on under. A drawing is played at the size the drawing's
             // frame asks for, so the picture is the size the page shows.
             let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
-            let image = write_image(image_dir, output_path, &name, mime, &data)
+            let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             builder.add_picture_plain("picture", image);
         }
@@ -3291,7 +3294,7 @@ fn emit_docx_item(
 fn emit_furniture_item(
     builder: &mut DocumentBuilder,
     item: &pdfextractor_docx_parser::DocxItem,
-    output_path: &Path,
+    image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
 ) -> Option<Ref> {
@@ -3312,7 +3315,7 @@ fn emit_furniture_item(
             let grid = grid_table(
                 &table.rows,
                 table.num_cols,
-                output_path,
+                image_base,
                 image_dir,
                 image_seq,
                 "furniture_",
@@ -3328,7 +3331,7 @@ fn emit_furniture_item(
             *image_seq += 1;
             let name = format!("furniture_{image_seq}");
             let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
-            let image = write_image(image_dir, output_path, &name, mime, &data)
+            let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             Some(builder.add_furniture_picture("picture", image))
         }
@@ -3352,7 +3355,7 @@ fn emit_furniture_item(
 fn grid_table(
     rows: &[Vec<pdfextractor_docx_parser::DocxCell>],
     num_cols: usize,
-    output_path: &Path,
+    image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
     prefix: &str,
@@ -3375,7 +3378,7 @@ fn grid_table(
                         picture.width_pt,
                         picture.height_pt,
                     );
-                    write_image(image_dir, output_path, &name, mime, &data).map(|uri| {
+                    write_image(image_dir, image_base, &name, mime, &data).map(|uri| {
                         describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
                     })
                 })
@@ -3387,7 +3390,7 @@ fn grid_table(
                     grid_table(
                         &nested.rows,
                         nested.num_cols,
-                        output_path,
+                        image_base,
                         image_dir,
                         image_seq,
                         prefix,

@@ -570,3 +570,29 @@ and two repository gates were already red.
   record a reviewer reads beside the change.
 - **Checks.** `cargo test -p pdfextractor-ui --test corpus_report_test` green (11
   passed) against the regenerated baseline; the diff touches those two documents only.
+
+### 2026-11-25 — WS8 P3: the picture and preview location chosen by the caller
+
+- **Two paths on `ConvertOptions`, not one output.** `image_base: Option<&Path>`
+  is the folder a conversion writes its extracted pictures into, and
+  `preview: Option<&Path>` is the output the overlay is written beside, as
+  `<stem>.preview.html`. `build_document(path, options)` and
+  `build_document_with_format(path, detected, options)` no longer take an output
+  path at all: the reading writes the document nowhere, so it is not handed the
+  document's path.
+- **The naming went back to the CLI.** `image_dir_for` — `<stem>_images` beside
+  the output — is the command line's convention, so the helper lives there now
+  and is used twice: to name the folder handed to the pipeline, and to name it
+  again in the `-o -` note. An embedder passes whatever folder it wants, and
+  `None` for pictures as facts without pixels.
+- **The output directory is the caller's too.** The pipeline used to create
+  `output_path`'s parent; with no output path it cannot, so `convert_one` creates
+  it before the first conversion. `-o out/nested/doc.json` still lands.
+- **A flow page's kept picture follows the folder.** `write_kept_image` writes
+  `images/scan.jpg` beside the document, which is the picture folder's parent —
+  the one place the reading still knows where the document sits.
+- **Checks.** `cli_test` 140 passed, unchanged, including the picture file
+  cases, both `--preview` cases and the `-o -` picture note;
+  `documentation_test` 4 passed; `cargo build -p pdfextractor-cli
+  --no-default-features` green; workspace clippy and `cargo fmt --all --check`
+  green.

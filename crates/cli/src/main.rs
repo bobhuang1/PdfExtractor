@@ -761,7 +761,7 @@ fn run() -> anyhow::Result<()> {
             eprintln!(
                 "note: `-o -` wrote extracted pictures into {}; `--image-export-mode \
                  embedded` keeps the pictures in the stream",
-                pdfextractor_pipeline::image_dir_for(&base).display()
+                image_dir_for(&base).display()
             );
         }
         let text = match formats[0] {
@@ -1654,6 +1654,10 @@ fn build_document(
         }
     }
 
+    // The naming is the command line's: pictures land in a folder beside the
+    // output, named for the document, and `--preview` writes its overlay beside
+    // the output as well. The reading is only told where those are.
+    let image_base = image_dir_for(output_path);
     let options = pdfextractor_pipeline::ConvertOptions {
         ocr: match args.ocr {
             OcrMode::Auto => pdfextractor_pipeline::OcrMode::Auto,
@@ -1664,10 +1668,24 @@ fn build_document(
         psm: args.psm,
         page_range: args.page_range.as_ref(),
         pdf_password: args.pdf_password.as_deref(),
-        preview: args.preview,
+        image_base: Some(&image_base),
+        preview: args.preview.then_some(output_path),
         preview_dpi: args.preview_dpi,
     };
-    pdfextractor_pipeline::build_document(path, output_path, &options)
+    pdfextractor_pipeline::build_document(path, &options)
+}
+
+/// Directory holding a document's extracted images, sibling to its output.
+///
+/// This is the command line's convention — `notes.json` puts its pictures in
+/// `notes_images/` — so an embedder names its own folder rather than inheriting
+/// ours.
+fn image_dir_for(output_path: &Path) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    output_path.with_file_name(format!("{stem}_images"))
 }
 
 fn convert_one(
@@ -1686,6 +1704,15 @@ fn convert_one(
     // Markdown in place, and the whole document is read before any of it is
     // written (each writer also replaces its file through a temporary, so a
     // failed write leaves the source whole).
+    //
+    // The output's folder is created here, once: a conversion writes pictures
+    // beside the output and the writers put the document there, so the first
+    // `-o out/nested/doc.json` has nothing to write into until it exists.
+    if let Some(parent) = primary.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
     let doc = build_document(path, &primary, args)?;
     for format in formats {
         let target = base.with_extension(format.ext());
