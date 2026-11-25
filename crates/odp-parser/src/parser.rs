@@ -303,14 +303,7 @@ fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
 
 fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
-    for index in 0..archive.len() {
-        let (name, is_dir) = match archive.by_index(index) {
-            Ok(file) => match file.name() {
-                Ok(name) => (name.into_owned(), file.is_dir()),
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+    for (name, is_dir) in archive.entries() {
         if is_dir || !name.starts_with(prefix) {
             continue;
         }
@@ -325,14 +318,7 @@ fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String
 /// `draw:object` names (`Object 1`). Each is the object's `content.xml`.
 fn read_object_parts(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u8>> {
     let mut objects = HashMap::new();
-    for index in 0..archive.len() {
-        let name = match archive.by_index(index) {
-            Ok(file) => match file.name() {
-                Ok(name) => name.into_owned(),
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+    for (name, _) in archive.entries() {
         let Some(object) = name.strip_suffix("/content.xml") else {
             continue;
         };
@@ -1212,6 +1198,30 @@ mod tests {
             writer.finish().unwrap();
         }
         buffer.into_inner()
+    }
+
+    /// XML turns a literal CRLF and a bare CR in character data into LF; a
+    /// slide read from the raw event bytes would keep the carriages.
+    #[test]
+    fn crlf_and_cr_in_a_slides_text_are_normalized_to_lf() {
+        let content = "<document-content><body><presentation><page name=\"One\">\
+<frame x=\"1cm\" y=\"1cm\" width=\"5cm\" height=\"1cm\">\
+<text-box><p>first\r\nsecond\rthird</p></text-box></frame>\
+</page></presentation></body></document-content>";
+        let document = OdpDocument::parse_bytes(&package(&[
+            ("content.xml", content.as_bytes()),
+            ("styles.xml", STYLES.as_bytes()),
+        ]))
+        .expect("the slide package parses");
+        let text = document.slides[0]
+            .shapes
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) => Some(text),
+                _ => None,
+            })
+            .expect("the text box");
+        assert_eq!(text.paragraphs[0].text, "first\nsecond\nthird");
     }
 
     const CONTENT: &str = r#"<document-content><body><presentation>

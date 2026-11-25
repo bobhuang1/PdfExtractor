@@ -1797,6 +1797,35 @@ mod tests {
             .collect()
     }
 
+    /// XML turns a literal CRLF and a bare CR in character data into LF; a cell
+    /// read from the raw event bytes would keep the carriages.
+    #[test]
+    fn crlf_and_cr_in_a_cell_are_normalized_to_lf() {
+        let pkg = package(&[
+            (
+                "xl/workbook.xml",
+                workbook(r#"<sheet name="Data" sheetId="1" r:id="rId1"/>"#),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                relationships(
+                    r#"<Relationship Id="rId1" Type="http://x/worksheet" Target="worksheets/sheet1.xml"/>"#,
+                ),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                worksheet(
+                    "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>first\r\nsecond\rthird</t></is></c></row>",
+                ),
+            ),
+        ]);
+        let document = XlsxDocument::parse_bytes(&pkg).expect("parse");
+        assert_eq!(
+            texts(&document.sheets[0].tables[0]),
+            vec![(0, 0, "first\nsecond\nthird".to_string())]
+        );
+    }
+
     #[test]
     fn reads_numbers_booleans_and_shared_strings() {
         let pkg = package(&[

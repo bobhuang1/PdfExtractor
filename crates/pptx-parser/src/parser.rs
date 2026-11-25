@@ -1897,6 +1897,31 @@ mod tests {
         PptxDocument::parse_bytes(&pkg).expect("parse")
     }
 
+    /// XML turns a literal CRLF and a bare CR in character data into LF; a run
+    /// read from the raw event bytes would keep the carriages.
+    #[test]
+    fn crlf_and_cr_in_a_run_are_normalized_to_lf() {
+        let document = deck(&format!(
+            "<p:cSld><p:spTree>{}</p:spTree></p:cSld>",
+            text_shape(
+                &format!(
+                    "{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>",
+                    transform(0, 0, 914_400, 457_200)
+                ),
+                "<a:p><a:r><a:t>first\r\nsecond\rthird</a:t></a:r></a:p>"
+            )
+        ));
+        let text = document.slides[0]
+            .shapes
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) => Some(text),
+                _ => None,
+            })
+            .expect("the text box");
+        assert_eq!(text.paragraphs[0].text, "first\nsecond\nthird");
+    }
+
     /// A shape the slide paints itself becomes a picture at the shape's own
     /// box, and a text box that states no fill and no line is still only text.
     #[test]

@@ -141,14 +141,7 @@ impl OdtDocument {
         styles.merge(Styles::parse(&content)?);
 
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
-        for i in 0..archive.len() {
-            let (name, is_dir) = match archive.by_index(i) {
-                Ok(file) => match file.name() {
-                    Ok(name) => (name.into_owned(), file.is_dir()),
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
+        for (name, is_dir) in archive.entries() {
             if is_dir || !name.starts_with("Pictures/") {
                 continue;
             }
@@ -1271,6 +1264,19 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// XML turns a literal CRLF and a bare CR in character data into LF. A
+    /// paragraph read from the raw event bytes would keep the carriages, so
+    /// this pins the normalization rather than trusting the call site.
+    #[test]
+    fn crlf_and_cr_in_a_paragraph_are_normalized_to_lf() {
+        let body = "<text:p>first\r\nsecond\rthird</text:p>";
+        let document = OdtDocument::parse_bytes(&package(&content(body), STYLES, &[])).unwrap();
+        assert_eq!(
+            texts(&document.items),
+            vec![("first\nsecond\nthird".to_string(), "text".to_string(), None)]
+        );
     }
 
     #[test]

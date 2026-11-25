@@ -765,11 +765,19 @@ impl<'a> Package<'a> {
         read_zip_entry(&mut file, name, &mut self.budget).ok()
     }
 
-    /// Read the entry at `index`, with the name it was stored under.
-    pub fn read_index(&mut self, index: usize) -> Option<(String, Vec<u8>)> {
-        let name = self.archive.by_index(index).ok()?.name().ok()?.into_owned();
-        let bytes = self.read_name(&name)?;
-        Some((name, bytes))
+    /// Every entry's name and whether it is a directory, in stored order.
+    ///
+    /// An entry whose name cannot be decoded is left out: no reader can ask for
+    /// it by name, so it could never become content. The gate refuses such a
+    /// package outright; a reader that lists before it reads still gets the rest.
+    pub fn entries(&mut self) -> Vec<(String, bool)> {
+        let count = self.archive.len();
+        (0..count)
+            .filter_map(|index| {
+                let file = self.archive.by_index_raw(index).ok()?;
+                Some((file.name().ok()?.into_owned(), file.is_dir()))
+            })
+            .collect()
     }
 
     /// The bytes this package's reads have decoded so far.

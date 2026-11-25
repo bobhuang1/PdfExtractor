@@ -105,14 +105,7 @@ fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
 
 fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
-    for index in 0..archive.len() {
-        let (name, is_dir) = match archive.by_index(index) {
-            Ok(file) => match file.name() {
-                Ok(name) => (name.into_owned(), file.is_dir()),
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+    for (name, is_dir) in archive.entries() {
         if is_dir || !name.starts_with(prefix) {
             continue;
         }
@@ -127,14 +120,7 @@ fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String
 /// `draw:object` names (`Object 1`). Each is the chart's `content.xml`.
 fn read_chart_objects(archive: &mut limits::Package<'_>) -> HashMap<String, Vec<u8>> {
     let mut objects = HashMap::new();
-    for index in 0..archive.len() {
-        let name = match archive.by_index(index) {
-            Ok(file) => match file.name() {
-                Ok(name) => name.into_owned(),
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+    for (name, _) in archive.entries() {
         let Some(object) = name.strip_suffix("/content.xml") else {
             continue;
         };
@@ -1193,6 +1179,16 @@ mod tests {
             .iter()
             .flat_map(|table| table.cells.iter().map(|cell| cell.text.clone()))
             .collect()
+    }
+
+    /// XML turns a literal CRLF and a bare CR in character data into LF, and a
+    /// cell read from the raw event bytes would keep both carriages.
+    #[test]
+    fn crlf_and_cr_in_a_cell_are_normalized_to_lf() {
+        let body = "<table:table table:name=\"T\"><table:table-row><table:table-cell>\
+<text:p>first\r\nsecond\rthird</text:p></table:table-cell></table:table-row></table:table>";
+        let document = OdsDocument::parse_bytes(&package(&content(body))).unwrap();
+        assert_eq!(texts(&document.sheets[0]), ["first\nsecond\nthird"]);
     }
 
     #[test]

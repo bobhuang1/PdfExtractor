@@ -462,3 +462,19 @@ fn local_name(name: &[u8]) -> String {
         None => text.into_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// XML turns a literal CRLF and a bare CR in character data into LF, and a
+    /// title read from the raw event bytes would keep the carriages.
+    #[test]
+    fn crlf_and_cr_in_a_chart_title_are_normalized_to_lf() {
+        let xml = b"<c:chartSpace xmlns:c=\"urn:c\" xmlns:a=\"urn:a\"><c:chart>\
+<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>first\r\nsecond\rthird</a:t></a:r></a:p></c:rich></c:tx></c:title>\
+<c:plotArea><c:barChart/></c:plotArea></c:chart></c:chartSpace>";
+        let chart = read_chart(xml).expect("a chart with a plot");
+        assert_eq!(chart.title.as_deref(), Some("first\nsecond\nthird"));
+    }
+}

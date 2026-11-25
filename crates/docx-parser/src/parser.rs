@@ -228,14 +228,7 @@ impl DocxDocument {
         // Snapshot every media part up front. Holding the archive open while the
         // extractor walks the XML would tangle the mutable borrows for no gain.
         let mut media: HashMap<String, Vec<u8>> = HashMap::new();
-        for i in 0..archive.len() {
-            let name = match archive.by_index(i) {
-                Ok(file) => match file.name() {
-                    Ok(name) => name.into_owned(),
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
+        for (name, _) in archive.entries() {
             if !name.starts_with("word/media/") {
                 continue;
             }
@@ -248,14 +241,7 @@ impl DocxDocument {
         // part is the only place the words are written down. Docling reports
         // them, and dropping them loses text a reader sees (bug 46).
         let mut charts: HashMap<String, Vec<u8>> = HashMap::new();
-        for i in 0..archive.len() {
-            let name = match archive.by_index(i) {
-                Ok(file) => match file.name() {
-                    Ok(name) => name.into_owned(),
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
+        for (name, _) in archive.entries() {
             if !name.starts_with("word/charts/") || !name.ends_with(".xml") {
                 continue;
             }
@@ -267,13 +253,10 @@ impl DocxDocument {
         // A DrawingML shape's colours are the package's theme — a shape's fill
         // is usually `a:fillRef`/`a:schemeClr`, not a literal colour — so the
         // theme part is read once and resolved by every drawing in the package.
-        let theme = (0..archive.len())
-            .filter_map(|i| {
-                archive
-                    .by_index(i)
-                    .ok()
-                    .and_then(|f| f.name().ok().map(|name| name.into_owned()))
-            })
+        let theme = archive
+            .entries()
+            .into_iter()
+            .map(|(name, _)| name)
             .filter(|name| name.starts_with("word/theme/") && name.ends_with(".xml"))
             .min()
             .and_then(|name| read_part(&mut archive, &name))
@@ -294,13 +277,10 @@ impl DocxDocument {
         doc.items = extractor.items;
         // Headers and footers live in their own parts; report them as furniture
         // rather than dropping their text and images on the floor.
-        let mut part_names: Vec<String> = (0..archive.len())
-            .filter_map(|i| {
-                archive
-                    .by_index(i)
-                    .ok()
-                    .and_then(|f| f.name().ok().map(|name| name.into_owned()))
-            })
+        let mut part_names: Vec<String> = archive
+            .entries()
+            .into_iter()
+            .map(|(name, _)| name)
             .filter(|n| {
                 (n.starts_with("word/header") || n.starts_with("word/footer"))
                     && n.ends_with(".xml")
@@ -3203,6 +3183,33 @@ mod tests {
             texts,
             vec!["first\nsecond\nthird\nfourth", "fifth\nsixth\nseventh"],
             "a line ending kept its carriage return"
+        );
+    }
+
+    /// A reference in a document's text is its own event, so a reader that
+    /// keeps only the characters between references loses them: `Tom &amp;
+    /// Jerry` would read as `Tom  Jerry`. This builds the package the way a
+    /// writer produces one — the ampersand and a numeric reference inside a
+    /// single `<w:t>` — and holds the reading to what the author typed.
+    #[test]
+    fn references_in_text_resolve_through_the_shared_resolver() {
+        let document = format!(
+            r#"<w:document {W}><w:body><w:p><w:r><w:t>Tom &amp; Jerry read &#65;1, &lt;twice&gt;, &quot;now&quot; &apos;ok&apos;</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let pkg = package(&document, "", &[]);
+        let parsed = DocxDocument::parse_bytes(&pkg).expect("the package is a DOCX");
+        let texts: Vec<&str> = parsed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DocxItem::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![r#"Tom & Jerry read A1, <twice>, "now" 'ok'"#],
+            "a reference was dropped from the text around it"
         );
     }
 
