@@ -725,33 +725,89 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
 /// handle is compared with the canonical path, which a link swapped in between
 /// resolving the path and opening it would no longer be.
 fn read_under(base: &Path, uri: &str) -> Option<Vec<u8>> {
-    let base = base.canonicalize().ok()?;
     let named = Path::new(uri);
     if named.is_absolute() {
         return None;
     }
-    let candidate = base.join(named).canonicalize().ok()?;
-    if !candidate.starts_with(&base) {
-        return None;
-    }
-    // The file the canonical path named before it was opened: what comes back
-    // has to be this one, not whatever the name points at now.
-    let checked = std::fs::symlink_metadata(&candidate).ok()?;
-    if checked.file_type().is_symlink() {
-        return None;
-    }
-    let mut file = std::fs::File::open(&candidate).ok()?;
-    if !same_file(&checked, &file.metadata().ok()?) {
-        return None;
-    }
+    let (_, mut file) = open_under(base, named)?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
     Some(bytes)
 }
 
-/// Whether two metadata records describe one file, so a handle can be held to
-/// the path it was opened by.
+/// `path` opened as a file inside `base`, when it is one.
+///
+/// Absolute names are refused because `Path::join` would discard `base`, and
+/// `..` is refused rather than resolved. On Unix the walk itself is confined:
+/// `base` and every directory on the way is opened relative to the descriptor
+/// already held with `openat`, and every component with `O_NOFOLLOW`, so a
+/// symlink — including a directory component swapped for one after an earlier
+/// check — cannot take the walk out of the directory. A link anywhere on the
+/// way is refused, even one that points back inside. Elsewhere the canonical
+/// path is checked and the opened file's identity is compared with the file
+/// that path named.
+pub fn open_under(base: &Path, path: &Path) -> Option<(PathBuf, std::fs::File)> {
+    if path.is_absolute() {
+        return None;
+    }
+    let base = base.canonicalize().ok()?;
+    #[cfg(unix)]
+    {
+        let file = open_beneath(&base, path)?;
+        Some((base.join(path), file))
+    }
+    #[cfg(not(unix))]
+    {
+        let candidate = base.join(path).canonicalize().ok()?;
+        if !candidate.starts_with(&base) {
+            return None;
+        }
+        // The file the canonical path named before it was opened: what comes
+        // back has to be this one, not whatever the name points at now.
+        let checked = std::fs::symlink_metadata(&candidate).ok()?;
+        if checked.file_type().is_symlink() {
+            return None;
+        }
+        let file = std::fs::File::open(&candidate).ok()?;
+        same_file(&checked, &file.metadata().ok()?).then_some((candidate, file))
+    }
+}
+
+/// The Unix walk: `path` opened beneath the directory `base`, one component at
+/// a time and never through a link.
 #[cfg(unix)]
+fn open_beneath(base: &Path, path: &Path) -> Option<std::fs::File> {
+    use rustix::fs::{open, openat, Mode, OFlags};
+
+    let directory = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut current = open(base, directory, Mode::empty()).ok()?;
+    let mut components = path.components().peekable();
+    loop {
+        let name = match components.next()? {
+            std::path::Component::Normal(name) => name,
+            std::path::Component::CurDir => continue,
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        };
+        // Everything but the last component is a directory opened from the
+        // descriptor already held, so it cannot be redirected by a link put
+        // where it used to be; the last is the file itself, never a link.
+        if components.peek().is_some() {
+            current = openat(&current, name, directory, Mode::empty()).ok()?;
+        } else {
+            let file = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            return Some(std::fs::File::from(
+                openat(&current, name, file, Mode::empty()).ok()?,
+            ));
+        }
+    }
+}
+
+/// Whether two metadata records describe one file, so a handle can be held to
+/// the path it was opened by. This is the portable fallback's check, and the
+/// Unix build keeps it for its own identity test.
+#[cfg(all(unix, test))]
 fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     a.dev() == b.dev() && a.ino() == b.ino()
@@ -974,6 +1030,83 @@ mod tests {
                 .expect("the symlink");
             assert_eq!(read_under(&base, "link.png"), None, "a symlink leads out");
         }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A directory component swapped for a symlink after the walk began cannot
+    /// redirect it: every component is opened from the descriptor already held
+    /// and never through a link. A handle opened before the swap still holds
+    /// the file that was inside, and a fresh name through the swapped
+    /// directory is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_swapped_for_a_symlink_cannot_redirect_the_walk() {
+        let root = std::env::temp_dir().join(format!("pdfe-md-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("doc/pictures")).expect("the document's directory");
+        std::fs::write(root.join("doc/pictures/picture.png"), b"inside").expect("the picture");
+        std::fs::create_dir_all(root.join("elsewhere/pictures")).expect("the outside directory");
+        std::fs::write(root.join("elsewhere/pictures/picture.png"), b"outside")
+            .expect("the outside picture");
+        let base = root.join("doc").canonicalize().expect("canonical base");
+
+        let (_, mut file) =
+            open_under(&base, Path::new("pictures/picture.png")).expect("a picture inside opens");
+
+        // The attack: the directory the picture was opened through moves out of
+        // the document, and a symlink to another directory takes its name.
+        std::fs::rename(root.join("doc/pictures"), root.join("moved"))
+            .expect("move the directory out");
+        std::os::unix::fs::symlink(root.join("elsewhere/pictures"), root.join("doc/pictures"))
+            .expect("the swapped link");
+
+        assert!(
+            open_under(&base, Path::new("pictures/picture.png")).is_none(),
+            "a name through the swapped directory is refused"
+        );
+        assert_eq!(
+            read_under(&base, "pictures/picture.png"),
+            None,
+            "the reader refuses it too"
+        );
+        let mut held = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut held).expect("the held handle still reads");
+        assert_eq!(
+            held, b"inside",
+            "the handle opened before the swap is the file that was inside"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A symlink anywhere on the way is refused, even one that points back
+    /// inside the document's directory: the walk never resolves a link itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_directory_is_never_walked_into() {
+        let root = std::env::temp_dir().join(format!("pdfe-md-link-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("doc/real")).expect("the directory");
+        std::fs::write(root.join("doc/real/picture.png"), b"inside").expect("the picture");
+        std::os::unix::fs::symlink(root.join("doc/real"), root.join("doc/link"))
+            .expect("the link inside");
+        let base = root.join("doc");
+
+        assert_eq!(
+            read_under(&base, "real/picture.png"),
+            Some(b"inside".to_vec()),
+            "the directory itself opens"
+        );
+        assert_eq!(
+            read_under(&base, "link/picture.png"),
+            None,
+            "a symlinked directory is not walked into"
+        );
+        assert!(
+            open_under(&base, Path::new("link/picture.png")).is_none(),
+            "the handle walk refuses it too"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

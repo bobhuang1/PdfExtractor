@@ -1,0 +1,39 @@
+[package]
+name = "pdfextractor-pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+image.workspace = true
+tracing.workspace = true
+pdfextractor-core = { path = "../core" }
+pdfextractor-limits = { path = "../limits" }
+pdfextractor-formats = { path = "../formats" }
+pdfextractor-pdf-parser = { path = "../pdf-parser" }
+pdfextractor-docx-parser = { path = "../docx-parser" }
+pdfextractor-odt-parser = { path = "../odt-parser" }
+pdfextractor-ods-parser = { path = "../ods-parser" }
+pdfextractor-odp-parser = { path = "../odp-parser" }
+pdfextractor-doc-parser = { path = "../doc-parser" }
+pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
+pdfextractor-pptx-parser = { path = "../pptx-parser" }
+pdfextractor-chart = { path = "../chart" }
+pdfextractor-image-parser = { path = "../image-parser" }
+pdfextractor-svg = { path = "../svg" }
+pdfextractor-picture-formats = { path = "../picture-formats" }
+pdfextractor-text-parser = { path = "../text-parser" }
+pdfextractor-layout = { path = "../layout" }
+pdfextractor-md-exporter = { path = "../md-exporter" }
+pdfextractor-ocr-engine = { path = "../ocr-engine", default-features = false }
+
+[features]
+default = ["ocr"]
+ocr = ["pdfextractor-ocr-engine/tesseract"]
+
+[lints]
+workspace = true

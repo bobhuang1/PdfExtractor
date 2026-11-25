@@ -23,6 +23,7 @@ members = [
   "crates/ocr-engine",
   "crates/json-exporter",
   "crates/md-exporter",
+  "crates/pipeline",
   "crates/cli",
   "crates/ui",
 ]
@@ -53,6 +54,11 @@ serde_yaml = "0.9"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
+
+# Directory-relative opens (`openat`) that hold each path component to the
+# descriptor already opened, without following a link of its own. Safe
+# wrappers, because the workspace forbids `unsafe`.
+rustix = { version = "0.38", features = ["fs"] }
 
 # Parallelism
 rayon = "1"

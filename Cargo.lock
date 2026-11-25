@@ -3404,6 +3404,7 @@ dependencies = [
  "pdfextractor-odt-parser",
  "pdfextractor-pdf-parser",
  "pdfextractor-picture-formats",
+ "pdfextractor-pipeline",
  "pdfextractor-pptx-parser",
  "pdfextractor-svg",
  "pdfextractor-text-parser",
@@ -3528,6 +3529,7 @@ dependencies = [
  "base64 0.23.1",
  "pdfextractor-core",
  "pulldown-latex",
+ "rustix",
  "sentencepiece-rs",
  "serde",
  "serde_json",
@@ -3619,6 +3621,35 @@ dependencies = [
 [[package]]
 name = "pdfextractor-picture-formats"
 version = "0.2.0"
+
+[[package]]
+name = "pdfextractor-pipeline"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "image",
+ "pdfextractor-chart",
+ "pdfextractor-core",
+ "pdfextractor-doc-parser",
+ "pdfextractor-docx-parser",
+ "pdfextractor-formats",
+ "pdfextractor-image-parser",
+ "pdfextractor-layout",
+ "pdfextractor-limits",
+ "pdfextractor-md-exporter",
+ "pdfextractor-ocr-engine",
+ "pdfextractor-odp-parser",
+ "pdfextractor-ods-parser",
+ "pdfextractor-odt-parser",
+ "pdfextractor-pdf-parser",
+ "pdfextractor-picture-formats",
+ "pdfextractor-pptx-parser",
+ "pdfextractor-svg",
+ "pdfextractor-text-parser",
+ "pdfextractor-xlsx-parser",
+ "tracing",
+]
 
 [[package]]
 name = "pdfextractor-pptx-parser"

@@ -54,6 +54,10 @@ pdfextractor-layout = { path = "../layout" }
 # calls fail with a clear error, which is what the README promises.
 pdfextractor-ocr-engine = { path = "../ocr-engine", default-features = false }
 pdfextractor-json-exporter = { path = "../json-exporter" }
+# The conversion pipeline, callable without the command line. The binary keeps
+# argument parsing, output writers and the extension gate; the reading itself is
+# the library's, so an embedder does not have to spawn this process.
+pdfextractor-pipeline = { path = "../pipeline", default-features = false }
 pdfextractor-md-exporter = { path = "../md-exporter" }
 # The `--compare` mode holds each finished document to the same comparison, memory
 # and ratchet rules the window's Compare mode uses (`pdfextractor_ui::diff`), so the
@@ -63,7 +67,7 @@ pdfextractor-ui = { path = "../ui", default-features = false }
 
 [features]
 default = ["ocr"]
-ocr = ["pdfextractor-ocr-engine/tesseract"]
+ocr = ["pdfextractor-ocr-engine/tesseract", "pdfextractor-pipeline/ocr"]
 
 [dev-dependencies]
 # An embedded picture is checked by decoding its `data:` URI and holding the
