@@ -12,8 +12,9 @@
 //! * a linked sidebar, so hovering a row highlights its box and vice versa.
 //!
 //! A page backdrop is used when one is available. Raster pages (scans) already
-//! have their image extracted, and for text pages `pdftoppm` is used **when it
-//! happens to be installed**. Rendering is best-effort and preview-only: the
+//! have their image extracted, and for text pages `pdftoppm` is used when it is
+//! installed at a fixed location or named by `PDFE_PDFTOPPM` — never through
+//! `PATH`, the rule the LibreOffice bridge follows. Rendering is best-effort and preview-only: the
 //! extractor itself never depends on an external renderer, and the HTML is
 //! complete without one (it then shows the extracted text reconstructed at its
 //! true coordinates, which is what the parser actually believes the page says).
@@ -334,7 +335,10 @@ pub fn render_pages(
     dpi: u32,
 ) -> Vec<Option<String>> {
     let mut result: Vec<Option<String>> = vec![None; pages.len()];
-    if pages.is_empty() || which("pdftoppm").is_none() {
+    let Some(pdftoppm) = pdftoppm() else {
+        return result;
+    };
+    if pages.is_empty() {
         return result;
     }
     if std::fs::create_dir_all(out_dir).is_err() {
@@ -345,7 +349,7 @@ pub fn render_pages(
     // page count, so the files are matched by their trailing page number rather
     // than by a guessed pattern.
     let prefix = out_dir.join("page");
-    let status = Command::new("pdftoppm")
+    let status = Command::new(pdftoppm)
         .arg("-png")
         .arg("-r")
         .arg(dpi.to_string())
@@ -404,12 +408,74 @@ fn trailing_number(path: &Path) -> Option<i32> {
     digits.parse().ok()
 }
 
-/// Minimal `which`: is `bin` an executable file on `PATH`?
-fn which(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
-        .find(|candidate| candidate.is_file())
+/// `pdftoppm`'s executable, if this machine has it installed.
+///
+/// `PDFE_PDFTOPPM` names the program outright — the override for an install in
+/// an unusual place, or for a test. When it is set it is the only place looked,
+/// so a value that names no program is refused rather than quietly replaced.
+///
+/// Without it the lookup reads the fixed paths the packages write
+/// ([`fixed_pdftoppm_locations`]). `PATH` is deliberately not searched: it is
+/// read from the environment, so a planted `pdftoppm` in any directory it names
+/// would run on every preview with the user's own privileges. This is the rule
+/// [`pdfextractor_formats::libreoffice`] already follows for the bridge.
+fn pdftoppm() -> Option<PathBuf> {
+    resolve_pdftoppm(std::env::var_os("PDFE_PDFTOPPM").map(PathBuf::from))
+}
+
+/// The lookup behind [`pdftoppm`], with its input passed in so a test does not
+/// have to touch the process environment.
+fn resolve_pdftoppm(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    match explicit {
+        Some(path) => verified_program(&path),
+        None => fixed_pdftoppm_locations()
+            .into_iter()
+            .find_map(|path| verified_program(&path)),
+    }
+}
+
+/// Where the poppler utilities' installer puts `pdftoppm`, by platform.
+fn fixed_pdftoppm_locations() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            PathBuf::from("/opt/homebrew/bin/pdftoppm"),
+            PathBuf::from("/usr/local/bin/pdftoppm"),
+            PathBuf::from("/usr/bin/pdftoppm"),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            PathBuf::from(r"C:\Program Files\poppler\Library\bin\pdftoppm.exe"),
+            PathBuf::from(r"C:\Program Files\poppler\bin\pdftoppm.exe"),
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        vec![
+            PathBuf::from("/usr/bin/pdftoppm"),
+            PathBuf::from("/usr/local/bin/pdftoppm"),
+        ]
+    }
+}
+
+/// `path`, when it is a file this process may execute. A directory, a dangling
+/// link or a file with no execute bit is not a program, so it is not reported
+/// as one.
+fn verified_program(path: &Path) -> Option<PathBuf> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+    }
+    Some(path.to_path_buf())
 }
 
 const STYLE: &str = r#"<style>
@@ -557,6 +623,38 @@ const SCRIPT: &str = r#"<script>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The renderer is found at a fixed path or named by `PDFE_PDFTOPPM`, and a
+    /// name that is not a program is refused rather than replaced: `PATH` is
+    /// never searched, so a planted `pdftoppm` cannot run on a preview.
+    #[test]
+    fn the_renderer_override_is_verified_and_never_falls_back() {
+        let missing =
+            std::env::temp_dir().join(format!("pdfe-no-such-pdftoppm-{}", std::process::id()));
+        assert_eq!(resolve_pdftoppm(Some(missing)), None);
+        let real = std::env::current_exe().expect("the test binary");
+        assert_eq!(resolve_pdftoppm(Some(real.clone())), Some(real));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let directory =
+                std::env::temp_dir().join(format!("pdfe-pdftoppm-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).expect("scratch dir");
+            let fake = directory.join("pdftoppm");
+            std::fs::write(&fake, b"#!/bin/sh\n").expect("fake binary");
+            assert_eq!(
+                resolve_pdftoppm(Some(fake.clone())),
+                None,
+                "a file with no execute bit is not a program"
+            );
+            let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake, permissions).expect("chmod");
+            assert_eq!(resolve_pdftoppm(Some(fake.clone())), Some(fake));
+            std::fs::remove_dir_all(&directory).ok();
+        }
+    }
 
     fn item(page_no: i32, text: &str, kind: OverlayKind) -> OverlayItem {
         OverlayItem {

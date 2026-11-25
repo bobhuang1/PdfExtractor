@@ -411,11 +411,17 @@ Log records go to **stderr**; stdout is left for the output of the run itself, s
 `--progress` records can be read a line at a time with nothing to filter out. Set
 `RUST_LOG=info` for the log.
 
-One environment variable matters: **`PDFE_SOFFICE`** names the LibreOffice binary
-for the bridge, for a machine where it is installed somewhere `PATH` does not reach
-(and for a test that must prove a file needed no conversion). `-i old.wps` on a
-machine without LibreOffice fails with the reason and the alternative, never with a
-parse error from a format it cannot read.
+Two environment variables matter, and neither program is looked up on **`PATH`**: a
+fixed list of the paths the installers write is tried instead, so a planted binary
+in a directory `PATH` names cannot run on a document.
+
+- **`PDFE_SOFFICE`** names the LibreOffice binary for the bridge, for a machine
+  where it is installed somewhere else (and for a test that must prove a file needed
+  no conversion). `-i old.wps` on a machine without LibreOffice fails with the reason
+  and the alternative, never with a parse error from a format it cannot read.
+- **`PDFE_PDFTOPPM`** names the poppler renderer the `--preview` page backdrops use.
+  Without it a fixed install path is tried, and a preview on a machine that has
+  neither shows the extracted text over its true coordinates, as it always has.
 
 **Exit status:** `0` when every document was converted; `1` when a document could not be
 read, or an argument combination was refused; `3` when a document was refused by the
