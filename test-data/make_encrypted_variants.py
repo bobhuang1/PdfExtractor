@@ -22,6 +22,10 @@ the password path is exercised, not only the empty-password default:
   but the page content stream's own `/Filter /Crypt` names `/AltCF`, a second,
   non-default `/CF` entry with `/CFM /None`: that stream is stored in the
   clear while the rest of the file is ciphered.
+* `encrypted_cryptfilter_aesv2.pdf` — revision 4 with the same kind of
+  override, but `/AltCF` is `/CFM /AESV2`: the name changes the *method*, from
+  the RC4 `/StmF` to AES-128, so a reader that reads the name and keeps
+  `/StmF` gets ciphertext rather than text.
 * `encrypted_aggregate_streams.pdf` — revision 3, one page carried by three
   ciphered content streams of their own: each is small enough for a lowered
   whole-document ceiling on its own, and the three together are not.
@@ -474,6 +478,43 @@ def aes_128_crypt_filter() -> None:
     )
 
 
+def aes_128_crypt_filter_method() -> None:
+    """A revision 4 file whose content stream's /Crypt filter names AES-128.
+
+    `/StmF` is the RC4 filter, so every other stream and string takes /StdCF;
+    the page content stream's `/Filter /Crypt` names `/AltCF`, whose `/CFM` is
+    `/AESV2`. Unlike `encrypted_cryptfilter.pdf`, the override is not the
+    identity: it selects a different cipher, so a reader that honours the name
+    but keeps `/StmF` reads ciphertext and this page comes back empty. Poppler
+    24.02 unwraps an explicit /Crypt filter to the raw stream, so `pdftotext`
+    cannot check it; the page is read back by this repository's reader.
+    """
+    o = legacy_o(16)
+    key = legacy_file_key(o, 16)
+    u = legacy_u(key)
+
+    def cipher(num: int, data: bytes) -> bytes:
+        if num == 4:  # the content stream, which names /AltCF below
+            return aes_cbc_encrypt(
+                object_key(key, num, aes=True), data, hashlib.md5(b"iv%d" % num).digest()
+            )
+        return rc4(object_key(key, num, aes=False), data)
+
+    write(
+        "encrypted_cryptfilter_aesv2.pdf",
+        b"<< /Filter /Standard /V 4 /R 4 /Length 128"
+        b" /CF << /StdCF << /CFM /V2 /AuthEvent /DocOpen /Length 16 >>"
+        b" /AltCF << /CFM /AESV2 /AuthEvent /DocOpen /Length 16 >> >>"
+        b" /StmF /StdCF /StrF /StdCF /O <%s> /U <%s> /P %d >>"
+        % (o.hex().encode(), u.hex().encode(), P),
+        cipher,
+        content_extra=(
+            b" /Filter /Crypt /DecodeParms"
+            b" << /Type /CryptFilterDecodeParms /Name /AltCF >>"
+        ),
+    )
+
+
 # One page written as three ciphered content streams: each is under the
 # whole-document ceiling a reader may lower to, and their sum is not.
 MANY_STREAMS = [
@@ -522,4 +563,5 @@ if __name__ == "__main__":
     aes_256_r5()
     aes_128_encrypt_metadata_false()
     aes_128_crypt_filter()
+    aes_128_crypt_filter_method()
     rc4_128_aggregate_streams()

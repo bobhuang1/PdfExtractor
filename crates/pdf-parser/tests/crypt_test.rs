@@ -10,8 +10,12 @@
 //! page in three ciphered content streams, so the document budget is charged
 //! their sum rather than one payload at a time. `encrypted_encryptmetadata.pdf` leaves the
 //! metadata stream in the clear, and `encrypted_cryptfilter.pdf` gives its
-//! content stream a non-default `/Crypt` filter. Poppler's `pdftotext` reads
-//! every one of them back, so these are files a real reader accepts.
+//! content stream a non-default `/Crypt` filter. `encrypted_cryptfilter_aesv2.pdf`
+//! names a `/Crypt` filter whose `/CFM` is AES-128 while `/StmF` is RC4, so the
+//! override selects a different cipher; Poppler unwraps an explicit `/Crypt`
+//! filter to the raw stream, so that one is read back by this reader alone.
+//! Poppler's `pdftotext` reads the others back, so these are files a real reader
+//! accepts.
 
 use pdfextractor_limits::{LimitError, Limits};
 use pdfextractor_pdf_parser::crypt::CryptError;
@@ -38,7 +42,7 @@ fn info_title(doc: &PdfDocument) -> Option<String> {
     }
 }
 
-const VARIANTS: [&str; 6] = [
+const VARIANTS: [&str; 7] = [
     "encrypted_rc4_128.pdf",
     "encrypted_aes128.pdf",
     "encrypted_aes256.pdf",
@@ -46,6 +50,7 @@ const VARIANTS: [&str; 6] = [
     "encrypted_r5.pdf",
     "encrypted_encryptmetadata.pdf",
     "encrypted_cryptfilter.pdf",
+    "encrypted_cryptfilter_aesv2.pdf",
 ];
 
 #[test]
@@ -615,6 +620,30 @@ fn a_stream_naming_its_own_crypt_filter_is_read_with_it() {
     assert!(
         !bytes.windows(title.len()).any(|window| window == title),
         "the title still takes /StmF"
+    );
+}
+
+/// A `/Crypt` filter may name a different *method*, not only the identity:
+/// here `/StmF` is RC4 and object 4's `/DecodeParms /Name /AltCF` is
+/// `/CFM /AESV2`. A reader that honoured the name but kept `/StmF` would run
+/// RC4 over AES bytes and read nothing, so the page text proves the override
+/// reaches the cipher and not just the clear/enciphered decision.
+#[test]
+fn a_crypt_filter_naming_another_method_is_read_with_that_method() {
+    let bytes = fixture("encrypted_cryptfilter_aesv2.pdf");
+    let doc = PdfDocument::parse_with_password(&bytes, Some("user")).expect("parse");
+    assert_eq!(doc.locked, None);
+    assert!(
+        page_text(&doc).contains("Secret ledger"),
+        "{}",
+        page_text(&doc)
+    );
+    assert_eq!(info_title(&doc).as_deref(), Some("Ciphered title"));
+
+    let content = b"Secret ledger";
+    assert!(
+        !bytes.windows(content.len()).any(|window| window == content),
+        "the content stream is AES-ciphered, not stored under its own name"
     );
 }
 
