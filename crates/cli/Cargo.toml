@@ -28,31 +28,10 @@ pdfextractor-limits = { path = "../limits" }
 # same question of the same file (`crates/ui/tests/corpus_report_test.rs`) and
 # must not keep a list of extensions beside it.
 pdfextractor-formats = { path = "../formats" }
-pdfextractor-pdf-parser = { path = "../pdf-parser" }
-pdfextractor-docx-parser = { path = "../docx-parser" }
-pdfextractor-odt-parser = { path = "../odt-parser" }
-pdfextractor-ods-parser = { path = "../ods-parser" }
-pdfextractor-odp-parser = { path = "../odp-parser" }
-pdfextractor-doc-parser = { path = "../doc-parser" }
-pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
-pdfextractor-pptx-parser = { path = "../pptx-parser" }
-# A chart's data is read by the one reader both a deck's and a workbook's
-# charts go through, so the two formats report the same numbers.
-pdfextractor-chart = { path = "../chart" }
 pdfextractor-image-parser = { path = "../image-parser" }
-# An SVG a Word or PowerPoint package carries is a drawing, not an encoding: it
-# is played into pixels at the size the package places it, so the document holds
-# the picture it shows rather than markup for whoever reads it next.
-pdfextractor-svg = { path = "../svg" }
 # The list of picture formats the flow reader accepts is the one this writes an
 # extracted picture under: the same table, not a copy.
 pdfextractor-picture-formats = { path = "../picture-formats" }
-pdfextractor-text-parser = { path = "../text-parser" }
-pdfextractor-layout = { path = "../layout" }
-# OCR is a feature of this binary as it is of the engine: `--no-default-features`
-# builds a command line with no Tesseract (and no libclang) to link, whose OCR
-# calls fail with a clear error, which is what the README promises.
-pdfextractor-ocr-engine = { path = "../ocr-engine", default-features = false }
 pdfextractor-json-exporter = { path = "../json-exporter" }
 # The conversion pipeline, callable without the command line. The binary keeps
 # argument parsing, output writers and the extension gate; the reading itself is
@@ -67,9 +46,26 @@ pdfextractor-ui = { path = "../ui", default-features = false }
 
 [features]
 default = ["ocr"]
-ocr = ["pdfextractor-ocr-engine/tesseract", "pdfextractor-pipeline/ocr"]
+# The pipeline owns the reading, OCR included: `--no-default-features` builds a
+# command line with no Tesseract (and no libclang) to link, whose OCR calls fail
+# with a clear error, which is what the README promises.
+ocr = ["pdfextractor-pipeline/ocr"]
 
 [dev-dependencies]
+# The fixtures are read by their own readers here, not through the conversion:
+# a suite that asks what a parser returns should not be able to get the answer
+# from the code path it is meant to be checking. The binary itself names none of
+# them — `src/` reaches every document through `pdfextractor-pipeline` — so they
+# are compiled for the tests only.
+pdfextractor-pdf-parser = { path = "../pdf-parser" }
+pdfextractor-docx-parser = { path = "../docx-parser" }
+pdfextractor-odt-parser = { path = "../odt-parser" }
+pdfextractor-ods-parser = { path = "../ods-parser" }
+pdfextractor-odp-parser = { path = "../odp-parser" }
+pdfextractor-doc-parser = { path = "../doc-parser" }
+pdfextractor-xlsx-parser = { path = "../xlsx-parser" }
+pdfextractor-pptx-parser = { path = "../pptx-parser" }
+pdfextractor-text-parser = { path = "../text-parser" }
 # An embedded picture is checked by decoding its `data:` URI and holding the
 # bytes to the JPEG the Markdown named.
 serde_json.workspace = true

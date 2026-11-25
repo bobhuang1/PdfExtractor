@@ -526,3 +526,26 @@ and two repository gates were already red.
   oracle live: 1,351 passed then, the only failure the corpus ratchet's two
   heading-driven regressions (the six CRLF tests added afterwards bring the workspace
   listing to 1,358).
+
+### 2026-11-25 — WS8 P2: the CLI's manifest trimmed to what it names
+
+- **Nine readers moved to `[dev-dependencies]`.** `pdf-parser`, `docx-parser`,
+  `odt-parser`, `ods-parser`, `odp-parser`, `doc-parser`, `xlsx-parser`,
+  `pptx-parser` and `text-parser` are reached by `limits_matrix_test` and the
+  fixture suites directly; `src/` names none of them, because every document is
+  converted through `pdfextractor-pipeline`. They now compile for the tests only.
+- **Four dependencies deleted.** `chart`, `svg`, `layout` and `ocr-engine` were
+  named nowhere under `crates/cli` — the pipeline carries them — so they left the
+  manifest rather than being moved.
+- **The `ocr` feature now forwards one hop.** It used to name
+  `pdfextractor-ocr-engine/tesseract` as well as `pdfextractor-pipeline/ocr`; with
+  the engine gone from the manifest it forwards to the pipeline only, and the
+  pipeline still enables the same engine feature. `--no-default-features` still
+  builds a binary with no Tesseract to link.
+- **The cut is visible in the graph.** The CLI's normal edges
+  (`cargo tree --no-default-features --edges normal --depth 1`) are ten workspace
+  crates with no reader; the readers remain only below `pdfextractor-pipeline`.
+- **Checks.** `cargo build -p pdfextractor-cli --no-default-features` and
+  `--all-targets --no-default-features` green (the test-only paths still compile),
+  the default build green (the single-hop forward works), `cli_test` 140 passed —
+  unchanged — and `documentation_test` 4 passed. The workspace listing stays 1,360.
