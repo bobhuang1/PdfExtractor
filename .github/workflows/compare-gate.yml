@@ -72,6 +72,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The pin, installed rather than left to rustup: `rust-toolchain.toml`
+      # names 1.99.0, and rustup's automatic install of a toolchain it is missing
+      # is deprecated — a future rustup would end this job instead of fetching
+      # it. `@stable` is the action's own ref; the `toolchain` input is the pin.
+      - name: The pinned toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+
       # The CLI links the Tesseract bindings even with OCR off (`leptess` →
       # `tesseract-sys`/`leptonica-sys`), and those crates build their bindings
       # with libclang: the libraries are needed to link, libclang to build.
@@ -114,6 +123,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: The pinned toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
 
       # Same libraries as the gate job: the CLI this test converts the corpus
       # through links the Tesseract bindings.

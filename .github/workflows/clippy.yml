@@ -60,6 +60,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The pin, installed rather than left to rustup: `rust-toolchain.toml`
+      # names 1.99.0, and rustup's automatic install of a toolchain it is missing
+      # is deprecated — a future rustup would end this job instead of fetching
+      # it. `@stable` is the action's own ref; the `toolchain` input is the pin.
+      # Clippy is a component, so it is named here rather than assumed.
+      - name: The pinned toolchain, with clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+          components: clippy
+
       # The libraries the build scripts ask pkg-config for, and libclang for
       # the Tesseract bindings' build.
       - name: The native libraries the workspace needs

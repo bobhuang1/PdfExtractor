@@ -63,6 +63,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The pin, installed rather than left to rustup: `rust-toolchain.toml`
+      # names 1.99.0, and rustup's automatic install of a toolchain it is missing
+      # is deprecated — a future rustup would end this job instead of fetching
+      # it. `@stable` is the action's own ref; the `toolchain` input is the pin.
+      - name: The pinned toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+
       # The bridge itself — the Writer, Calc and Impress filters bring `soffice`
       # — beside the libraries and OCR data the tests need with or without it.
       - name: LibreOffice, the native libraries and the OCR data

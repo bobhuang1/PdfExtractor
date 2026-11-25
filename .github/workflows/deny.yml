@@ -43,6 +43,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Cargo runs through rustup even here, and `rust-toolchain.toml` names
+      # 1.99.0: installed up front rather than left to the automatic install,
+      # which rustup deprecates. `@stable` is the action's own ref; the
+      # `toolchain` input is the pin.
+      - name: The pinned toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
+
       # The prebuilt binary from the action rather than a `cargo install`: the
       # check reads manifests and a lockfile, it does not build this workspace.
       # Pinned to the release `deny.toml` was validated with, because a new

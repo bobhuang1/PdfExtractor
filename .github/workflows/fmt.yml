@@ -45,11 +45,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # rustfmt is a toolchain component rather than a crate; a stable toolchain
-      # with it added is the whole of this job's setup.
-      - name: The stable toolchain, with rustfmt
+      # rustfmt is a toolchain component rather than a crate; the pinned toolchain
+      # with it added is the whole of this job's setup. The pin is installed
+      # rather than left to rustup: `rust-toolchain.toml` names 1.99.0, and
+      # rustup's automatic install of a toolchain it is missing is deprecated —
+      # a future rustup would end this job instead of fetching it. `@stable` is
+      # the action's own ref; the `toolchain` input is the pin. (The runner image
+      # still floats: rustfmt compiles nothing, so a new image changes no reading.)
+      - name: The pinned toolchain, with rustfmt
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.99.0
           components: rustfmt
 
       - name: rustfmt, with drift refused
