@@ -14,6 +14,15 @@ all-features = true
 # An advisory that cannot be acted on yet is listed here by id with the reason
 # it is waiting, so a new one still fails the gate. No vulnerability is listed:
 # a vulnerable crate fails the gate until it is upgraded.
+#
+# The six zip extraction advisories are absent for that reason, not by oversight.
+# They are all extraction paths — `extract()`, `ZipStreamReader`, symlink targets,
+# WinZip AES — and the graph is on zip 9 with `default-features = false, features =
+# ["deflate"]`, which clears them (the features drop the bzip2/LZMA/XZ/Zstd/PPMd/
+# Deflate64 decoders and the AES path as well). The readers never call an extraction
+# path at any version: they list entries and read the one they ask for out of a
+# package they hold in memory (`ZipArchive::by_name`/`by_index`). An ignore here
+# would silence a fix the tree already has.
 ignore = [
     # chrono is unmaintained (not vulnerable), and no release replaces it yet.
     # The xlsx reader's date parsing is the only use; moving it to a maintained
