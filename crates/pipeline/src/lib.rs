@@ -50,6 +50,14 @@ pub struct ConvertOptions<'a> {
     /// decode per page. A caller reading faxed or noisy scans turns it on;
     /// `--ocr-despeckle` is the command line's word for the same decision.
     pub despeckle: bool,
+    /// Turn a page its scanning put at an angle flat before recognising it.
+    ///
+    /// Off by default: a born-digital page has no skew, and the estimate is
+    /// two passes over the page's ink. A page whose reading is under half a
+    /// degree is left untouched, so a straight page is not resampled for a
+    /// reading that is noise. `--ocr-deskew` is the command line's word for
+    /// the same decision.
+    pub deskew: bool,
     /// Rasterise a page whose text exists only as vector art.
     ///
     /// A page with no text layer and no picture has nothing to recognise: its
@@ -93,6 +101,7 @@ impl Default for ConvertOptions<'_> {
             ocr_lang: "eng",
             psm: None,
             despeckle: false,
+            deskew: false,
             vector_pages: false,
             limits: Limits::default(),
             page_range: None,
@@ -391,6 +400,7 @@ fn build_with_engine(
                 range: options.page_range,
                 password: options.pdf_password,
                 despeckle: options.despeckle,
+                deskew: options.deskew,
                 vector_pages: options.vector_pages,
             },
             image_base,
@@ -454,6 +464,7 @@ fn build_with_engine(
                 path,
                 options.page_range,
                 options.despeckle,
+                options.deskew,
                 &options.limits,
                 engine,
             )?
@@ -718,6 +729,8 @@ struct PdfReading<'a> {
     password: Option<&'a str>,
     /// Replace the isolated pixels a fax leaves before recognising a page.
     despeckle: bool,
+    /// Turn a page its scanning put at an angle flat before recognising it.
+    deskew: bool,
     /// Render a page whose text exists only as vector art, and recognise it.
     vector_pages: bool,
 }
@@ -1069,13 +1082,51 @@ fn convert_pdf(
                     None
                 };
                 let bytes = prepared.as_deref().unwrap_or(bytes);
+                // A page swept onto the platen at an angle has its lines at
+                // that angle. The estimator reads the direction the lines run,
+                // and the page is turned flat before recognition; a reading
+                // under half a degree is noise and the page is left as it is.
+                let mut straightened = None;
+                let mut skew = 0.0f64;
+                if reading.deskew {
+                    match pdfextractor_ocr_engine::preprocess::skew_angle(bytes, limits) {
+                        Ok(angle) if angle.abs() >= MIN_SKEW => {
+                            match pdfextractor_ocr_engine::preprocess::deskew_page(
+                                bytes, angle, limits,
+                            ) {
+                                Ok(png) => {
+                                    tracing::debug!(
+                                        "page {} is {angle:.2} degrees askew; turned flat",
+                                        page.page_no
+                                    );
+                                    skew = angle;
+                                    straightened = Some(png);
+                                }
+                                Err(err) => {
+                                    tracing::debug!("could not deskew page {}: {err}", page.page_no)
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => tracing::debug!(
+                            "could not measure the skew of page {}: {err}",
+                            page.page_no
+                        ),
+                    }
+                }
+                let bytes = straightened.as_deref().unwrap_or(bytes);
                 match engine.recognize(bytes) {
                     Ok(result) => {
                         if result.lines.is_empty() {
                             tracing::debug!("OCR found no text on page {}", page.page_no);
                         }
                         for line in &result.lines {
-                            let bbox = scale_ocr_bbox(line.bbox, pixels_w, pixels_h, box_);
+                            let bbox = scale_ocr_bbox(
+                                unskew_bbox(line.bbox, pixels_w, pixels_h, skew),
+                                pixels_w,
+                                pixels_h,
+                                box_,
+                            );
                             spans.push(LayoutSpan {
                                 text: line.text.clone(),
                                 bbox,
@@ -2750,6 +2801,7 @@ fn convert_image(
     path: &Path,
     page_range: Option<&page_range::PageRange>,
     despeckle: bool,
+    deskew: bool,
     limits: &Limits,
     mut engine: Option<&mut OcrEngine>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
@@ -3026,6 +3078,37 @@ fn convert_image(
             None
         };
         let pixels = prepared.as_deref().unwrap_or(pixels.as_slice());
+        // A picture of a page on a desk is as crooked as the page was, and the
+        // same estimate turns it flat. The grid is kept, so the line boxes are
+        // mapped back through the same turn before they are scaled.
+        let mut straightened = None;
+        let mut skew = 0.0f64;
+        if deskew {
+            match pdfextractor_ocr_engine::preprocess::skew_angle(pixels, limits) {
+                Ok(angle) if angle.abs() >= MIN_SKEW => {
+                    match pdfextractor_ocr_engine::preprocess::deskew_page(pixels, angle, limits) {
+                        Ok(png) => {
+                            tracing::debug!(
+                                "{} (page {page}) is {angle:.2} degrees askew; turned flat",
+                                path.display()
+                            );
+                            skew = angle;
+                            straightened = Some(png);
+                        }
+                        Err(err) => tracing::debug!(
+                            "could not deskew {} (page {page}): {err}",
+                            path.display()
+                        ),
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => tracing::debug!(
+                    "could not measure the skew of {} (page {page}): {err}",
+                    path.display()
+                ),
+            }
+        }
+        let pixels = straightened.as_deref().unwrap_or(pixels);
         let result = match engine.recognize(pixels) {
             Ok(result) => result,
             Err(err) => {
@@ -3046,7 +3129,7 @@ fn convert_image(
             .iter()
             .map(|line| {
                 let bbox = scale_ocr_bbox(
-                    line.bbox,
+                    unskew_bbox(line.bbox, pixel_width, pixel_height, skew),
                     pixel_width,
                     pixel_height,
                     [0.0, 0.0, width, height],
@@ -4243,6 +4326,51 @@ pub fn rotate_for_ocr_checked(
             detail: error.to_string(),
         })?;
     Ok((png, width, height))
+}
+
+/// The smallest reading deskew acts on, in degrees.
+///
+/// Below this the estimate is measurement noise — a quarter-degree step cannot
+/// resolve it — and resampling a straight page would move every pixel for
+/// nothing.
+const MIN_SKEW: f64 = 0.5;
+
+/// Rotate a box on a deskewed page back to the pixels recognition's caller
+/// scales onto the page.
+///
+/// `degrees` is the turn [`pdfextractor_ocr_engine::preprocess::deskew_page`]
+/// applied; its sampling matrix maps an output row to the input line of slope
+/// `tan(degrees)`, so the box's corners are mapped through the same matrix and
+/// the axis-aligned bounds of the result is the box on the page.
+fn unskew_bbox(bbox: [i32; 4], width: u32, height: u32, degrees: f64) -> [i32; 4] {
+    if degrees == 0.0 {
+        return bbox;
+    }
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (cx, cy) = (width as f64 / 2.0, height as f64 / 2.0);
+    let (mut left, mut top) = (f64::MAX, f64::MAX);
+    let (mut right, mut bottom) = (f64::MIN, f64::MIN);
+    for (x, y) in [
+        (bbox[0], bbox[1]),
+        (bbox[2], bbox[1]),
+        (bbox[2], bbox[3]),
+        (bbox[0], bbox[3]),
+    ] {
+        let dx = x as f64 - cx;
+        let dy = y as f64 - cy;
+        let sx = cx + dx * cos - dy * sin;
+        let sy = cy + dx * sin + dy * cos;
+        left = left.min(sx);
+        top = top.min(sy);
+        right = right.max(sx);
+        bottom = bottom.max(sy);
+    }
+    [
+        left.floor() as i32,
+        top.floor() as i32,
+        right.ceil() as i32,
+        bottom.ceil() as i32,
+    ]
 }
 
 /// Map an OCR box in image pixels into the box the image occupies on the page.

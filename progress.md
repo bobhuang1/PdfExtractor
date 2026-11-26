@@ -773,3 +773,28 @@ and two repository gates were already red.
   with the suite at 1,373; the pipeline's renderer lookup test passed;
   workspace clippy `-D warnings` and `cargo fmt --all --check` clean; manual
   runs for the `--ocr never` refusal and for a scanned PDF with the flag.
+
+### 2026-11-26 — deskew, measured on a real skewed scan
+
+- **The bug behind the earlier failures.** The projection profile was sheared
+  the wrong way — ink binned along `x - t*y`, which straightens upright
+  strokes — so it answered zero to a page whose text descends. Binning along
+  the direction the text runs (`y - t*x`) reads the tilt exactly: on
+  `invoice_scan.png` turned 2, 4 and 6 degrees and back the estimator returned
+  those angles, and zero on the upright page.
+- **Implementation.** `preprocess::skew_angle` bins the ink once and scores
+  each candidate by how sharply the rows separate; `deskew_page` turns the page
+  about its centre on the same grid. `--ocr-deskew` acts only from half a
+  degree up, so a straight page is never resampled, and both OCR paths (a PDF's
+  images and a picture handed in) map the recognised boxes back through the
+  turn before scaling them onto the page.
+- **The fixture.** `invoice_scan_skewed.png` (`make_skewed_scan.py`) is the
+  scan turned ten degrees, where Tesseract's lines stop lining up: as stored
+  `Invoice 12345` and `Total Due 42.50` come back mangled (`IMvoice 12345`,
+  `42 59`), and the estimator's 9.75 degrees turns them flat and reads both.
+  The turn crops the title's corner, as a page not centred on the platen does,
+  so the test asserts the two lines the pixels keep rather than all four.
+- **Checks.** ocr-engine preprocess tests 7 passed (three new); `cli_test` 144
+  passed; `documentation_test` 4 passed with the suite at 1,377; workspace
+  clippy `-D warnings` and `cargo fmt --all --check` clean.
+

@@ -410,6 +410,13 @@ struct Args {
     #[arg(long)]
     ocr_despeckle: bool,
 
+    /// Turn a page that was scanned at an angle flat before recognising it.
+    /// Off by default: a born-digital page has no skew, and the estimate is
+    /// two passes over the page's ink. A page under half a degree askew is
+    /// left untouched
+    #[arg(long)]
+    ocr_deskew: bool,
+
     /// Render PDF pages whose text is only vector art — no text layer and no
     /// picture — with `pdftoppm` and recognise the render. Off by default,
     /// because it is the one reading that needs a renderer installed; needs
@@ -1699,6 +1706,7 @@ fn build_document(
         ocr_lang: &args.ocr_lang,
         psm: args.psm,
         despeckle: args.ocr_despeckle,
+        deskew: args.ocr_deskew,
         vector_pages: args.ocr_vector_pages,
         page_range: args.page_range.as_ref(),
         pdf_password: args.pdf_password.as_deref(),

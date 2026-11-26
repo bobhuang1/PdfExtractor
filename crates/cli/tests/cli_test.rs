@@ -1996,6 +1996,88 @@ fn a_rotated_scan_is_read_upright() {
     }
 }
 
+/// A page swept onto the platen at an angle: `invoice_scan_skewed.png` is the
+/// scan turned ten degrees clockwise (`make_skewed_scan.py`), the angle at
+/// which Tesseract's lines stop lining up. Read as stored, the invoice and
+/// total lines come back mangled; `--ocr-deskew` measures the tilt, turns the
+/// page flat and reads both. The turn is about the centre and keeps the grid,
+/// so the boxes are mapped back through it and still land inside the page.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn a_skewed_scan_is_turned_flat_and_read() {
+    let ws = Workspace::new("skewed");
+    let fixture = repository_root().join("test-data/invoice_scan_skewed.png");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("invoice_scan_skewed.png", &bytes);
+
+    let recognised = |name: &str, deskew: bool| {
+        let output = ws.join(&format!("{name}.json"));
+        let mut args = vec![
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--ocr",
+            "always",
+        ];
+        if deskew {
+            args.push("--ocr-deskew");
+        }
+        run_ok(&args);
+        let doc = json_of(&output);
+        let text = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .map(|text| text["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        (doc, text)
+    };
+
+    let (_, skewed) = recognised("skewed", false);
+    let (flat, straightened) = recognised("straightened", true);
+
+    // The tilt is what costs these lines, and turning the page flat is what
+    // brings them back: as stored they read "IMvoice 12345" and "42 59".
+    for phrase in ["Invoice 12345", "Total Due 42.50"] {
+        assert!(
+            !skewed.contains(phrase),
+            "the fixture no longer costs {phrase:?} without the turn, so it measures \
+             nothing: {skewed}"
+        );
+        assert!(
+            straightened.contains(phrase),
+            "deskew did not recover {phrase:?}: {straightened}"
+        );
+    }
+
+    // The page keeps the scan's grid, and the boxes map back onto it rather
+    // than staying in the turned image's pixels.
+    let size = &flat["pages"]["1"]["size"];
+    let width = size["width"].as_f64().expect("a width");
+    let height = size["height"].as_f64().expect("a height");
+    assert!((width - 297.575).abs() < 0.1, "width {width}");
+    assert!((height - 167.986).abs() < 0.1, "height {height}");
+    for text in flat["texts"].as_array().expect("a text list") {
+        let bbox = &text["prov"][0]["bbox"];
+        let (l, t, r, b) = (
+            bbox["l"].as_f64().unwrap(),
+            bbox["t"].as_f64().unwrap(),
+            bbox["r"].as_f64().unwrap(),
+            bbox["b"].as_f64().unwrap(),
+        );
+        assert!(
+            l >= 0.0 && t >= 0.0 && r <= width + 0.5 && b <= height + 0.5,
+            "box outside the page: {bbox}"
+        );
+    }
+}
+
 /// A page whose only text is vector art: `vector_text.pdf` is the invoice laid
 /// out as text and flattened by Ghostscript, so it holds no font, no
 /// text-showing operator and no image — the words are filled paths. Without the

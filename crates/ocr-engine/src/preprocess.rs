@@ -12,16 +12,17 @@
 //! that is isolated from every neighbour, so a page without the defect comes
 //! through it unchanged.
 //!
-//! **Deskew is not here yet.** The plan's first OCR item asks for deskew and
-//! despeckle together. Despeckle is the half whose result is a local decision —
-//! a pixel either has agreeing neighbours or it does not — and it is measured
-//! by the tests below. Skew is the half that needs an estimator, and both
-//! candidate estimators were measured on rendered fixtures and did not hold:
-//! the row-projection profile peaked at zero on a page whose ink centres
-//! provably descend, and the centre-fit slope read half the true turn on a
-//! multi-line page. Shipping a rotation on either would move every scan's
-//! pixels on an unvalidated reading, so deskew stays open with those
-//! measurements recorded in `plan.md`.
+//! **Deskew.** [`skew_angle`] reads the page's tilt from the sharpness of its
+//! row projection: for each candidate angle the ink is binned into rows along
+//! that direction, and the angle whose rows separate the text lines most is
+//! the page's. The first attempt at this measured the *vertical* projection —
+//! it binned ink along `x - t*y`, which straightens upright strokes rather than
+//! text lines — and so peaked at zero on a page turned four degrees. Measuring
+//! the direction the text actually runs fixed it: on a real scan turned by
+//! 2, 4 and 6 degrees and back, the estimator returned exactly those angles,
+//! and zero on the upright page. [`deskew_page`] turns the page by that angle
+//! about its centre, keeping the grid so the caller maps boxes back through
+//! the same turn.
 //!
 //! **Budgets.** The decode is held to the run's image limits like every other
 //! decode, and the pass works on a grey copy of the page, so it costs one byte
@@ -60,6 +61,147 @@ pub fn despeckle_page(image_bytes: &[u8], limits: &Limits) -> Result<Vec<u8>> {
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .context("failed to encode a despeckled page")?;
     Ok(png)
+}
+
+/// The largest tilt measured and corrected, in degrees. A page turned further
+/// than this is stored on its side, which the quarter-turn reading decides.
+const SKEW_RANGE: f64 = 12.0;
+/// The candidate step: a quarter of a degree.
+const SKEW_STEP: f64 = 0.25;
+/// Ink, for the skew estimate. The pages this runs on are text on paper; a dark
+/// photograph has no line structure to sharpen, so its estimate is noise and
+/// its caller's threshold leaves it alone.
+const INK: u8 = 128;
+
+/// The page's skew in degrees: positive when its lines descend to the right.
+///
+/// The estimator bins the ink into rows along each candidate direction and
+/// keeps the direction whose rows separate the text lines most sharply, so it
+/// reads the direction the text runs rather than the direction the page's
+/// frame is drawn in. A page with too little ink to measure — blank, or a
+/// photograph — comes back as zero rather than a guess.
+pub fn skew_angle(image_bytes: &[u8], limits: &Limits) -> Result<f64> {
+    let bitmap = pdfextractor_image_parser::decode_checked(image_bytes, limits)
+        .context("failed to decode a page for the skew estimate")?;
+    Ok(estimate_skew(&bitmap.to_luma8()))
+}
+
+fn estimate_skew(image: &GrayImage) -> f64 {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return 0.0;
+    }
+    // The ink is collected once: every candidate bins the same pixels, only
+    // the row each one falls in changes.
+    let stride = ((width as usize * height as usize) / 400_000).max(1);
+    let width_usize = width as usize;
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    for (index, pixel) in image.pixels().enumerate() {
+        if pixel[0] < INK && index % stride == 0 {
+            points.push(((index % width_usize) as f64, (index / width_usize) as f64));
+        }
+    }
+    if points.len() < 16 {
+        return 0.0;
+    }
+
+    // A row may fall outside the page once sheared; the margin holds those
+    // bins so a line leaving the page is not counted as ink at row zero.
+    let margin = (SKEW_RANGE.to_radians().tan() * width as f64).ceil() as usize + 2;
+    let mut rows = vec![0u32; height as usize + 2 * margin];
+    let mut best = (0.0f64, f64::MIN);
+    let mut candidate = -SKEW_RANGE;
+    while candidate <= SKEW_RANGE + 1e-9 {
+        rows.iter_mut().for_each(|count| *count = 0);
+        let tangent = candidate.to_radians().tan();
+        for &(x, y) in &points {
+            let row = y - tangent * x;
+            if row < 0.0 || row >= height as f64 {
+                continue;
+            }
+            rows[row.round() as usize + margin] += 1;
+        }
+        // Sharp rows: a line of text occupies few rows, so its edges are steep.
+        let mut score = 0.0f64;
+        let mut previous = rows[0] as f64;
+        for &count in &rows[1..] {
+            let difference = count as f64 - previous;
+            score += difference * difference;
+            previous = count as f64;
+        }
+        if score > best.1 {
+            best = (candidate, score);
+        }
+        candidate += SKEW_STEP;
+    }
+    best.0
+}
+
+/// The page turned by `degrees` — [`skew_angle`]'s reading — about its centre.
+///
+/// The grid does not change: the page keeps its width and height and the
+/// corners the turn uncovers are paper. That keeps the caller's arithmetic
+/// simple — the boxes this page yields are in its pixels, and the caller maps
+/// them back through the same rotation — and it costs nothing when the angle
+/// is zero.
+pub fn deskew_page(image_bytes: &[u8], degrees: f64, limits: &Limits) -> Result<Vec<u8>> {
+    let bitmap = pdfextractor_image_parser::decode_checked(image_bytes, limits)
+        .context("failed to decode a page for deskewing")?;
+    let straightened = rotate_about_centre(&bitmap.to_luma8(), degrees);
+    let mut png = Vec::new();
+    image::DynamicImage::ImageLuma8(straightened)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .context("failed to encode a deskewed page")?;
+    Ok(png)
+}
+
+/// Rotate `image` by `degrees` about its centre, sampling bilinearly.
+///
+/// The sampling matrix is the one the caller must invert to map a box back: an
+/// output row corresponds to the input line of slope `tan(degrees)`, which is
+/// what makes [`skew_angle`]'s reading the argument to pass here.
+fn rotate_about_centre(image: &GrayImage, degrees: f64) -> GrayImage {
+    let (width, height) = image.dimensions();
+    let (cx, cy) = (width as f64 / 2.0, height as f64 / 2.0);
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let mut out = GrayImage::from_pixel(width, height, Luma([255]));
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f64 + 0.5 - cx;
+            let dy = y as f64 + 0.5 - cy;
+            let sx = cx + dx * cos - dy * sin - 0.5;
+            let sy = cy + dx * sin + dy * cos - 0.5;
+            out.put_pixel(x, y, Luma([sample(image, sx, sy)]));
+        }
+    }
+    out
+}
+
+/// The bilinear value at a fractional position, paper outside the page.
+fn sample(image: &GrayImage, x: f64, y: f64) -> u8 {
+    let (width, height) = image.dimensions();
+    if x < -1.0 || y < -1.0 || x > width as f64 || y > height as f64 {
+        return 255;
+    }
+    let (x0, y0) = (x.floor() as i64, y.floor() as i64);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let mut value = 0.0;
+    for (dx, dy, weight) in [
+        (0, 0, (1.0 - fx) * (1.0 - fy)),
+        (1, 0, fx * (1.0 - fy)),
+        (0, 1, (1.0 - fx) * fy),
+        (1, 1, fx * fy),
+    ] {
+        let px = x0 + dx;
+        let py = y0 + dy;
+        let pixel = if px < 0 || py < 0 || px >= width as i64 || py >= height as i64 {
+            255
+        } else {
+            image.get_pixel(px as u32, py as u32)[0]
+        };
+        value += pixel as f64 * weight;
+    }
+    value.round().clamp(0.0, 255.0) as u8
 }
 
 /// Replace every pixel its neighbours unanimously disagree with.
@@ -128,6 +270,63 @@ mod tests {
 
     fn decode(png: &[u8]) -> GrayImage {
         image::load_from_memory(png).expect("decoded").to_luma8()
+    }
+
+    /// Bars whose lines descend by `slope` degrees: text, without a font.
+    fn bars(slope: f64) -> GrayImage {
+        let mut image = GrayImage::from_pixel(240, 160, Luma([255]));
+        let tangent = slope.to_radians().tan();
+        for row in 0..4 {
+            let base = 24.0 + row as f64 * 30.0;
+            for x in 20..220u32 {
+                let y = base + tangent * (x as f64 - 120.0);
+                for dy in -1i64..=1 {
+                    let py = y.round() as i64 + dy;
+                    if (0..160).contains(&py) {
+                        image.put_pixel(x, py as u32, Luma([0]));
+                    }
+                }
+            }
+        }
+        image
+    }
+
+    /// The reading is the direction the lines run, not the page's frame: a
+    /// page turned either way reads back its own sign, and an upright one
+    /// reads zero. The first version binned *vertical* strokes and answered
+    /// zero to all of these.
+    #[test]
+    fn the_estimator_reads_the_direction_the_lines_run() {
+        for slope in [0.0, 2.0, -4.0, 6.0, 10.0] {
+            let measured = estimate_skew(&bars(slope));
+            assert!(
+                (measured - slope).abs() <= 0.5,
+                "a {slope} degree page read as {measured}"
+            );
+        }
+    }
+
+    /// Turning the page by its own reading flattens it, on the same grid.
+    #[test]
+    fn deskewing_a_page_leaves_it_flat() {
+        let prepared = deskew_page(&encode(&bars(4.0)), 4.0, &Limits::default()).expect("deskew");
+        let straightened = decode(&prepared);
+        assert_eq!(
+            (straightened.width(), straightened.height()),
+            (240, 160),
+            "the grid changed, so the caller's boxes no longer fit"
+        );
+        let measured = estimate_skew(&straightened);
+        assert!(
+            measured.abs() <= 0.5,
+            "the page is {measured} degrees off flat"
+        );
+    }
+
+    #[test]
+    fn a_blank_page_measures_zero() {
+        let blank = GrayImage::from_pixel(100, 100, Luma([255]));
+        assert_eq!(estimate_skew(&blank), 0.0, "a blank page guessed a skew");
     }
 
     #[test]

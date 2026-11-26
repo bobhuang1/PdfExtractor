@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,373 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,377 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -173,7 +173,7 @@ interpreter exists, and otherwise stops before compiling with the same two optio
 never opts out on the caller's behalf, so a gate that stops here reads as setup and not
 as a regression.
 
-There are 143 end-to-end tests in `cli_test` that run the built binary as a child process.
+There are 144 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
@@ -347,7 +347,7 @@ from a measurement rather than from scratch.
 
 | # | Item | First phase | Exit check |
 |---|---|---|---|
-| 1 | OCR preprocessing | **despeckle landed** (`--ocr-despeckle`); deskew open, with its measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
+| 1 | OCR preprocessing | **landed**: despeckle (`--ocr-despeckle`) and deskew (`--ocr-deskew`), with the measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
 | 2 | Vector-page rasterising | **landed** (`--ocr-vector-pages`), with the renderer rule recorded below | `a_page_whose_text_is_vector_art_is_rasterised_and_read` |
 | 3 | Non-English and fax fixtures | **the fax half landed** (`fax_scan.png`, from `make_fax_scan.py`); the German scan is open | `despeckle_recovers_words_a_faxed_scan_loses`; the German words read |
 | 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
@@ -356,20 +356,25 @@ from a measurement rather than from scratch.
 | 7 | Benchmarks with varied sizes | benches over small, medium and large documents, serial and parallel | the numbers are recorded in a round note |
 | — | GPU, service mode | **not started**: no GPU on this machine or in CI, and a service mode needs a design decision (protocol, lifetime, authentication) before any code | — |
 
-**1 — despeckle, and why deskew is not in it yet.** `--ocr-despeckle` replaces the
+**1 — despeckle.** `--ocr-despeckle` replaces the
 pixels no neighbour agrees with — a dark speck on paper, a light one inside ink — before
 recognition, when the caller asks for it. It keeps the page's grid, so the boxes scale
 onto the page exactly as they do without it; a page without specks comes through
 unchanged, and a photograph's grain fails the same test, so a photograph is not smoothed.
 
-Deskew was attempted and **not shipped**: both estimators were measured on rendered
-fixtures and neither held. The row-projection profile peaked at zero on a page whose ink
-centres provably descend four degrees (12 px over 180), and every rotated hypothesis
-scored worse than the unrotated one. A least-squares fit through the per-column ink
-centres tracked the turn but read about half of it on a multi-line page — 2° for a 4° turn
-— because a column's centre mixes the lines above and below the page's middle. Shipping a
-rotation on either reading would move every scan's pixels on an unvalidated estimate, so
-the next phase measures on a real skewed scan rather than a rendered one.
+**Deskew, and the measurement that unblocked it.** `--ocr-deskew` turns a page flat
+before recognition. Two earlier estimators were measured on rendered fixtures and
+rejected. The profile that replaced them was first written with its shear on the wrong
+axis — ink binned along `x - t*y`, which straightens upright strokes — so it answered
+zero to a page whose text descends four degrees. Binning along the direction the text
+runs (`y - t*x`) reads the tilt: on the real scan turned 2, 4 and 6 degrees and back it
+returned exactly those angles, and zero on the upright page. The estimate is acted on
+only from half a degree up, so a straight page is never resampled; the turn is about the
+centre on the same grid, and the boxes are mapped back through it. `invoice_scan_skewed.png`
+(`make_skewed_scan.py`, ten degrees, where Tesseract's lines stop lining up) holds it: as
+stored `Invoice 12345` and `Total Due 42.50` come back mangled, and turned flat both
+read. The turn crops the title's corner, as a page not centred on the platen really does,
+so the test asserts the two lines the pixels keep.
 
 **3 — the fax fixture measures the pass.** `fax_scan.png` is the scan with two percent of
 its pixels replaced — salt on paper, pepper inside the ink — placed by a fixed generator so
@@ -408,8 +413,8 @@ Each is real work that is larger than a finishing pass, or needs measurement on 
 Linux OCR floors, or ML; the old plan's text for each is in
 [docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md).
 
-- OCR: deskew and the non-English fixtures. Despeckle and the vector-page rasteriser
-  have landed, and what is left is sequenced in *Next workstreams* above.
+- OCR: the German-scan fixture. Despeckle, deskew and the vector-page rasteriser have
+  landed, and what is left is sequenced in *Next workstreams* above.
 - PDF: table cells and spans; heuristic formula regions; a rotation angle on
   boxes; captions as furniture.
 - Formats: EPUB and e-mail; `.doc` character formatting without LibreOffice; DOCX
