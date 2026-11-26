@@ -701,3 +701,29 @@ and two repository gates were already red.
   + 14 + 9 + 31 + 5 + 2 + 2 + 22 + 6 passed; `cli_test` 140 passed;
   `documentation_test` 4 passed with the suite at 1,366; workspace clippy
   `-D warnings` and `cargo fmt --all --check` clean.
+
+### 2026-11-26 — the gate finds its own oracle
+
+- **The ambiguity.** `./scripts/test.sh --full` ran `cargo test --workspace
+  --locked` with the caller's environment untouched, so a machine that had
+  `~/.venvs/pdfextractor-docling` still failed
+  `docling_core_accepts_our_documents` with "DOCLING_PY is unset" — a release
+  gate that could not be told apart from a regression without reading the
+  message.
+- **Resolved by the runner.** The full path adopts that interpreter when it is
+  executable, stops before compiling with the test's own instruction when there
+  is neither it nor `DOCLING_PY`, and only ever honours `DOCLING_SKIP_ORACLE` —
+  it never sets it. `--no-run` and a sharded `--full` take the venv when present
+  without failing over one; `--list`/`--json` exit before the check.
+- **The self-test could not run at all.** It was red on a clean tree:
+  `test-data/crlf_text.docx` and `test-data/encrypted_cryptfilter_aesv2.pdf`
+  were tracked with no `scripts/fixture-owners.tsv` row, and `fail()` exits at
+  the coverage assertion, so no assertion after it ran. Both owners were read
+  off the code (`crates/docx-parser#lib` for the docx's lib unit test,
+  `crates/pdf-parser/tests/crypt_test.rs` for the crypt fixture) and added. The
+  stub `cargo` now records `DOCLING_PY` and the full-path cases redirect `HOME`,
+  so the answer does not depend on the machine running the tests.
+- **Checks.** `./scripts/test.sh --full --filter
+  docling_core_accepts_our_documents` green, the gate naming the venv
+  (215.47 s); `cli_test` 140 passed; `documentation_test` 4 passed; the runner
+  self-test 89 ok with exit 0.

@@ -331,9 +331,9 @@ pipeline unit suites green, and workspace clippy `-D warnings` with `cargo fmt
 
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing the branch.** `main` is `origin/main` (`1f16b88`) plus two local
-  commits — WS8 P4 and this round — and nothing here pushes without the owner
-  asking. The rounds recorded above are on `origin/main` already.
+- **Pushing the branch.** The rounds recorded above are on `origin/main`
+  (`ad82c90`), pushed on the owner's ask; `main` is that plus one local commit
+  (the docling gate), and nothing here pushes without the owner asking.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.

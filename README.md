@@ -167,6 +167,11 @@ or rerun execution removes only targets that actually ran and passed, keeps
 failures for targets that did not run, and records new failures.
 `--rerun-failed` runs only the recorded targets and clears the file when none
 remain.
+`--full` runs `cargo test --workspace --locked` and resolves the docling oracle
+itself: it uses `~/.venvs/pdfextractor-docling/bin/python` when that interpreter
+exists, and otherwise stops before compiling with the instruction to set
+`DOCLING_PY` or opt out with `DOCLING_SKIP_ORACLE=1` — it never opts out on the
+caller's behalf.
 Run the runner's own focused tests with `./scripts/test.sh --self-test`.
 
 ```bash
