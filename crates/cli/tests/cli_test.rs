@@ -12038,6 +12038,164 @@ fn an_image_becomes_one_page_read_by_ocr() {
     }
 }
 
+/// `--ocr-despeckle` on a page with no specks changes nothing it should not:
+/// the clean scan still reads every line, and every box still lands inside the
+/// page. The flag's wiring into the pipeline is held here rather than by a
+/// manual run.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn a_clean_scan_reads_the_same_with_despeckle() {
+    let ws = Workspace::new("clean-despeckle");
+    let fixture = repository_root().join("test-data/invoice_scan.png");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("invoice_scan.png", &bytes);
+    let output = ws.join("invoice_scan.json");
+
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "always",
+        "--ocr-despeckle",
+    ]);
+
+    let doc = json_of(&output);
+    let texts = doc["texts"].as_array().expect("a text list");
+    let joined = texts
+        .iter()
+        .map(|text| text["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needle in [
+        "ACME SUPPLIES",
+        "Invoice 12345",
+        "Total Due 42.50",
+        "Thank you for your business.",
+    ] {
+        assert!(joined.contains(needle), "missing {needle:?} in: {joined}");
+    }
+
+    // The pass keeps the page's grid, so the boxes scale onto the page exactly
+    // as they do without it.
+    let size = &doc["pages"]["1"]["size"];
+    let width = size["width"].as_f64().expect("a width");
+    let height = size["height"].as_f64().expect("a height");
+    assert!((width - 297.575).abs() < 0.1, "width {width}");
+    assert!((height - 167.986).abs() < 0.1, "height {height}");
+    for text in texts {
+        let bbox = &text["prov"][0]["bbox"];
+        let (l, t, r, b) = (
+            bbox["l"].as_f64().unwrap(),
+            bbox["t"].as_f64().unwrap(),
+            bbox["r"].as_f64().unwrap(),
+            bbox["b"].as_f64().unwrap(),
+        );
+        assert!(
+            l >= 0.0 && t >= 0.0 && r <= width + 0.5 && b <= height + 0.5,
+            "box outside the page: {bbox}"
+        );
+    }
+}
+
+/// The fax defect, measured rather than asserted: `fax_scan.png` is
+/// `invoice_scan.png` with two percent of its pixels replaced — salt on paper,
+/// pepper inside ink (see `test-data/make_fax_scan.py`), which is what a fax
+/// line drops. Read as stored, the noise takes the letters out of the invoice
+/// and total lines; read with `--ocr-despeckle`, the pass replaces the pixels
+/// no neighbour agrees with and both lines come back. The page is the same
+/// either way, because the pass keeps the pixel grid.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn despeckle_recovers_words_a_faxed_scan_loses() {
+    let ws = Workspace::new("fax");
+    let fixture = repository_root().join("test-data/fax_scan.png");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("fax_scan.png", &bytes);
+
+    let recognised = |name: &str, despeckle: bool| {
+        let output = ws.join(&format!("{name}.json"));
+        let mut args = vec![
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--ocr",
+            "always",
+        ];
+        if despeckle {
+            args.push("--ocr-despeckle");
+        }
+        run_ok(&args);
+        let doc = json_of(&output);
+        let text = doc["texts"]
+            .as_array()
+            .expect("a text list")
+            .iter()
+            .map(|text| text["text"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        (doc, text)
+    };
+
+    let (noisy_doc, noisy) = recognised("noisy", false);
+    let (clean_doc, clean) = recognised("clean", true);
+
+    // Both phrases are read only after the pass: as stored, the specks split
+    // the glyphs and Tesseract reads "invoice, 12345" and "Tétal:Duie".
+    for phrase in ["Invoice 12345", "Total Due 42.50"] {
+        assert!(
+            !noisy.contains(phrase),
+            "the fixture no longer costs {phrase:?} without the pass, so it measures \
+             nothing: {noisy}"
+        );
+        assert!(
+            clean.contains(phrase),
+            "despeckle did not recover {phrase:?}: {clean}"
+        );
+    }
+    assert!(
+        clean.contains("ACME SUPPLIES"),
+        "the despeckled page lost a line it already read: {clean}"
+    );
+
+    // One page, the scan's own grid: the pass filters the pixels and does not
+    // resize the page the boxes are measured on.
+    for (label, doc) in [("as stored", &noisy_doc), ("despeckled", &clean_doc)] {
+        let pages = doc["pages"].as_object().expect("a page map");
+        assert_eq!(pages.len(), 1, "{label}: {pages:#?}");
+        let size = &doc["pages"]["1"]["size"];
+        let width = size["width"].as_f64().expect("a width");
+        let height = size["height"].as_f64().expect("a height");
+        assert!(
+            (width - 297.575).abs() < 0.1 && (height - 167.986).abs() < 0.1,
+            "{label}: page {width} x {height}"
+        );
+        for text in doc["texts"].as_array().expect("a text list") {
+            let bbox = &text["prov"][0]["bbox"];
+            let (l, t, r, b) = (
+                bbox["l"].as_f64().unwrap(),
+                bbox["t"].as_f64().unwrap(),
+                bbox["r"].as_f64().unwrap(),
+                bbox["b"].as_f64().unwrap(),
+            );
+            assert!(
+                l >= 0.0 && t >= 0.0 && r <= width + 0.5 && b <= height + 0.5,
+                "{label}: box outside the page: {bbox}"
+            );
+        }
+    }
+}
+
 /// Every encoding the reader accepts names its own media type and writes its
 /// own page. WebP carries no resolution and a JP2 states none of its own, so
 /// their pages are one pixel per point; so is a JPEG 2000 codestream, which has

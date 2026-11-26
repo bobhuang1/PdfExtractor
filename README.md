@@ -1388,6 +1388,8 @@ test-data/
 ├── picture_bullets.docx, .pptx              # list items whose bullets are pictures,
 │                                            #   one of them an SVG (make_picture_bullets.py)
 ├── invoice_scan.png                         # image fixture (make_scan_images.py)
+├── fax_scan.png                             # the same scan with a fax's salt-and-pepper
+│                                            #   noise (make_fax_scan.py)
 ├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4
 │                                            #   and G3 two-dimensional
 ├── jbig2_scan.pdf                           # the same scan in JBIG2

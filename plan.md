@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,370 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,372 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -173,7 +173,7 @@ interpreter exists, and otherwise stops before compiling with the same two optio
 never opts out on the caller's behalf, so a gate that stops here reads as setup and not
 as a regression.
 
-There are 140 end-to-end tests in `cli_test` that run the built binary as a child process.
+There are 142 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
@@ -349,7 +349,7 @@ from a measurement rather than from scratch.
 |---|---|---|---|
 | 1 | OCR preprocessing | **despeckle landed** (`--ocr-despeckle`); deskew open, with its measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
 | 2 | Vector-page rasterising | render a page with neither text nor pictures through `pdftoppm` and recognise it | a fixture whose only text is vector art reads its words |
-| 3 | Non-English and fax fixtures | a German scan and a salt-and-pepper fax scan, both from `test-data/make_*` | the German words read; despeckle recovers the faxed page |
+| 3 | Non-English and fax fixtures | **the fax half landed** (`fax_scan.png`, from `make_fax_scan.py`); the German scan is open | `despeckle_recovers_words_a_faxed_scan_loses`; the German words read |
 | 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
 | 5 | Formula regions | heuristic boxes over maths-like lines | the corpus equation counts do not move without an accepted delta |
 | 6 | EPUB and e-mail | an `epub-parser` crate (container → OPF → spine → the existing HTML reader), then `.eml` | a generated fixture converts with its headings and pictures |
@@ -370,6 +370,16 @@ centres tracked the turn but read about half of it on a multi-line page — 2° 
 — because a column's centre mixes the lines above and below the page's middle. Shipping a
 rotation on either reading would move every scan's pixels on an unvalidated estimate, so
 the next phase measures on a real skewed scan rather than a rendered one.
+
+**3 — the fax fixture measures the pass.** `fax_scan.png` is the scan with two percent of
+its pixels replaced — salt on paper, pepper inside the ink — placed by a fixed generator so
+the file is reproducible (`test-data/make_fax_scan.py`). Read as stored, the specks split
+the glyphs and Tesseract returns `invoice, 12345` and `Tétal:Duie 42.50`; read with
+`--ocr-despeckle` it returns `Invoice 12345` and `Total Due 42.50`, so the two lines the
+noise costs are the two the pass recovers. The page is 297.6 x 168 points and one page
+either way, and the boxes stay inside it: the pass filters pixels and does not move the
+grid. The recovery is partial in the last line (`THiank you for your business.`), which is
+what the test asserts instead of claiming the pass restores the scan.
 
 ## Deferred — recorded, not in this plan
 

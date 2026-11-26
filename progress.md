@@ -727,3 +727,21 @@ and two repository gates were already red.
   docling_core_accepts_our_documents` green, the gate naming the venv
   (215.47 s); `cli_test` 140 passed; `documentation_test` 4 passed; the runner
   self-test 89 ok with exit 0.
+
+### 2026-11-26 — the fax fixture measures the pass
+
+- **A page whose noise the pass can be held to.** `test-data/make_fax_scan.py`
+  writes `fax_scan.png`: `invoice_scan.png` with two percent of its pixels
+  replaced — salt on paper, pepper inside ink — placed by a fixed LCG so a
+  regenerated file is byte for byte the committed one (checked: same sha256 on
+  two runs). Two percent was measured, not guessed: a cleaner page shows no
+  benefit and a noisier one takes pixels out of the glyphs themselves.
+- **What the noise costs, and what the pass recovers.** Read as stored, the
+  scan returns `invoice, 12345` and `Tétal:Duie 42.50`; read with
+  `--ocr-despeckle` it returns `Invoice 12345` and `Total Due 42.50`. The
+  recovery is partial in the last line (`THiank you for your business.`), so
+  the test asserts the two recovered phrases and that the page is one page of
+  the scan's own grid either way — not that the pass restores the page.
+- **Checks.** `cli_test` 142 passed (two new: the flag on the clean scan, the
+  fax comparison); `documentation_test` 4 passed with the suite at 1,372;
+  `cargo fmt --all --check` clean.
