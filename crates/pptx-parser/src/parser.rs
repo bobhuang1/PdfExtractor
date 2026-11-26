@@ -206,7 +206,7 @@ impl PptxDocument {
         guard.check("reading a package")?;
         let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not a PPTX (ZIP) package: {e}"))?;
-        budget.check_zip(archive.archive_mut())?;
+        archive.gate()?;
 
         let presentation = read_part(&mut archive, "ppt/presentation.xml")
             .context("the package has no ppt/presentation.xml")?;
@@ -303,24 +303,21 @@ fn read_part(archive: &mut limits::Package<'_>, name: &str) -> Option<Vec<u8>> {
 /// Every `ppt/slides/slideN.xml` in the package, in numeric order — the
 /// fallback for a package whose presentation part names no slides.
 fn enumerate_slides(archive: &mut limits::Package<'_>) -> Vec<String> {
-    let mut parts: Vec<(u32, String)> = Vec::new();
-    for index in 0..archive.len() {
-        let Ok(file) = archive.by_index(index) else {
-            continue;
-        };
-        let Ok(name) = file.name().map(|name| name.into_owned()) else {
-            continue;
-        };
-        if !name.starts_with("ppt/slides/") || !name.ends_with(".xml") {
-            continue;
-        }
-        let number = name
-            .trim_start_matches("ppt/slides/slide")
-            .trim_end_matches(".xml")
-            .parse()
-            .unwrap_or(u32::MAX);
-        parts.push((number, name));
-    }
+    let mut parts: Vec<(u32, String)> = archive
+        .entries()
+        .into_iter()
+        .filter(|(name, is_dir)| {
+            !is_dir && name.starts_with("ppt/slides/") && name.ends_with(".xml")
+        })
+        .map(|(name, _)| {
+            let number = name
+                .trim_start_matches("ppt/slides/slide")
+                .trim_end_matches(".xml")
+                .parse()
+                .unwrap_or(u32::MAX);
+            (number, name)
+        })
+        .collect();
     parts.sort();
     parts.into_iter().map(|(_, name)| name).collect()
 }
@@ -329,15 +326,8 @@ fn enumerate_slides(archive: &mut limits::Package<'_>) -> Vec<String> {
 /// archive open behind it: the media a slide shows and the charts it draws.
 fn read_parts(archive: &mut limits::Package<'_>, prefix: &str) -> HashMap<String, Vec<u8>> {
     let mut parts = HashMap::new();
-    for index in 0..archive.len() {
-        let name = match archive.by_index(index) {
-            Ok(file) => match file.name() {
-                Ok(name) => name.into_owned(),
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
-        if !name.starts_with(prefix) {
+    for (name, is_dir) in archive.entries() {
+        if is_dir || !name.starts_with(prefix) {
             continue;
         }
         if let Some(buffer) = archive.read_name(&name) {

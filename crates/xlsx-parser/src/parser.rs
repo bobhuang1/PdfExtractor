@@ -128,7 +128,7 @@ impl XlsxDocument {
         guard.check("reading a package")?;
         let mut archive =
             limits::Package::new(data, &budget).context("the XLSX is not a ZIP package")?;
-        budget.check_zip(archive.archive_mut())?;
+        archive.gate()?;
 
         let workbook = read_part(&mut archive, "xl/workbook.xml")
             .context("the package has no xl/workbook.xml")?;

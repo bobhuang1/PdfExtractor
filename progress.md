@@ -669,3 +669,35 @@ and two repository gates were already red.
   `ods_test`, `odp_test`, `encrypted_test` — green; `cargo build -p
   pdfextractor-cli --no-default-features` green; workspace clippy `-D warnings`
   and `cargo fmt --all --check` green.
+
+### 2026-11-26 — F5 closed, and the package's one door
+
+- **F5 was real, in the fallback half.** `zip` 9.8.2 resolves a *present* part
+  through its `IndexMap` — 1,000 reads took 45 ms on a 100-entry and on a
+  10,000-entry package — but a miss falls back to decoding every name (CP437),
+  and readers ask about parts a package may not have (footnotes, styles, a
+  relationship file). 10,000 absent lookups took **19.0 s** over 10,000 entries
+  against 167 ms over 100. `Package` now walks the directory once, and only when
+  the package stores a name that does not decode to its own bytes, then answers
+  misses from that walk: **29 ms**, 13 ms over 100 entries — no map, no extra
+  memory. `a_cp437_name_is_found_by_the_text_it_decodes_to` stores a non-UTF-8
+  name and pins both halves: the decoded spelling finds the part, and the UTF-8
+  spelling the package does not store does not.
+- **The package has one door.** `Package` no longer dereferences to
+  `zip::ZipArchive` and no longer hands out `archive_mut`; the gate is
+  `Package::gate`, which runs `Limits::check_zip` over the private archive, so
+  the only unbudgeted reads are the gate's own and every part a reader takes
+  goes through `read_name`. pptx's `enumerate_slides` and `read_parts` were the
+  only callers of the removed door (they read names through `by_index`); they
+  use `entries()` like the other five readers. The unused `read_zip_entry`
+  wrapper went with it; the crate's tests call `ZipBudget::read_entry`.
+- **F6 stays, measured.** The gate's pass over
+  `test-data/real/calibre_demo.docx` (1,311,881 bytes, 2,571,770 expanded across
+  32 parts) took 246–290 ms against 199–208 ms for one full reader pass. The
+  gate decompresses every entry itself — that is what makes a lying central
+  directory harmless — so the second read is the guarantee, not slack.
+- **Checks.** `pdfextractor-limits`: lib 13, `entity_test` 3,
+  `zip_and_xml_test` 12 (one of them new); the six package readers 65 + 16 + 11
+  + 14 + 9 + 31 + 5 + 2 + 2 + 22 + 6 passed; `cli_test` 140 passed;
+  `documentation_test` 4 passed with the suite at 1,366; workspace clippy
+  `-D warnings` and `cargo fmt --all --check` clean.

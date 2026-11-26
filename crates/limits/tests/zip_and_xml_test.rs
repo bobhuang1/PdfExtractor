@@ -59,6 +59,51 @@ fn a_package_total_stops_the_reads_after_it_is_spent() {
     assert_eq!(archive.decoded_bytes(), 4, "a refused read is not counted");
 }
 
+/// A package may store a name that is not UTF-8; the reader still finds it by
+/// the text the name decodes to. That is the fallback behind the raw byte
+/// lookup, and it is the one case a miss is not final.
+#[test]
+fn a_cp437_name_is_found_by_the_text_it_decodes_to() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("café.txt", SimpleFileOptions::default())
+        .expect("start a ZIP entry");
+    writer.write_all(b"hello").expect("write a ZIP entry");
+    let mut data = writer.finish().expect("finish the ZIP").into_inner();
+
+    // The writer stores the name as UTF-8. Replace the two bytes of `é` with
+    // two bytes of 0x82 — not valid UTF-8, and each one CP437's `é` — so the
+    // name is read through the CP437 fallback. Its length is unchanged, so the
+    // local header and the central directory still line up.
+    for at in 0..data.len() - 1 {
+        if data[at] == 0xC3 && data[at + 1] == 0xA9 {
+            data[at] = 0x82;
+            data[at + 1] = 0x82;
+        }
+    }
+
+    let decoded = {
+        let mut archive = zip::ZipArchive::new(Cursor::new(&data)).expect("a ZIP");
+        let entry = archive.by_index(0).expect("the entry");
+        let decoded = entry.name().expect("a decodable name").into_owned();
+        decoded
+    };
+    assert_ne!(decoded, "café.txt", "the stored name is not UTF-8 now");
+    assert!(!decoded.is_ascii(), "the fallback decoded it: {decoded:?}");
+
+    let limits = Limits::default();
+    let mut package = Package::new(&data, &limits).expect("a ZIP");
+    assert_eq!(
+        package.read_name(&decoded).expect("found by decoded name"),
+        b"hello"
+    );
+    assert!(
+        package.read_name("café.txt").is_none(),
+        "the UTF-8 spelling is not what the package stores"
+    );
+    assert!(package.read_name("absent.xml").is_none());
+}
+
 #[test]
 fn a_declared_zip_bomb_is_refused_before_it_expands() {
     let data = package(&[("word/document.xml", &vec![b' '; 2 * 1024 * 1024], true)]);

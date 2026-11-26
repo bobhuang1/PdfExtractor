@@ -125,7 +125,7 @@ impl OdtDocument {
         guard.check("reading a package")?;
         let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not an OpenDocument (ZIP) package: {e}"))?;
-        budget.check_zip(archive.archive_mut())?;
+        archive.gate()?;
 
         let content = read_part(&mut archive, "content.xml")
             .ok_or_else(|| anyhow::anyhow!("package has no content.xml"))?;

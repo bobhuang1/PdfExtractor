@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,365 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,366 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 There are 140 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
@@ -268,9 +268,9 @@ dispatched.
 - **Parity.** `crates/cli/tests/cli_test.rs` is untouched and runs against the
   binary built on the pipeline. The conversion unit tests moved beside the code
   to the new crate; the CLI keeps its extension and limit-error tests.
-- **What remains.** WS8 above holds the one phase still to land (typed boundary
-  and per-conversion limits: P4) and the checks it ends on. P3 landed the
-  caller-chosen picture and preview location.
+- **What remains.** Nothing: P4 (the typed boundary and per-conversion limits)
+  landed on 2026-11-25 with the checks that phase ends on, so all four WS8 phases
+  are in.
 
 ## Review round — 2026-11-25: efficiency and security
 
@@ -295,12 +295,22 @@ every member.
 | F2 | `Preview::to_html` scanned every box once per page, and counted the five kinds in five separate passes. | efficiency: O(pages × boxes), on the path (`--preview`) whose product is the whole overlay | **fixed** — one grouping pass and one counting pass, measured below |
 | F3 | `render_pages` matched each rendered PNG to its page with a linear search. | efficiency: O(files × pages) | **fixed** — one page-number map |
 | F4 | `Limits::check_zip` read every non-XML entry into a fresh `Vec` only to count it, so the gate held a package's largest picture in memory for nothing. | efficiency: peak memory | **fixed** — non-XML entries are counted through one reused 64 KiB buffer, the actual-byte guarantee unchanged (`a_streamed_count_stops_one_byte_past_the_ceiling`) |
-| F5 | `Package::read_name` is a linear scan per part. | efficiency | recorded, not fixed: small beside the decompression it precedes |
-| F6 | The gate decompresses every entry and the reader decompresses it again. | efficiency | recorded, not fixed: it is what makes a lying central directory harmless |
+| F5 | `Package::read_name` is a linear scan per part. | efficiency | **fixed, in the half that mattered** — a present name was already a hash after the `zip` 9.8.2 upgrade, but a *miss* fell back to decoding every name: 10,000 absent lookups over 10,000 entries took 19.0 s. `Package` settles that fallback in one walk, and only for a package that stores a name which does not decode to its own bytes; the same misses take 29 ms, flat against a 100-entry package. `a_cp437_name_is_found_by_the_text_it_decodes_to` pins the decode path. |
+| F6 | The gate decompresses every entry and the reader decompresses it again. | efficiency | **by design**, measured: the gate must read every entry itself — that is what makes a lying central directory harmless — and the reader's own read is what charges its budget. On a 1.3 MB corpus package the gate pass took 246–290 ms against 199–208 ms for one full reader pass. |
 
 **Measured (F2).** The new `preview_cost` bench (ignored by default; 2,000 pages
 × 20 boxes = 40,000 boxes) on this machine, the HTML byte-identical both ways
 (18,025,839 bytes): per-page scan **6.18 s**, grouped **1.07 s** — **−83%**.
+
+**Measured (F5, F6).** A present part was already a hash (`zip` 9.8.2 indexes the
+central directory): 1,000 reads took 45 ms on both a 100-entry and a 10,000-entry
+package. A *miss* was not — the CP437 fallback decodes every name — and readers
+ask about parts a package may not have, so 10,000 absent lookups took **19.0 s**
+over 10,000 entries (167 ms over 100). Settling the fallback once: **29 ms**, and
+13 ms over 100 entries. On `test-data/real/calibre_demo.docx` (1,311,881 bytes,
+2,571,770 expanded across 32 parts) the gate's pass took **246–290 ms** against
+**199–208 ms** for one full reader pass; that gap is F6, and it stays because it
+is the guarantee.
 
 **Plan and outcome.** R1 the no-base image read (fix, test); R2 the overlay's
 grouping and the renderer's page map (fix, bench, an ordering test that the
@@ -312,12 +322,9 @@ pipeline unit suites green, and workspace clippy `-D warnings` with `cargo fmt
 
 ## Blocked — needs a decision only the owner can make
 
-- **Pushing the branch.** `main` is `origin/main` plus twenty local commits, from
-  `f593eac` (budget flags and the derived-limits fuzz target), `1fdb79d` (the merge)
-  and `b59e0e3` (the review's hardening) through the security and budget round, the
-  three handler rounds, the `/Encrypt` rounds and the review, dependency, outline,
-  OCR and pipeline rounds recorded above — and nothing here pushes without the owner
-  asking.
+- **Pushing the branch.** `main` is `origin/main` (`1f16b88`) plus two local
+  commits — WS8 P4 and this round — and nothing here pushes without the owner
+  asking. The rounds recorded above are on `origin/main` already.
 - **Code signing** of the installers: needs signing identities that are not in this
   repository.
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.

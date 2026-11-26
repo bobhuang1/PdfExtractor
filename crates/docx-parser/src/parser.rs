@@ -223,7 +223,7 @@ impl DocxDocument {
         guard.check("reading a package")?;
         let mut archive = limits::Package::new(data, &budget)
             .map_err(|e| anyhow::anyhow!("not a DOCX (ZIP) package: {e}"))?;
-        budget.check_zip(archive.archive_mut())?;
+        archive.gate()?;
 
         // Every part this reading wants is found from one walk of the directory:
         // the names are already in memory, so the four scans that follow read

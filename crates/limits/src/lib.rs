@@ -14,7 +14,6 @@
 //! file was refused rather than reporting a generic parse failure.
 
 use std::io::{Cursor, Read, Seek};
-use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
 use quick_xml::events::{BytesRef, Event};
@@ -749,28 +748,25 @@ impl<'a> DocumentBudget<'a> {
     }
 }
 
-/// Read one ZIP entry under the caller's budget, charged to `budget`.
-///
-/// The cap is the read itself, so an entry that lies about its declared size
-/// cannot allocate past it, and the running total in `budget` bounds what the
-/// package as a whole expands into.
-pub fn read_zip_entry<R: Read>(
-    file: &mut R,
-    name: &str,
-    budget: &mut ZipBudget<'_>,
-) -> Result<Vec<u8>> {
-    budget.read_entry(name, file)
-}
-
 /// A ZIP package whose entry reads are charged to one budget.
 ///
-/// The archive and the running total travel together, so a reader that walks a
-/// package cannot read a part outside its budget even by accident: every read
-/// goes through [`Package::read_name`]. It dereferences to the underlying
-/// [`zip::ZipArchive`], so listing and naming entries is unchanged.
+/// The archive and the running total travel together, and the archive itself is
+/// private, so a reader cannot read a part outside its budget even by accident:
+/// every read goes through [`Package::read_name`]. Listing is
+/// [`Package::entries`], and the one pass that is not charged is the gate's, in
+/// [`Package::gate`].
 pub struct Package<'a> {
     archive: zip::ZipArchive<Cursor<&'a [u8]>>,
     budget: ZipBudget<'a>,
+    /// Whether every stored name decodes to its own bytes, decided on the
+    /// first lookup that the raw index misses.
+    ///
+    /// [`zip`]'s lookup falls back to decoding every entry's name (CP437) when
+    /// the raw bytes are not found: a scan per absent part. A package whose
+    /// names all decode to themselves cannot match through that fallback — the
+    /// decoded text is the bytes the raw index already searched — so one walk
+    /// settles it for good instead of one walk per miss.
+    names_decode_as_stored: Option<bool>,
 }
 
 impl<'a> Package<'a> {
@@ -782,15 +778,19 @@ impl<'a> Package<'a> {
         Ok(Self {
             archive: zip::ZipArchive::new(Cursor::new(data))?,
             budget: ZipBudget::new(limits),
+            names_decode_as_stored: None,
         })
     }
 
-    /// The archive itself, for the package gate (`Limits::check_zip`).
+    /// Run the gates a package must pass before a reader trusts it.
     ///
-    /// The gate reads the package once before a reader does; those reads are
-    /// the gate's own, not content the reader keeps, so they are not charged.
-    pub fn archive_mut(&mut self) -> &mut zip::ZipArchive<Cursor<&'a [u8]>> {
-        &mut self.archive
+    /// The gate decompresses every entry itself, under the same ceilings, so a
+    /// central directory that lies about its sizes cannot expand past the
+    /// package budget. Those reads are the gate's own, not content the reader
+    /// keeps, so they are not charged to the reader's running total; every part
+    /// the reader takes goes through [`Package::read_name`] and is.
+    pub fn gate(&mut self) -> Result<()> {
+        self.budget.limits.check_zip(&mut self.archive)
     }
 
     /// Read the entry called `name`, charged to the package's budget.
@@ -798,8 +798,56 @@ impl<'a> Package<'a> {
     /// `None` when the entry is absent or the budget refuses it — the same
     /// reading a reader has always had for a part it cannot use.
     pub fn read_name(&mut self, name: &str) -> Option<Vec<u8>> {
-        let mut file = self.archive.by_name(name).ok()?;
-        read_zip_entry(&mut file, name, &mut self.budget).ok()
+        let index = self.index_of(name)?;
+        let mut file = self.archive.by_index(index).ok()?;
+        self.budget.read_entry(name, &mut file).ok()
+    }
+
+    /// The index of the entry called `name`.
+    ///
+    /// The raw byte lookup is a hash. The fallback behind it — decoding every
+    /// name in the package — is what [`zip::ZipArchive::by_name`] runs on a
+    /// miss, and a reader asks about parts a package may not have (footnotes,
+    /// styles, a relationship file), so that fallback would be a scan of the
+    /// whole directory per absent part. It is walked once here, and only for a
+    /// package that stores a name decoding differently from its bytes, which
+    /// is the one case it could match; otherwise a miss is final.
+    fn index_of(&mut self, name: &str) -> Option<usize> {
+        if let Some(index) = self.archive.index_for_name_raw(name.as_bytes()) {
+            return Some(index);
+        }
+        match self.names_decode_as_stored {
+            Some(true) => None,
+            Some(false) => self.archive.index_for_name(name),
+            None => {
+                let (decoded_as_stored, found) = self.walk_names(name);
+                self.names_decode_as_stored = Some(decoded_as_stored);
+                found
+            }
+        }
+    }
+
+    /// One walk of the directory: whether every stored name decodes to its own
+    /// bytes, and the first entry whose decoded name is `name`.
+    fn walk_names(&mut self, name: &str) -> (bool, Option<usize>) {
+        let count = self.archive.len();
+        let mut decoded_as_stored = true;
+        let mut found = None;
+        for index in 0..count {
+            let Ok(file) = self.archive.by_index_raw(index) else {
+                continue;
+            };
+            let Ok(decoded) = file.name() else {
+                continue;
+            };
+            if decoded.as_bytes() != file.name_raw() {
+                decoded_as_stored = false;
+            }
+            if found.is_none() && decoded == name {
+                found = Some(index);
+            }
+        }
+        (decoded_as_stored, found)
     }
 
     /// Every entry's name and whether it is a directory, in stored order.
@@ -820,20 +868,6 @@ impl<'a> Package<'a> {
     /// The bytes this package's reads have decoded so far.
     pub fn decoded_bytes(&self) -> u64 {
         self.budget.decoded_bytes()
-    }
-}
-
-impl<'a> Deref for Package<'a> {
-    type Target = zip::ZipArchive<Cursor<&'a [u8]>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.archive
-    }
-}
-
-impl<'a> DerefMut for Package<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.archive
     }
 }
 
@@ -1054,7 +1088,8 @@ mod tests {
             ..Limits::default()
         };
         let mut budget = ZipBudget::new(&limits);
-        let error = read_zip_entry(&mut Cursor::new(vec![b'x'; 16]), "a.xml", &mut budget)
+        let error = budget
+            .read_entry("a.xml", &mut Cursor::new(vec![b'x'; 16]))
             .expect_err("the entry is twice the ceiling");
         assert!(
             matches!(error, LimitError::ZipEntryTooLarge { limit: 8, .. }),
@@ -1072,13 +1107,15 @@ mod tests {
             ..Limits::default()
         };
         let mut budget = ZipBudget::new(&limits);
-        let first = read_zip_entry(&mut Cursor::new(vec![b'x'; 60]), "a.xml", &mut budget)
+        let first = budget
+            .read_entry("a.xml", &mut Cursor::new(vec![b'x'; 60]))
             .expect("under both budgets");
         assert_eq!(first.len(), 60);
         assert_eq!(budget.decoded_bytes(), 60);
         assert_eq!(budget.entry_ceiling(), 40, "what is left of the package");
 
-        let error = read_zip_entry(&mut Cursor::new(vec![b'x'; 60]), "b.xml", &mut budget)
+        let error = budget
+            .read_entry("b.xml", &mut Cursor::new(vec![b'x'; 60]))
             .expect_err("the second entry would pass the package total");
         assert!(
             matches!(error, LimitError::ZipTotalTooLarge { limit: 100, .. }),
