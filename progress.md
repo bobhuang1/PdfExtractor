@@ -734,8 +734,10 @@ and two repository gates were already red.
   writes `fax_scan.png`: `invoice_scan.png` with two percent of its pixels
   replaced — salt on paper, pepper inside ink — placed by a fixed LCG so a
   regenerated file is byte for byte the committed one (checked: same sha256 on
-  two runs). Two percent was measured, not guessed: a cleaner page shows no
-  benefit and a noisier one takes pixels out of the glyphs themselves.
+  two runs). Two percent was chosen from a sweep, not guessed: at one percent
+  the page reads as stored, at three the despeckled page still returns `Thank
+  yau` because the noise has landed on the glyphs themselves, and at two the
+  loss is the isolated pixels the pass is there to remove.
 - **What the noise costs, and what the pass recovers.** Read as stored, the
   scan returns `invoice, 12345` and `Tétal:Duie 42.50`; read with
   `--ocr-despeckle` it returns `Invoice 12345` and `Total Due 42.50`. The

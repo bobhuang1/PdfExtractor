@@ -11,10 +11,15 @@ recovers are the ones the noise cost.
 The noise is placed by a fixed linear congruential generator rather than
 `random`, so the fixture is the same bytes on every machine and in every Python
 version, and a regenerated file is byte for byte the committed one. Two percent
-of the pixels are replaced — measured, not guessed: it is enough that
-Tesseract as stored loses "Invoice" and the gap in "ACME SUPPLIES", while a
-cleaner page shows no benefit and a noisier one takes pixels out of the glyphs
-themselves, which no local pass can put back.
+of the pixels are replaced — chosen by measurement, not guessed. At one percent
+Tesseract reads every line as stored, so the fixture would measure nothing; at
+three the noise has landed on the glyphs themselves, and the despeckled page
+still reads "Thank yau" — damage a pass over isolated pixels is not meant to
+undo. At two percent the invoice and total lines are lost as stored and
+recovered by the pass ("invoice, 12345" and "Tétal:Duie 42.50" become
+"Invoice 12345" and "Total Due 42.50"); the title line reads as stored either
+way, which is why the test asserts the two recovered lines and only that the
+title survives.
 
 Regenerate with:
 
