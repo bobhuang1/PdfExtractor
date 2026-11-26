@@ -371,10 +371,10 @@ runs (`y - t*x`) reads the tilt: on the real scan turned 2, 4 and 6 degrees and 
 returned exactly those angles, and zero on the upright page. The estimate is acted on
 only from half a degree up, so a straight page is never resampled; the turn is about the
 centre on the same grid, and the boxes are mapped back through it. `invoice_scan_skewed.png`
-(`make_skewed_scan.py`, ten degrees, where Tesseract's lines stop lining up) holds it: as
-stored `Invoice 12345` and `Total Due 42.50` come back mangled, and turned flat both
-read. The turn crops the title's corner, as a page not centred on the platen really does,
-so the test asserts the two lines the pixels keep.
+(`make_skewed_scan.py`: the scan shrunk to 85 percent inside its frame, then turned ten
+degrees about the centre) holds it: turned inside its margin the page loses nothing, and
+as stored every line comes back wrong (`ACME SUPPLigg`, `IMvoice 12345`, `Total Due 42 50`,
+`TPMK You for your business,`) where the turn reads all four.
 
 **3 — the fax fixture measures the pass.** `fax_scan.png` is the scan with two percent of
 its pixels replaced — salt on paper, pepper inside the ink — placed by a fixed generator so

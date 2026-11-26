@@ -1394,8 +1394,8 @@ test-data/
 │                                            #   noise (make_fax_scan.py)
 ├── vector_text.pdf                          # text drawn only as paths: no font, no text
 │                                            #   operator, no image (make_vector_text_pdf.py)
-├── invoice_scan_skewed.png                  # the scan turned ten degrees clockwise
-│                                            #   (make_skewed_scan.py)
+├── invoice_scan_skewed.png                  # the scan shrunk into a margin and turned
+│                                            #   ten degrees clockwise (make_skewed_scan.py)
 ├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4
 │                                            #   and G3 two-dimensional
 ├── jbig2_scan.pdf                           # the same scan in JBIG2

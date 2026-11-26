@@ -789,11 +789,16 @@ and two repository gates were already red.
   images and a picture handed in) map the recognised boxes back through the
   turn before scaling them onto the page.
 - **The fixture.** `invoice_scan_skewed.png` (`make_skewed_scan.py`) is the
-  scan turned ten degrees, where Tesseract's lines stop lining up: as stored
-  `Invoice 12345` and `Total Due 42.50` come back mangled (`IMvoice 12345`,
-  `42 59`), and the estimator's 9.75 degrees turns them flat and reads both.
-  The turn crops the title's corner, as a page not centred on the platen does,
-  so the test asserts the two lines the pixels keep rather than all four.
+  scan shrunk to 85 percent inside its frame and then turned ten degrees about
+  the frame's centre. The shrink is what keeps the whole page in the picture:
+  a ten-degree turn about a frame the text already fills carries the title's
+  corner out of it, which is how the first version of the fixture lost a line.
+  Turned inside its margin the page loses nothing — the ink clears the top edge
+  by seventeen pixels and the rest by more — and the estimator's 9.75 degrees
+  (still, on the shrunk page) turns it flat and reads all four lines. As
+  stored every line is wrong (`ACME SUPPLigg`, `IMvoice 12345`,
+  `Total Due 42 50`, `TPMK You for your business,`), so the test asserts all
+  four are lost before the turn and all four read after it.
 - **Checks.** ocr-engine preprocess tests 7 passed (three new); `cli_test` 144
   passed; `documentation_test` 4 passed with the suite at 1,377; workspace
   clippy `-D warnings` and `cargo fmt --all --check` clean.

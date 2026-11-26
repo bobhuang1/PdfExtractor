@@ -1997,11 +1997,12 @@ fn a_rotated_scan_is_read_upright() {
 }
 
 /// A page swept onto the platen at an angle: `invoice_scan_skewed.png` is the
-/// scan turned ten degrees clockwise (`make_skewed_scan.py`), the angle at
-/// which Tesseract's lines stop lining up. Read as stored, the invoice and
-/// total lines come back mangled; `--ocr-deskew` measures the tilt, turns the
-/// page flat and reads both. The turn is about the centre and keeps the grid,
-/// so the boxes are mapped back through it and still land inside the page.
+/// scan shrunk into a margin and turned ten degrees clockwise
+/// (`make_skewed_scan.py`), the angle at which Tesseract's lines stop lining
+/// up. Read as stored, all four lines come back wrong; `--ocr-deskew` measures
+/// the tilt, turns the page flat and reads every one of them. The turn is about
+/// the centre and keeps the grid, so the boxes are mapped back through it and
+/// still land inside the page.
 #[test]
 #[cfg_attr(
     not(feature = "ocr"),
@@ -2042,9 +2043,15 @@ fn a_skewed_scan_is_turned_flat_and_read() {
     let (_, skewed) = recognised("skewed", false);
     let (flat, straightened) = recognised("straightened", true);
 
-    // The tilt is what costs these lines, and turning the page flat is what
-    // brings them back: as stored they read "IMvoice 12345" and "42 59".
-    for phrase in ["Invoice 12345", "Total Due 42.50"] {
+    // The tilt is what costs every line, and turning the page flat is what
+    // brings them back: as stored they read "ACME SUPPLigg", "IMvoice 12345",
+    // "Total Due 42 50" and "TPMK You for your business,".
+    for phrase in [
+        "ACME SUPPLIES",
+        "Invoice 12345",
+        "Total Due 42.50",
+        "Thank you for your business.",
+    ] {
         assert!(
             !skewed.contains(phrase),
             "the fixture no longer costs {phrase:?} without the turn, so it measures \
