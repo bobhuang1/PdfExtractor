@@ -164,6 +164,15 @@ The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolc
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
 The workspace builds with zero warnings, and the suite holds 1,366 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
+fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
+Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
+machine this was developed on), or opt out in so many words with `DOCLING_SKIP_ORACLE=1`
+for a run that checks the schema alone. `scripts/test.sh --full` uses that venv when the
+interpreter exists, and otherwise stops before compiling with the same two options; it
+never opts out on the caller's behalf, so a gate that stops here reads as setup and not
+as a regression.
+
 There are 140 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.

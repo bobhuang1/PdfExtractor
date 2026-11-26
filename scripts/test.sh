@@ -30,7 +30,15 @@ Modes:
   --changed             Select from changed files (the default).
   --full, --all         Run the explicit full workspace suite:
                         cargo test --workspace --locked
-                        With --shard, split every target instead.
+                        With --shard, split every target instead. The suite's
+                        docling_core_accepts_our_documents fails rather than
+                        passing silently when nothing can load docling-core:
+                        set DOCLING_PY to a Python with docling-core, or opt
+                        out in so many words with DOCLING_SKIP_ORACLE=1 for a
+                        run that checks the schema alone. A full run uses
+                        ~/.venvs/pdfextractor-docling/bin/python when that
+                        interpreter exists, and otherwise stops before
+                        compiling with the same two options.
   --rerun-failed        Run only the target specs recorded as failed by the
                         previous selected run. Passing targets are removed from
                         target/test-runner-failed.tsv; failures not run remain.
@@ -181,6 +189,47 @@ print(json.dumps({
 
 note() {
     printf 'test: %s\n' "$*" >&2
+}
+
+# The docling oracle: the interpreter `docling_core_accepts_our_documents` loads
+# docling-core with. The test fails, by design, when it has none, because a run
+# that cannot load the library must not report the corpus as accepted. The
+# release gate resolves it here rather than leaving it to whoever starts the
+# run: the machine's venv when the caller named no `DOCLING_PY`, and an early
+# stop with the test's own instruction when neither exists. `DOCLING_SKIP_ORACLE`
+# is only ever honoured, never set: opting out is the caller's decision to make
+# in so many words.
+DOCLING_VENV_PYTHON="$HOME/.venvs/pdfextractor-docling/bin/python"
+
+# `$1` is 1 when the run needs an oracle (the release gate) and 0 when it takes
+# the venv if there is one without requiring it (a shard, or `--no-run`).
+ensure_docling_oracle() {
+    local strict=$1
+    if [[ -n ${DOCLING_PY:-} ]]; then
+        note "docling oracle: DOCLING_PY=$DOCLING_PY"
+        return 0
+    fi
+    case "${DOCLING_SKIP_ORACLE:-}" in
+        1 | true | yes)
+            note "docling oracle: opted out (DOCLING_SKIP_ORACLE=$DOCLING_SKIP_ORACLE); the schema layer alone is checked"
+            return 0
+            ;;
+    esac
+    if [[ -x $DOCLING_VENV_PYTHON ]]; then
+        export DOCLING_PY=$DOCLING_VENV_PYTHON
+        note "docling oracle: DOCLING_PY=$DOCLING_PY (the machine's venv)"
+        return 0
+    fi
+    ((strict)) || return 0
+    cat >&2 <<'EOF'
+test: no interpreter for docling-core, so docling_core_accepts_our_documents
+test: would fail - and a run that cannot load it must not report the corpus
+test: accepted. Point DOCLING_PY at a python with docling-core installed:
+test:   DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python ./scripts/test.sh --full
+test: or opt out in so many words, for a run that checks the schema alone:
+test:   DOCLING_SKIP_ORACLE=1 ./scripts/test.sh --full
+EOF
+    exit 2
 }
 
 MODE=changed
@@ -375,6 +424,11 @@ if [[ $MODE == full && -z $SHARD ]]; then
         exit 0
     fi
     note "running the explicit full workspace suite"
+    if ((NO_RUN)); then
+        ensure_docling_oracle 0
+    else
+        ensure_docling_oracle 1
+    fi
     full_args=(test --workspace --locked)
     full_args+=("${CARGO_TEST_OPTIONS[@]}" "${TEST_FILTERS[@]}")
     if ((${#CARGO_TEST_PASSTHROUGH[@]} > 0)); then
@@ -1690,6 +1744,12 @@ if ((NO_RUN && NO_RUN_DOC_SKIPPED)); then
 fi
 if ((BATCH)); then
     note "batch: ${#RUN_SPECS[@]} cargo invocation(s) for selected target(s)"
+fi
+
+# A shard of `--full` can hold the docling target as well: take the machine's
+# venv when the caller named none, but do not stop a shard that does not.
+if [[ $MODE == full ]]; then
+    ensure_docling_oracle 0
 fi
 
 if ((JOBS > 1)); then

@@ -1040,12 +1040,13 @@ mkdir -p "$TMP/full-bin"
 cat >"$TMP/full-bin/cargo" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${CARGO_CALLS:?}"
+printf '%s\n' "${DOCLING_PY-}" >>"${CARGO_CALLS:?}.docling-py"
 exit 0
 EOF
 chmod +x "$TMP/full-bin/cargo"
 : >"$TMP/full-calls"
 set +e
-full_output=$(cd "$TMP" && CARGO_CALLS="$TMP/full-calls" \
+full_output=$(cd "$TMP" && DOCLING_SKIP_ORACLE=1 CARGO_CALLS="$TMP/full-calls" \
     PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full 2>&1)
 status=$?
 set -e
@@ -1062,7 +1063,7 @@ ok '--full fast path does not call cargo metadata'
 # bypassing them with its one exact workspace command.
 : >"$TMP/full-calls"
 set +e
-full_extra_output=$(cd "$TMP" && CARGO_CALLS="$TMP/full-calls" \
+full_extra_output=$(cd "$TMP" && DOCLING_SKIP_ORACLE=1 CARGO_CALLS="$TMP/full-calls" \
     PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full \
     --features full --no-run --no-fail-fast --filter filtered -- --nocapture 2>&1)
 status=$?
@@ -1072,6 +1073,68 @@ set -e
 [[ $(<"$TMP/full-calls") == 'test --workspace --locked --features full --no-run --no-fail-fast filtered -- --nocapture' ]] \
     || fail "full pass-through built the wrong command: $(<"$TMP/full-calls")"
 contains "$full_extra_output" 'running the explicit full workspace suite' 'full pass-through'
+
+# The release gate resolves the docling oracle itself: the machine's venv when
+# the caller named no DOCLING_PY, an early stop with the test's instruction when
+# there is neither, and never an opt-out on the caller's behalf. HOME is
+# redirected so the answer does not depend on the machine running the tests.
+gate_venv="$TMP/gate-home/.venvs/pdfextractor-docling/bin/python"
+mkdir -p "$(dirname "$gate_venv")" "$TMP/gate-empty-home"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$gate_venv"
+chmod +x "$gate_venv"
+: >"$TMP/full-calls"
+: >"$TMP/full-calls.docling-py"
+set +e
+gate_venv_output=$(cd "$TMP" && HOME="$TMP/gate-home" CARGO_CALLS="$TMP/full-calls" \
+    PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full 2>&1)
+status=$?
+set -e
+[[ $status -eq 0 ]] \
+    || fail "machine venv run returned status $status: $gate_venv_output"
+[[ $(<"$TMP/full-calls.docling-py") == "$gate_venv" ]] \
+    || fail "the machine venv did not become DOCLING_PY: $(<"$TMP/full-calls.docling-py")"
+contains "$gate_venv_output" "docling oracle: DOCLING_PY=$gate_venv" 'gate oracle'
+ok '--full uses the machine venv when DOCLING_PY is unset'
+
+: >"$TMP/full-calls"
+set +e
+gate_missing_output=$(cd "$TMP" && HOME="$TMP/gate-empty-home" CARGO_CALLS="$TMP/full-calls" \
+    PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 ]] \
+    || fail "a run with no oracle returned status $status: $gate_missing_output"
+[[ ! -s $TMP/full-calls ]] \
+    || fail "cargo ran without an oracle: $(<"$TMP/full-calls")"
+contains "$gate_missing_output" 'DOCLING_PY=~/.venvs/pdfextractor-docling/bin/python ./scripts/test.sh --full' 'gate oracle'
+contains "$gate_missing_output" 'DOCLING_SKIP_ORACLE=1 ./scripts/test.sh --full' 'gate oracle'
+ok '--full stops before cargo when no interpreter can be found'
+
+: >"$TMP/full-calls"
+: >"$TMP/full-calls.docling-py"
+set +e
+gate_named_output=$(cd "$TMP" && HOME="$TMP/gate-empty-home" DOCLING_PY=/opt/python/bin/python \
+    CARGO_CALLS="$TMP/full-calls" PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full 2>&1)
+status=$?
+set -e
+[[ $status -eq 0 ]] \
+    || fail "a named DOCLING_PY run returned status $status: $gate_named_output"
+[[ $(<"$TMP/full-calls.docling-py") == '/opt/python/bin/python' ]] \
+    || fail "the caller's DOCLING_PY was overridden: $(<"$TMP/full-calls.docling-py")"
+ok "--full leaves the caller's DOCLING_PY alone"
+
+: >"$TMP/full-calls"
+: >"$TMP/full-calls.docling-py"
+set +e
+gate_optout_output=$(cd "$TMP" && HOME="$TMP/gate-empty-home" DOCLING_SKIP_ORACLE=1 \
+    CARGO_CALLS="$TMP/full-calls" PATH="$TMP/full-bin:$PATH" "$TMP/scripts/test.sh" --full 2>&1)
+status=$?
+set -e
+[[ $status -eq 0 ]] \
+    || fail "an opt-out run returned status $status: $gate_optout_output"
+[[ -z $(<"$TMP/full-calls.docling-py") ]] \
+    || fail "the runner set DOCLING_PY under an opt-out: $(<"$TMP/full-calls.docling-py")"
+ok '--full honours DOCLING_SKIP_ORACLE and sets nothing itself'
 ok '--full forwards cargo test options and filters'
 
 # Root documentation selects the CLI's documentation target.
