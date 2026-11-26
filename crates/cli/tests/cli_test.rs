@@ -1996,6 +1996,105 @@ fn a_rotated_scan_is_read_upright() {
     }
 }
 
+/// A page whose only text is vector art: `vector_text.pdf` is the invoice laid
+/// out as text and flattened by Ghostscript, so it holds no font, no
+/// text-showing operator and no image — the words are filled paths. Without the
+/// rasteriser there is nothing on the page to read; `--ocr-vector-pages`
+/// renders it through `pdftoppm` and recognises the render, so the lines come
+/// back on the page's own 612 x 792 grid.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn a_page_whose_text_is_vector_art_is_rasterised_and_read() {
+    let ws = Workspace::new("vector-text");
+    let fixture = repository_root().join("test-data/vector_text.pdf");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("vector_text.pdf", &bytes);
+
+    // As it stands the page has no text layer and no picture: the words are
+    // shapes, and no reader of the file can find them.
+    let plain = ws.join("plain.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        plain.to_str().unwrap(),
+        "--ocr",
+        "auto",
+    ]);
+    let doc = json_of(&plain);
+    assert!(
+        doc["texts"].as_array().is_none_or(Vec::is_empty),
+        "the fixture has a text layer, so it measures nothing: {doc:#?}"
+    );
+    assert_eq!(
+        doc["pictures"].as_array().map_or(0, Vec::len),
+        0,
+        "the fixture has a picture: {doc:#?}"
+    );
+
+    let rasterised = ws.join("rasterised.json");
+    let run = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        rasterised.to_str().unwrap(),
+        "--ocr",
+        "auto",
+        "--ocr-vector-pages",
+    ]);
+    if !run.status.success() {
+        // Rendering is the one reading that needs poppler. A machine without
+        // it must refuse by name rather than hand back an empty page.
+        assert!(
+            stderr_of(&run).contains("pdftoppm"),
+            "the rasteriser refused for another reason: {}",
+            stderr_of(&run)
+        );
+        eprintln!("skipped the render: this machine has no pdftoppm");
+        return;
+    }
+
+    let doc = json_of(&rasterised);
+    let texts = doc["texts"].as_array().expect("a text list");
+    let joined = texts
+        .iter()
+        .map(|text| text["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needle in [
+        "ACME SUPPLIES",
+        "Invoice 12345",
+        "Total Due 42.50",
+        "Thank you for your business.",
+    ] {
+        assert!(joined.contains(needle), "missing {needle:?} in: {joined}");
+    }
+
+    // The render is mapped back onto the page the file declares: the boxes are
+    // in points on 612 x 792, not in the render's pixels.
+    let size = &doc["pages"]["1"]["size"];
+    let width = size["width"].as_f64().expect("a width");
+    let height = size["height"].as_f64().expect("a height");
+    assert_eq!((width, height), (612.0, 792.0), "{size:#?}");
+    for text in texts {
+        let bbox = &text["prov"][0]["bbox"];
+        let (l, t, r, b) = (
+            bbox["l"].as_f64().unwrap(),
+            bbox["t"].as_f64().unwrap(),
+            bbox["r"].as_f64().unwrap(),
+            bbox["b"].as_f64().unwrap(),
+        );
+        assert!(
+            l >= 0.0 && t >= 0.0 && r <= width + 0.5 && b <= height + 0.5,
+            "box outside the page: {bbox}"
+        );
+    }
+}
+
 /// CCITT G3/G4 and JBIG2 scans reach OCR: the codecs real faxes and scanners
 /// use, none of which an image library opens as a file. All fixtures are the
 /// same invoice; `ccitt_scan.pdf` has a G3 one-dimensional page and a G4 page,

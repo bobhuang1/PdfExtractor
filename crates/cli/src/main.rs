@@ -410,6 +410,13 @@ struct Args {
     #[arg(long)]
     ocr_despeckle: bool,
 
+    /// Render PDF pages whose text is only vector art — no text layer and no
+    /// picture — with `pdftoppm` and recognise the render. Off by default,
+    /// because it is the one reading that needs a renderer installed; needs
+    /// OCR on, so `--ocr auto` or `always`
+    #[arg(long)]
+    ocr_vector_pages: bool,
+
     /// Also write an HTML page preview with every extracted box drawn on it
     #[arg(long)]
     preview: bool,
@@ -1658,6 +1665,11 @@ fn build_document(
     args: &Args,
     limits: &pdfextractor_limits::Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    if args.ocr_vector_pages && args.ocr == OcrMode::Never {
+        anyhow::bail!(
+            "--ocr-vector-pages reads a rendered page with OCR: pass --ocr auto or `always`"
+        );
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -1687,6 +1699,7 @@ fn build_document(
         ocr_lang: &args.ocr_lang,
         psm: args.psm,
         despeckle: args.ocr_despeckle,
+        vector_pages: args.ocr_vector_pages,
         page_range: args.page_range.as_ref(),
         pdf_password: args.pdf_password.as_deref(),
         image_base: Some(&image_base),
@@ -1721,6 +1734,11 @@ fn flag_named(error: pdfextractor_pipeline::PipelineError) -> anyhow::Error {
                 unit.counted(total)
             )
         }
+        PipelineError::RendererMissing { page_no } => anyhow::anyhow!(
+            "--ocr-vector-pages: page {page_no} has no text layer and no picture — its text is \
+             drawn as vector art — and rendering it needs `pdftoppm` (install poppler, or name the \
+             program with PDFE_PDFTOPPM)"
+        ),
         PipelineError::Encrypted {
             path,
             why: Encrypted::NeedsPassword,

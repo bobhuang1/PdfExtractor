@@ -397,6 +397,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--pdf-password-file <PATH>` | read the password of an encrypted PDF from a file instead of the argument vector: the file's first line, without its `LF` or `CRLF` ending, is the password (spaces are kept; nothing after that line is read), so it never appears in `ps` or the shell history the way a `--pdf-password` value does. It takes precedence over `--pdf-password` and `PDFE_PDF_PASSWORD`. A file that cannot be read is refused by name before anything is written, and an empty file is the empty user password |
 | `--psm <N>` | Tesseract page segmentation mode, 0–13 (6 is one block, 7 one line, 11 sparse text); the engine's own default when absent |
 | `--ocr-despeckle` | replace the isolated pixels a fax leaves — a dark speck on paper, a light one inside ink — before recognising each page. Off by default: a born-digital page has none, and every page pays for the pass |
+| `--ocr-vector-pages` | render a PDF page whose text is **only vector art** — no text layer and no picture — with `pdftoppm`, then recognise the render. Off by default: it is the one reading that needs an external renderer installed, and a document that needs none never looks for one |
 | `--text-dehyphenate <BOOL>` | join words a line break split when writing `--to text` (default `true`, as pdftotext does); `--text-dehyphenate false` is the off switch — every source character is kept, at the cost of `exam- ple` style breaks |
 | `--include-notes` | include the notes layer — a deck's speaker notes and comments — in the `md`, `html` and `text` outputs. Off, those three are a reading of the slides alone; JSON and YAML always carry the whole document. Markdown writes a speaker note's paragraphs as `> **Notes:**` lines and a comment's as `> **Comment:**` lines, and HTML as an `<aside class="notes">` (or `<aside class="notes comment">`) holding one `<p>` per paragraph with a bold label on the first, so an included remark is visibly not a slide, a comment is visibly not the presenter's note, and paragraph breaks are kept; plain text keeps it unmarked. Reading such a Markdown or HTML back puts the remark on the notes layer again, paragraphs and all |
 | `--chunks-type <KIND>` | how `--to chunks` splits a document: `hierarchical` (the default) makes one chunk per body item — a run of list items is one chunk, and each carries its heading path — and `hybrid` packs sentences to the token budget, carrying the tail of one chunk into the next |
@@ -1390,6 +1391,8 @@ test-data/
 ├── invoice_scan.png                         # image fixture (make_scan_images.py)
 ├── fax_scan.png                             # the same scan with a fax's salt-and-pepper
 │                                            #   noise (make_fax_scan.py)
+├── vector_text.pdf                          # text drawn only as paths: no font, no text
+│                                            #   operator, no image (make_vector_text_pdf.py)
 ├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4
 │                                            #   and G3 two-dimensional
 ├── jbig2_scan.pdf                           # the same scan in JBIG2

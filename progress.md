@@ -747,3 +747,29 @@ and two repository gates were already red.
 - **Checks.** `cli_test` 142 passed (two new: the flag on the clean scan, the
   fax comparison); `documentation_test` 4 passed with the suite at 1,372;
   `cargo fmt --all --check` clean.
+
+### 2026-11-26 — vector-only text, rendered on request
+
+- **The fixture.** `test-data/make_vector_text_pdf.py` writes `vector_text.pdf`:
+  the invoice set as text, then flattened by Ghostscript with `-dNoOutputFonts`.
+  `pdffonts` lists nothing, `pdftotext` returns only a form feed, and the
+  extractor's own reading has no span and no picture — the words are filled
+  paths. The stamps Ghostscript writes are pinned at the same width so every
+  cross-reference offset still holds, and two runs hash the same.
+- **The rule, kept by asking.** `--ocr-vector-pages` is opt-in: with it off no
+  renderer is looked for and no process is spawned, so extraction still reads
+  every document from its own bytes. With it on and no `pdftoppm`, the
+  conversion stops at that page and names the install; with `--ocr never` it is
+  refused before reading anything. The lookup moved to
+  `crates/pipeline/src/renderer.rs`, and the preview uses the same one — fixed
+  install paths or `PDFE_PDFTOPPM`, never `PATH`.
+- **The reading.** One `pdftoppm` call per page at 150 dpi (150, 200 and 300
+  each read all four lines of the fixture, so the cheapest grid was taken),
+  drawn as displayed so the page's `/Rotate` is applied once, recognised like a
+  scan, and scaled back onto the page's points: the lines land on 612 x 792
+  with every box inside it. A page that has pictures is not rendered — the
+  CCITT scan with the flag reads through its images exactly as before.
+- **Checks.** `cli_test` 143 passed (one new); `documentation_test` 4 passed
+  with the suite at 1,373; the pipeline's renderer lookup test passed;
+  workspace clippy `-D warnings` and `cargo fmt --all --check` clean; manual
+  runs for the `--ocr never` refusal and for a scanned PDF with the flag.

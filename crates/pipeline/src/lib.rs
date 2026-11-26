@@ -24,6 +24,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 mod preview;
+mod renderer;
 
 /// When to run OCR on page images.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -49,6 +50,17 @@ pub struct ConvertOptions<'a> {
     /// decode per page. A caller reading faxed or noisy scans turns it on;
     /// `--ocr-despeckle` is the command line's word for the same decision.
     pub despeckle: bool,
+    /// Rasterise a page whose text exists only as vector art.
+    ///
+    /// A page with no text layer and no picture has nothing to recognise: its
+    /// words are drawn as paths. With this on, such a page is rendered through
+    /// `pdftoppm` and the render is recognised like a scan.
+    ///
+    /// Off by default, because the extraction path does not require an external
+    /// renderer unless the caller asks for one. A caller who asks and has none
+    /// is told so by name ([`PipelineError::RendererMissing`]) rather than
+    /// handed a page with its text silently missing.
+    pub vector_pages: bool,
     /// The budgets this conversion is held to.
     ///
     /// The conversion's own, not the process's: an embedder that reads two
@@ -81,6 +93,7 @@ impl Default for ConvertOptions<'_> {
             ocr_lang: "eng",
             psm: None,
             despeckle: false,
+            vector_pages: false,
             limits: Limits::default(),
             page_range: None,
             pdf_password: None,
@@ -116,6 +129,9 @@ pub enum PipelineError {
     },
     /// The OCR language list was empty: recognition needs one code at least.
     OcrLangEmpty,
+    /// A page's text exists only as vector art, the caller asked for it to be
+    /// rasterised, and no `pdftoppm` was found.
+    RendererMissing { page_no: i32 },
     /// The file could not be opened, or its size read.
     Io {
         path: PathBuf,
@@ -215,6 +231,11 @@ impl std::fmt::Display for PipelineError {
             ),
             PipelineError::OcrLangEmpty => f.write_str(
                 "the OCR language list is empty; at least one language code is needed, e.g. `eng`",
+            ),
+            PipelineError::RendererMissing { page_no } => write!(
+                f,
+                "page {page_no}: its text is drawn as vector art and rendering it needs \
+                 `pdftoppm` (install poppler, or name the program with `PDFE_PDFTOPPM`)"
             ),
             PipelineError::Io { path, .. } => write!(f, "read {}", path.display()),
             PipelineError::Other(error) => write!(f, "{error}"),
@@ -370,6 +391,7 @@ fn build_with_engine(
                 range: options.page_range,
                 password: options.pdf_password,
                 despeckle: options.despeckle,
+                vector_pages: options.vector_pages,
             },
             image_base,
             options.preview,
@@ -696,6 +718,22 @@ struct PdfReading<'a> {
     password: Option<&'a str>,
     /// Replace the isolated pixels a fax leaves before recognising a page.
     despeckle: bool,
+    /// Render a page whose text exists only as vector art, and recognise it.
+    vector_pages: bool,
+}
+
+/// One bitmap OCR is asked to read, and where it sits on the page.
+struct OcrTarget<'a> {
+    data: &'a [u8],
+    width: u32,
+    height: u32,
+    /// The box in points the bitmap fills.
+    bbox: [f64; 4],
+    /// The bitmap already shows the page as the document displays it:
+    /// `pdftoppm` applies the page's `/Rotate` when it draws, so the OCR must
+    /// not turn the render again. A page image from the file is stored as the
+    /// file holds it, and is turned only when the page says so.
+    as_displayed: bool,
 }
 
 fn convert_pdf(
@@ -893,18 +931,76 @@ fn convert_pdf(
                 Vec::new()
             };
 
-            let images: Vec<(&Vec<u8>, u32, u32, [f64; 4])> = if targets.is_empty() {
+            // A page with no text layer and no picture has its words drawn as
+            // paths: nothing in the file is text a reader can find. When the
+            // caller asked for vector pages, the page is rendered and the render
+            // is read like a scan. The renderer is looked for here and nowhere
+            // else, so a document that needs none never reaches for one; a
+            // caller who asked and has none is told, rather than handed a page
+            // with its text silently missing.
+            let rendered: Option<(Vec<u8>, u32, u32)> = if reading.vector_pages
+                && page.spans.is_empty()
+                && page.placed_images.is_empty()
+                && page.images.is_empty()
+                && page.figures.is_empty()
+            {
+                let Some(program) = renderer::pdftoppm() else {
+                    return Err(PipelineError::RendererMissing {
+                        page_no: page.page_no,
+                    }
+                    .into());
+                };
+                match renderer::render_page(&program, path, page.page_no, renderer::PAGE_DPI) {
+                    Ok((png, width, height)) => {
+                        tracing::debug!(
+                            "page {}: text is vector art, rendered at {} dpi ({width}x{height})",
+                            page.page_no,
+                            renderer::PAGE_DPI
+                        );
+                        Some((png, width, height))
+                    }
+                    Err(err) => {
+                        tracing::warn!("could not render page {}: {err}", page.page_no);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let mut images: Vec<OcrTarget<'_>> = if targets.is_empty() {
                 page.images
                     .iter()
                     .zip(fallback.iter())
-                    .map(|(img, box_)| (&img.data, img.width, img.height, *box_))
+                    .map(|(img, box_)| OcrTarget {
+                        data: &img.data,
+                        width: img.width,
+                        height: img.height,
+                        bbox: *box_,
+                        as_displayed: false,
+                    })
                     .collect()
             } else {
                 targets
                     .iter()
-                    .map(|(p, box_)| (&p.image.data, p.image.width, p.image.height, *box_))
+                    .map(|(p, box_)| OcrTarget {
+                        data: &p.image.data,
+                        width: p.image.width,
+                        height: p.image.height,
+                        bbox: *box_,
+                        as_displayed: false,
+                    })
                     .collect()
             };
+            if let Some((png, width, height)) = &rendered {
+                images.push(OcrTarget {
+                    data: png.as_slice(),
+                    width: *width,
+                    height: *height,
+                    bbox: [0.0, 0.0, page.width, page.height],
+                    as_displayed: true,
+                });
+            }
 
             // A scan can arrive on its side with nothing saying so: no
             // `/Rotate` on the page, no EXIF tag in the picture, just pixels a
@@ -913,7 +1009,14 @@ fn convert_pdf(
             // can decide which way up it is written.
             let detect_sideways = page.rotation == 0 && page.spans.is_empty();
 
-            for (data, width, height, box_) in images {
+            for target in images {
+                let OcrTarget {
+                    data,
+                    width,
+                    height,
+                    bbox: box_,
+                    as_displayed,
+                } = target;
                 ocr_deadline.check("recognising a page")?;
                 let turn = if detect_sideways && picture_is_page(box_, page.width, page.height) {
                     match engine.detect_upright(data, limits) {
@@ -940,7 +1043,7 @@ fn convert_pdf(
                 // must see the same way round: the bitmap is turned with the
                 // page before recognition, so its lines come back upright, in
                 // the displayed space the target box is measured in.
-                let rotated = if page.rotation != 0 {
+                let rotated = if page.rotation != 0 && !as_displayed {
                     rotate_for_ocr(data, page.rotation, limits)
                 } else if turn != QuarterTurn::AsStored {
                     rotate_for_ocr(data, turn.degrees(), limits)
@@ -949,7 +1052,7 @@ fn convert_pdf(
                 };
                 let (bytes, pixels_w, pixels_h) = match &rotated {
                     Some((png, w, h)) => (png.as_slice(), *w, *h),
-                    None => (data.as_slice(), width, height),
+                    None => (data, width, height),
                 };
                 // The page is upright now; a faxed one also loses its isolated
                 // pixels. The pass keeps the grid, so the boxes scale onto the

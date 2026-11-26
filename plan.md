@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,372 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,373 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -173,7 +173,7 @@ interpreter exists, and otherwise stops before compiling with the same two optio
 never opts out on the caller's behalf, so a gate that stops here reads as setup and not
 as a regression.
 
-There are 142 end-to-end tests in `cli_test` that run the built binary as a child process.
+There are 143 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
@@ -348,7 +348,7 @@ from a measurement rather than from scratch.
 | # | Item | First phase | Exit check |
 |---|---|---|---|
 | 1 | OCR preprocessing | **despeckle landed** (`--ocr-despeckle`); deskew open, with its measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
-| 2 | Vector-page rasterising | render a page with neither text nor pictures through `pdftoppm` and recognise it | a fixture whose only text is vector art reads its words |
+| 2 | Vector-page rasterising | **landed** (`--ocr-vector-pages`), with the renderer rule recorded below | `a_page_whose_text_is_vector_art_is_rasterised_and_read` |
 | 3 | Non-English and fax fixtures | **the fax half landed** (`fax_scan.png`, from `make_fax_scan.py`); the German scan is open | `despeckle_recovers_words_a_faxed_scan_loses`; the German words read |
 | 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
 | 5 | Formula regions | heuristic boxes over maths-like lines | the corpus equation counts do not move without an accepted delta |
@@ -381,15 +381,35 @@ either way, and the boxes stay inside it: the pass filters pixels and does not m
 grid. The recovery is partial in the last line (`THiank you for your business.`), which is
 what the test asserts instead of claiming the pass restores the scan.
 
+**2 — the rasteriser, and how extraction may use a renderer.** `vector_text.pdf` is the
+invoice laid out as text and flattened by Ghostscript with `-dNoOutputFonts`: no font, no
+text-showing operator, no image, only filled paths, and `pdftotext` finds nothing on it. A
+page like that had no text to read and no image to recognise, so `--ocr-vector-pages`
+renders it and recognises the render, and the four lines come back on the page's own 612 x
+792 grid.
+
+The documented rule is that the extractor never depends on an external renderer. It holds
+because the renderer is *asked for*, never assumed: with the flag off, no lookup and no
+process spawn happen, and every document is still read from its own bytes; the preview's
+best-effort backdrop is the only other caller. With the flag on and no `pdftoppm`, the
+conversion stops at the page that needed it, naming the page and the install — a caller
+who asked and cannot be served is told, not handed a page with its text missing. The
+lookup itself moved to `crates/pipeline/src/renderer.rs` so both callers share one rule:
+fixed install paths or `PDFE_PDFTOPPM`, never `PATH`.
+
+One page per invocation, drawn as displayed, so the page's `/Rotate` is applied once and
+the recognised boxes are scaled from the render's grid back to points. The render is at
+150 dpi: 150, 200 and 300 each read all four fixture lines, so the cheapest grid that was
+measured is the one taken.
+
 ## Deferred — recorded, not in this plan
 
 Each is real work that is larger than a finishing pass, or needs measurement on the
 Linux OCR floors, or ML; the old plan's text for each is in
 [docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md).
 
-- OCR: deskew and the non-English/fax fixtures; full-page OCR of vector-only pages
-  (rasteriser). Despeckle has landed and the rest is sequenced in *Next workstreams*
-  above.
+- OCR: deskew and the non-English fixtures. Despeckle and the vector-page rasteriser
+  have landed, and what is left is sequenced in *Next workstreams* above.
 - PDF: table cells and spans; heuristic formula regions; a rotation angle on
   boxes; captions as furniture.
 - Formats: EPUB and e-mail; `.doc` character formatting without LibreOffice; DOCX
