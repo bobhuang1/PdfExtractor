@@ -596,3 +596,37 @@ and two repository gates were already red.
   `documentation_test` 4 passed; `cargo build -p pdfextractor-cli
   --no-default-features` green; workspace clippy and `cargo fmt --all --check`
   green.
+
+### 2026-11-25 — efficiency and security review
+
+- **Read the boundaries, not the middle.** The budget crate, the ZIP and XML
+  gates, the PDF security handler, every spawned program, every file opened or
+  written on a document's behalf, and both exporters' HTML. What held: argv-only
+  spawns (no shell), `pdftoppm`/`soffice` by fixed path, the password through the
+  environment and removed from children, the four-way ZIP check, `DOCTYPE`
+  refusal, the `O_NOFOLLOW` walk in `open_under`, `O_EXCL`+rename in every
+  writer, and escaping of every HTML text and attribute value.
+- **Fixed — F1, security.** `image_data_uri` read the document's `uri` verbatim
+  when no `image_base` was given, so an absolute name or a `..` was read and
+  embedded; the based path refused both. `read_named` now makes the same two
+  refusals on the no-base path, and the doc comment says what the code does
+  (it previously claimed an absolute URI ignored the base, which the base path
+  never did). New test: `a_picture_without_a_base_still_cannot_name_a_file_outside`.
+- **Fixed — F2/F3, quadratic overlay.** `Preview::to_html` scanned all boxes once
+  per page and counted the kinds five more times; `render_pages` linearly
+  searched the page list per rendered file. Both are now one pass. Bench
+  (`preview_cost`, ignored, 2,000 pages × 20 boxes, 18,025,839-byte HTML
+  identical): **6.18 s → 1.07 s, −83%**.
+- **Fixed — F4, the gate's memory.** `Limits::check_zip` collected every
+  non-XML entry into a `Vec` to count it. Those entries now stream through one
+  reused 64 KiB buffer; XML parts are still collected because the depth walk
+  reads them. The actual-byte accounting is unchanged.
+- **Recorded, not fixed.** `Package::read_name` is a linear scan per part, and
+  the gate decompresses each entry the reader then decompresses again — both are
+  small beside the guarantee the double read buys.
+- **Checks.** `cargo test -p pdfextractor-limits -p pdfextractor-md-exporter
+  -p pdfextractor-pipeline --lib` green (limits 13, exporter 130, pipeline 25
+  passed + 1 ignored bench); `cli_test` 140 unchanged; `documentation_test`
+  green with the suite at 1,364; no-default-features build, workspace clippy
+  `-D warnings` and `cargo fmt --all --check` green.
+

@@ -382,28 +382,39 @@ impl Limits {
             let mut file = archive.by_index(index).map_err(|error| LimitError::Zip {
                 detail: error.to_string(),
             })?;
+            // Only an XML part's bytes are needed after the count, for the depth
+            // and `DOCTYPE` walk. Every other entry — a picture, a font, an
+            // embedded object — is measured as it streams through one reused
+            // buffer, so the gate does not hold a copy of a package's largest
+            // picture just to know how big it was.
+            let is_xml = is_xml_part(&name);
             let mut bytes = Vec::new();
-            file.by_ref()
-                .take(ceiling.saturating_add(1))
-                .read_to_end(&mut bytes)
-                .map_err(|error| LimitError::Zip {
-                    detail: error.to_string(),
-                })?;
-            if bytes.len() as u64 > ceiling {
+            let actual = if is_xml {
+                file.by_ref()
+                    .take(ceiling.saturating_add(1))
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| LimitError::Zip {
+                        detail: error.to_string(),
+                    })?;
+                bytes.len() as u64
+            } else {
+                count_stream(&mut file, ceiling)?
+            };
+            if actual > ceiling {
                 if ceiling == self.max_zip_entry_bytes {
                     return Err(LimitError::ZipEntryTooLarge {
                         name,
-                        actual: bytes.len() as u64,
+                        actual,
                         limit: self.max_zip_entry_bytes,
                     });
                 }
                 return Err(LimitError::ZipTotalTooLarge {
-                    actual: actual_total.saturating_add(bytes.len() as u64),
+                    actual: actual_total.saturating_add(actual),
                     limit: self.max_zip_total_bytes,
                 });
             }
-            actual_total = actual_total.saturating_add(bytes.len() as u64);
-            if is_xml_part(&name) {
+            actual_total = actual_total.saturating_add(actual);
+            if is_xml {
                 if bytes.len() as u64 > self.max_xml_bytes {
                     return Err(LimitError::XmlTooLarge {
                         actual: bytes.len() as u64,
@@ -505,6 +516,32 @@ pub fn push_reference(into: &mut String, reference: &BytesRef<'_>) {
             into.push(';');
         }
     }
+}
+
+/// Count the bytes `reader` yields, stopping one past `ceiling` so a lie about
+/// a declared size is still visible.
+///
+/// Nothing is kept: the gate needs the amount for every part it will not parse,
+/// and holding those bytes would mean holding the whole of a package's media.
+fn count_stream<R: Read>(reader: &mut R, ceiling: u64) -> Result<u64> {
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    while total <= ceiling {
+        let want = ceiling
+            .saturating_sub(total)
+            .saturating_add(1)
+            .min(buffer.len() as u64) as usize;
+        let read = reader
+            .read(&mut buffer[..want])
+            .map_err(|error| LimitError::Zip {
+                detail: error.to_string(),
+            })?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+    }
+    Ok(total)
 }
 
 /// Whether a ZIP part is XML a package reader may parse.
@@ -1000,6 +1037,14 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, LimitError::Timeout { .. }));
         assert!(error.to_string().contains("recognising a page"), "{error}");
+    }
+
+    #[test]
+    fn a_streamed_count_stops_one_byte_past_the_ceiling() {
+        let mut data = Cursor::new(vec![b'x'; 4096]);
+        assert_eq!(count_stream(&mut data, 100).unwrap(), 101);
+        let mut data = Cursor::new(vec![b'x'; 10]);
+        assert_eq!(count_stream(&mut data, 100).unwrap(), 10);
     }
 
     #[test]

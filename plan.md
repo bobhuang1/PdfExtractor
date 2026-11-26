@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,360 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,364 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 There are 140 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
@@ -271,6 +271,44 @@ dispatched.
 - **What remains.** WS8 above holds the one phase still to land (typed boundary
   and per-conversion limits: P4) and the checks it ends on. P3 landed the
   caller-chosen picture and preview location.
+
+## Review round — 2026-11-25: efficiency and security
+
+A read of every place an untrusted file meets the process: the budget crate, the
+archive and XML gates, the PDF security handler, every program the tool starts,
+every file it opens or writes on a document's behalf, and both exporters' HTML.
+
+**What held.** Every spawn takes an argv vector and never a shell (the only
+`sh -c` calls are in tests); `pdftoppm` and `soffice` are found at fixed paths
+rather than through `PATH`; the PDF password travels in the environment and is
+removed from every child; the ZIP gate checks declared size, expansion ratio,
+package total *and* the bytes actually read; XML `DOCTYPE`s are refused and its
+depth bounded; `open_under` walks a document's directory with `O_NOFOLLOW` from
+a descriptor it already holds; each writer replaces its file through an
+exclusively created sibling; every HTML text and attribute value goes through
+`escape`, embedded `data:` URIs included; and `unsafe_code = "forbid"` covers
+every member.
+
+| # | Finding | Kind | State |
+|---|---|---|---|
+| F1 | `image_data_uri` read the document's `uri` verbatim when the caller named no `image_base`: an absolute path, or one climbing out with `..`, was read and embedded as base64. The read with a base refuses both, so the two paths disagreed — and only the based one was tested. | security: a document could name a local file and have its bytes carried into the output | **fixed** — `read_named` makes the same two refusals without a base; `a_picture_without_a_base_still_cannot_name_a_file_outside` |
+| F2 | `Preview::to_html` scanned every box once per page, and counted the five kinds in five separate passes. | efficiency: O(pages × boxes), on the path (`--preview`) whose product is the whole overlay | **fixed** — one grouping pass and one counting pass, measured below |
+| F3 | `render_pages` matched each rendered PNG to its page with a linear search. | efficiency: O(files × pages) | **fixed** — one page-number map |
+| F4 | `Limits::check_zip` read every non-XML entry into a fresh `Vec` only to count it, so the gate held a package's largest picture in memory for nothing. | efficiency: peak memory | **fixed** — non-XML entries are counted through one reused 64 KiB buffer, the actual-byte guarantee unchanged (`a_streamed_count_stops_one_byte_past_the_ceiling`) |
+| F5 | `Package::read_name` is a linear scan per part. | efficiency | recorded, not fixed: small beside the decompression it precedes |
+| F6 | The gate decompresses every entry and the reader decompresses it again. | efficiency | recorded, not fixed: it is what makes a lying central directory harmless |
+
+**Measured (F2).** The new `preview_cost` bench (ignored by default; 2,000 pages
+× 20 boxes = 40,000 boxes) on this machine, the HTML byte-identical both ways
+(18,025,839 bytes): per-page scan **6.18 s**, grouped **1.07 s** — **−83%**.
+
+**Plan and outcome.** R1 the no-base image read (fix, test); R2 the overlay's
+grouping and the renderer's page map (fix, bench, an ordering test that the
+grouping is an index rather than a sort); R3 the streaming count in the ZIP gate
+(fix, unit test); R4 the round's parity: `cli_test` 140 unchanged,
+`documentation_test` green with the suite at 1,364, the limits, exporter and
+pipeline unit suites green, and workspace clippy `-D warnings` with `cargo fmt
+--all --check` clean.
 
 ## Blocked — needs a decision only the owner can make
 

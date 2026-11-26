@@ -19,6 +19,7 @@
 //! complete without one (it then shows the extracted text reconstructed at its
 //! true coordinates, which is what the parser actually believes the page says).
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -59,6 +60,17 @@ impl OverlayKind {
             OverlayKind::Figure => "vector figure",
             OverlayKind::Image => "image",
             OverlayKind::Block => "block",
+        }
+    }
+
+    /// Position in the counts table, so one pass counts all five kinds.
+    fn index(self) -> usize {
+        match self {
+            OverlayKind::Text => 0,
+            OverlayKind::Ocr => 1,
+            OverlayKind::Figure => 2,
+            OverlayKind::Image => 3,
+            OverlayKind::Block => 4,
         }
     }
 
@@ -107,10 +119,6 @@ impl Preview {
         self.pages.is_empty()
     }
 
-    pub fn count(&self, kind: OverlayKind) -> usize {
-        self.items.iter().filter(|i| i.kind == kind).count()
-    }
-
     /// Write the overlay HTML. `name` is the document name for the heading.
     pub fn write(&self, path: &Path, name: &str) -> io::Result<()> {
         std::fs::write(path, self.to_html(name))
@@ -120,6 +128,16 @@ impl Preview {
     pub fn to_html(&self, name: &str) -> String {
         let mut html = String::with_capacity(64 * 1024 + self.items.len() * 220);
         let rendered = self.pages.iter().filter(|p| p.backdrop.is_some()).count();
+        let mut counts = [0usize; 5];
+        for item in &self.items {
+            counts[item.kind.index()] += 1;
+        }
+        // The boxes grouped by page once: scanning every box for every page is
+        // what made this quadratic in the page count.
+        let mut by_page: HashMap<i32, Vec<usize>> = HashMap::new();
+        for (index, item) in self.items.iter().enumerate() {
+            by_page.entry(item.page_no).or_default().push(index);
+        }
 
         html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
         html.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
@@ -136,11 +154,11 @@ impl Preview {
             "{} page{} · {} text · {} OCR · {} figure · {} image · {} block",
             self.pages.len(),
             if self.pages.len() == 1 { "" } else { "s" },
-            self.count(OverlayKind::Text),
-            self.count(OverlayKind::Ocr),
-            self.count(OverlayKind::Figure),
-            self.count(OverlayKind::Image),
-            self.count(OverlayKind::Block),
+            counts[OverlayKind::Text.index()],
+            counts[OverlayKind::Ocr.index()],
+            counts[OverlayKind::Figure.index()],
+            counts[OverlayKind::Image.index()],
+            counts[OverlayKind::Block.index()],
         );
         if rendered > 0 {
             let _ = write!(html, " · {rendered} rendered");
@@ -236,12 +254,8 @@ impl Preview {
                     esc(uri)
                 );
             }
-            for (index, item) in self
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| i.page_no == page.page_no)
-            {
+            for &index in by_page.get(&page.page_no).map(Vec::as_slice).unwrap_or(&[]) {
+                let item = &self.items[index];
                 let [l, t, r, b] = item.bbox;
                 let (w, h) = ((r - l).max(0.0), (b - t).max(0.0));
                 // Undrawn content (an image or figure already shown as the page
@@ -376,6 +390,13 @@ pub fn render_pages(
     let Ok(entries) = std::fs::read_dir(out_dir) else {
         return result;
     };
+    // Which slot each page number fills, so a run of rendered files does not
+    // search the page list once per file.
+    let slots: HashMap<i32, usize> = pages
+        .iter()
+        .enumerate()
+        .map(|(slot, page)| (page.page_no, slot))
+        .collect();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("png") {
@@ -384,7 +405,7 @@ pub fn render_pages(
         let Some(number) = trailing_number(&path) else {
             continue;
         };
-        let Some(slot) = pages.iter().position(|p| p.page_no == number) else {
+        let Some(&slot) = slots.get(&number) else {
             continue;
         };
         if let Some(file) = path.file_name().and_then(|f| f.to_str()) {
@@ -680,6 +701,75 @@ mod tests {
                 item(1, "ACME Supplies", OverlayKind::Ocr),
             ],
         }
+    }
+
+    /// Boxes stay with their own page and keep document order: the grouping is
+    /// an index into the box list, not a sort that could reorder it.
+    #[test]
+    fn boxes_are_grouped_by_page_without_reordering() {
+        let mut preview = preview();
+        preview.pages.push(PreviewPage {
+            page_no: 2,
+            width: 612.0,
+            height: 792.0,
+            backdrop: None,
+        });
+        preview
+            .items
+            .push(item(2, "Second page", OverlayKind::Text));
+        preview
+            .items
+            .push(item(1, "Late first page", OverlayKind::Text));
+
+        let html = preview.to_html("demo.pdf");
+        let pages: Vec<&str> = html.split("class=\"pagewrap\"").skip(1).collect();
+        assert_eq!(pages.len(), 2, "one section per page");
+        assert!(
+            pages[0].contains("Late first page") && pages[0].contains("Hello World"),
+            "page 1's boxes are drawn on page 1: {}",
+            pages[0]
+        );
+        assert!(
+            !pages[0].contains("Second page"),
+            "page 2's box was drawn on page 1"
+        );
+        assert!(
+            pages[1].contains("Second page") && !pages[1].contains("Hello World"),
+            "page 2 draws only its own boxes"
+        );
+    }
+
+    /// The overlay's cost, for the before/after of the 2026-11-25 round: 2,000
+    /// pages with twenty boxes each. Ignored by default; run it by hand with
+    /// `--ignored --nocapture preview_cost`.
+    #[test]
+    #[ignore = "a bench, run by hand"]
+    fn preview_cost() {
+        let items: Vec<OverlayItem> = (1..=2_000)
+            .flat_map(|page| {
+                (0..20).map(move |_| item(page, "a line of recognised text", OverlayKind::Text))
+            })
+            .collect();
+        let preview = Preview {
+            pages: (1..=2_000)
+                .map(|page_no| PreviewPage {
+                    page_no,
+                    width: 612.0,
+                    height: 792.0,
+                    backdrop: None,
+                })
+                .collect(),
+            items,
+        };
+        let boxes = preview.items.len();
+        let pages = preview.pages.len();
+        let started = std::time::Instant::now();
+        let html = preview.to_html("bench.pdf");
+        println!(
+            "preview_cost: {boxes} boxes on {pages} pages -> {} bytes in {:?}",
+            html.len(),
+            started.elapsed()
+        );
     }
 
     /// Every declaration in every inline style must be independently valid.

@@ -165,8 +165,9 @@ pub fn render_with_notes(doc: &DoclingDocument, include_notes: bool) -> String {
 /// [`ImageMode::Embedded`] — the directory a picture's `uri` is relative to.
 ///
 /// `image_base` is the directory the export writes its images beside; without
-/// it a relative URI is resolved from the current directory. An absolute URI,
-/// or one already written as a `data:` URI, ignores it.
+/// it a relative URI is resolved from the current directory. A name that is
+/// absolute or climbs out with `..` is refused either way, and a URI already
+/// written as a `data:` URI is carried as written.
 pub fn render_with_images(
     doc: &DoclingDocument,
     include_notes: bool,
@@ -709,9 +710,34 @@ pub(crate) fn image_data_uri(image: &ImageRef, base: Option<&Path>) -> Option<St
     let mimetype = image.mimetype.as_deref()?;
     let bytes = match base {
         Some(base) => read_under(base, uri)?,
-        None => std::fs::read(uri).ok()?,
+        None => read_named(uri)?,
     };
     Some(format!("data:{mimetype};base64,{}", STANDARD.encode(bytes)))
+}
+
+/// `uri` read as a file relative to the working directory, when it is one.
+///
+/// A caller that names no `image_base` has still not licensed a read anywhere
+/// the document points: the same two refusals [`read_under`] makes apply here,
+/// so an absolute name (which would ignore the directory the caller implied)
+/// and a `..` component (which climbs out of it) are not pictures. Without a
+/// base there is no directory to confine the walk to, so a relative name is
+/// resolved from the working directory, which is the one place it can mean.
+fn read_named(uri: &str) -> Option<Vec<u8>> {
+    let mut relative = std::path::PathBuf::new();
+    for part in Path::new(uri).components() {
+        match part {
+            std::path::Component::Normal(name) => relative.push(name),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    std::fs::read(relative).ok()
 }
 
 /// `uri` read as a file inside `base`, when it is one.
@@ -1960,6 +1986,35 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&secret);
+    }
+
+    /// A caller that names no directory is not licensing a read anywhere the
+    /// document points: an absolute name, and one that climbs out, are
+    /// placeholders rather than bytes — the refusals the based read makes.
+    #[test]
+    fn a_picture_without_a_base_still_cannot_name_a_file_outside() {
+        let dir = std::env::temp_dir().join(format!("pdfe-md-nobase-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let secret = dir.join("secret.png");
+        std::fs::write(&secret, b"secret bytes").expect("the file outside");
+
+        let folder = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .expect("the folder's name");
+        for uri in [
+            secret.to_string_lossy().into_owned(),
+            format!("../{folder}/secret.png"),
+        ] {
+            let doc = picture_doc(&uri, "image/png");
+            assert_eq!(
+                render_with_images(&doc, false, ImageMode::Embedded, None),
+                "<!-- image -->\n",
+                "{uri} was read with no base directory"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A `uri` that is already a `data:` URI is carried as written: reading an
