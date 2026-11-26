@@ -9,6 +9,8 @@
 //! `level page_num block_num par_num line_num word_num left top width height conf text`
 //! with `level == 5` marking word rows.
 
+pub mod preprocess;
+
 #[cfg(feature = "tesseract")]
 use anyhow::Context;
 use anyhow::Result;

@@ -404,6 +404,12 @@ struct Args {
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=13), value_name = "N")]
     psm: Option<u8>,
 
+    /// Remove the isolated pixels a fax leaves, before recognising each page.
+    /// Off by default, because a born-digital page has none and every page
+    /// pays for the pass
+    #[arg(long)]
+    ocr_despeckle: bool,
+
     /// Also write an HTML page preview with every extracted box drawn on it
     #[arg(long)]
     preview: bool,
@@ -1680,6 +1686,7 @@ fn build_document(
         },
         ocr_lang: &args.ocr_lang,
         psm: args.psm,
+        despeckle: args.ocr_despeckle,
         page_range: args.page_range.as_ref(),
         pdf_password: args.pdf_password.as_deref(),
         image_base: Some(&image_base),

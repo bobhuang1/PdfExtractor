@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,366 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,370 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -339,14 +339,47 @@ pipeline unit suites green, and workspace clippy `-D warnings` with `cargo fmt
 - **macOS testing**: no Mac here; the release workflow's macOS job is the only check.
 - **Releasing** (tag, push, publish): the owner pushes after review.
 
+## Next workstreams — started 2026-11-26
+
+The *Deferred* list below is the previous plan's record. Each item there is a workstream
+of its own; this section orders them and states the first result, so the next round starts
+from a measurement rather than from scratch.
+
+| # | Item | First phase | Exit check |
+|---|---|---|---|
+| 1 | OCR preprocessing | **despeckle landed** (`--ocr-despeckle`); deskew open, with its measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
+| 2 | Vector-page rasterising | render a page with neither text nor pictures through `pdftoppm` and recognise it | a fixture whose only text is vector art reads its words |
+| 3 | Non-English and fax fixtures | a German scan and a salt-and-pepper fax scan, both from `test-data/make_*` | the German words read; despeckle recovers the faxed page |
+| 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
+| 5 | Formula regions | heuristic boxes over maths-like lines | the corpus equation counts do not move without an accepted delta |
+| 6 | EPUB and e-mail | an `epub-parser` crate (container → OPF → spine → the existing HTML reader), then `.eml` | a generated fixture converts with its headings and pictures |
+| 7 | Benchmarks with varied sizes | benches over small, medium and large documents, serial and parallel | the numbers are recorded in a round note |
+| — | GPU, service mode | **not started**: no GPU on this machine or in CI, and a service mode needs a design decision (protocol, lifetime, authentication) before any code | — |
+
+**1 — despeckle, and why deskew is not in it yet.** `--ocr-despeckle` replaces the
+pixels no neighbour agrees with — a dark speck on paper, a light one inside ink — before
+recognition, when the caller asks for it. It keeps the page's grid, so the boxes scale
+onto the page exactly as they do without it; a page without specks comes through
+unchanged, and a photograph's grain fails the same test, so a photograph is not smoothed.
+
+Deskew was attempted and **not shipped**: both estimators were measured on rendered
+fixtures and neither held. The row-projection profile peaked at zero on a page whose ink
+centres provably descend four degrees (12 px over 180), and every rotated hypothesis
+scored worse than the unrotated one. A least-squares fit through the per-column ink
+centres tracked the turn but read about half of it on a multi-line page — 2° for a 4° turn
+— because a column's centre mixes the lines above and below the page's middle. Shipping a
+rotation on either reading would move every scan's pixels on an unvalidated estimate, so
+the next phase measures on a real skewed scan rather than a rendered one.
+
 ## Deferred — recorded, not in this plan
 
 Each is real work that is larger than a finishing pass, or needs measurement on the
 Linux OCR floors, or ML; the old plan's text for each is in
 [docs/history/plan-2026-11-19.md](docs/history/plan-2026-11-19.md).
 
-- OCR: deskew/despeckle preprocessing; full-page OCR
-  of vector-only pages (rasteriser); non-English and fax fixtures.
+- OCR: deskew and the non-English/fax fixtures; full-page OCR of vector-only pages
+  (rasteriser). Despeckle has landed and the rest is sequenced in *Next workstreams*
+  above.
 - PDF: table cells and spans; heuristic formula regions; a rotation angle on
   boxes; captions as furniture.
 - Formats: EPUB and e-mail; `.doc` character formatting without LibreOffice; DOCX

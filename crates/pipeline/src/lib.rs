@@ -43,6 +43,12 @@ pub struct ConvertOptions<'a> {
     pub ocr_lang: &'a str,
     /// Tesseract page segmentation mode, 0–13.
     pub psm: Option<u8>,
+    /// Replace the isolated pixels a fax leaves before recognising a page.
+    ///
+    /// Off by default: a born-digital page has no specks, and the pass costs a
+    /// decode per page. A caller reading faxed or noisy scans turns it on;
+    /// `--ocr-despeckle` is the command line's word for the same decision.
+    pub despeckle: bool,
     /// The budgets this conversion is held to.
     ///
     /// The conversion's own, not the process's: an embedder that reads two
@@ -74,6 +80,7 @@ impl Default for ConvertOptions<'_> {
             ocr: OcrMode::Auto,
             ocr_lang: "eng",
             psm: None,
+            despeckle: false,
             limits: Limits::default(),
             page_range: None,
             pdf_password: None,
@@ -362,6 +369,7 @@ fn build_with_engine(
                 ocr: options.ocr,
                 range: options.page_range,
                 password: options.pdf_password,
+                despeckle: options.despeckle,
             },
             image_base,
             options.preview,
@@ -420,7 +428,13 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_image(path, options.page_range, &options.limits, engine)?
+            convert_image(
+                path,
+                options.page_range,
+                options.despeckle,
+                &options.limits,
+                engine,
+            )?
         }
         Format::Doc => {
             note_flow_format(options.preview, path);
@@ -680,6 +694,8 @@ struct PdfReading<'a> {
     /// The password (from `PDFE_PDF_PASSWORD` or a named file), for an
     /// encrypted file.
     password: Option<&'a str>,
+    /// Replace the isolated pixels a fax leaves before recognising a page.
+    despeckle: bool,
 }
 
 fn convert_pdf(
@@ -935,6 +951,21 @@ fn convert_pdf(
                     Some((png, w, h)) => (png.as_slice(), *w, *h),
                     None => (data.as_slice(), width, height),
                 };
+                // The page is upright now; a faxed one also loses its isolated
+                // pixels. The pass keeps the grid, so the boxes scale onto the
+                // target exactly as they do without it.
+                let prepared = if reading.despeckle {
+                    match pdfextractor_ocr_engine::preprocess::despeckle_page(bytes, limits) {
+                        Ok(png) => Some(png),
+                        Err(err) => {
+                            tracing::debug!("could not preprocess page {}: {err}", page.page_no);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let bytes = prepared.as_deref().unwrap_or(bytes);
                 match engine.recognize(bytes) {
                     Ok(result) => {
                         if result.lines.is_empty() {
@@ -2615,6 +2646,7 @@ fn comment_timestamp(date: &str) -> std::borrow::Cow<'_, str> {
 fn convert_image(
     path: &Path,
     page_range: Option<&page_range::PageRange>,
+    despeckle: bool,
     limits: &Limits,
     mut engine: Option<&mut OcrEngine>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
@@ -2873,7 +2905,25 @@ fn convert_image(
         let page = *page_no;
         let (pixel_width, pixel_height) = (*pixel_width, *pixel_height);
         let (width, height) = (*width, *height);
-        let result = match engine.recognize(pixels.as_slice()) {
+        // A faxed scan loses its isolated pixels before recognition. The pass
+        // keeps the grid, so the line boxes scale onto the page exactly as they
+        // would have without it.
+        let prepared = if despeckle {
+            match pdfextractor_ocr_engine::preprocess::despeckle_page(pixels.as_slice(), limits) {
+                Ok(png) => Some(png),
+                Err(err) => {
+                    tracing::debug!(
+                        "could not preprocess {} (page {page}): {err}",
+                        path.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let pixels = prepared.as_deref().unwrap_or(pixels.as_slice());
+        let result = match engine.recognize(pixels) {
             Ok(result) => result,
             Err(err) => {
                 // A page that cannot be read is a page with no text, not a
