@@ -437,20 +437,19 @@ const MAX_PARALLEL: usize = 256;
 /// the two apart without parsing the message.
 const EXIT_LIMIT_REFUSED: i32 = 3;
 
-/// The budgets this run is held to: the pipeline owns them so a library
-/// embedder configures the same limits the command line does.
-fn budgets() -> pdfextractor_limits::Limits {
-    pdfextractor_pipeline::limits()
-}
-
-/// Apply every `--max-*` and `--timeout` flag to the shared defaults before
-/// anything is read, so the PDF reader, the packages, the flow formats, `.doc`,
-/// the image readers and the OCR pages are all held to one value.
+/// The budgets this run is held to: the defaults, with every `--max-*` and
+/// `--timeout` flag applied before anything is read, so the PDF reader, the
+/// packages, the flow formats, `.doc`, the image readers and the OCR pages are
+/// all held to one value.
+///
+/// The value belongs to the run, not to the process: it is passed to each
+/// conversion rather than installed in a global, so an embedder reading two
+/// documents can hold each to its own ceiling.
 ///
 /// The flags are named one per budget, so a refusal can point at the flag that
 /// would raise it (`raise_flag`).
-fn install_budgets(args: &Args) {
-    let mut limits = budgets();
+fn install_budgets(args: &Args) -> pdfextractor_limits::Limits {
+    let mut limits = pdfextractor_limits::Limits::default();
     if let Some(bytes) = args.max_input_bytes {
         limits.max_input_bytes = bytes;
     }
@@ -517,13 +516,22 @@ fn install_budgets(args: &Args) {
     if let Some(seconds) = args.ocr_timeout {
         limits.ocr_timeout = std::time::Duration::from_secs_f64(seconds.max(0.0));
     }
-    pdfextractor_pipeline::set_limits(limits);
+    limits
 }
 
 /// Whether `error` is a budget refusal, at any depth of its context.
+///
+/// A refusal reaches the run one of two ways: as the pipeline's typed
+/// [`pdfextractor_pipeline::PipelineError::Limit`], or as a [`LimitError`] from
+/// a check the command line makes itself — the input size it holds a file to
+/// before handing it over, the image turn a preview performs. Both are the
+/// budgets saying no.
 fn is_limit_refusal(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
-        cause
+        matches!(
+            cause.downcast_ref::<pdfextractor_pipeline::PipelineError>(),
+            Some(pdfextractor_pipeline::PipelineError::Limit(_))
+        ) || cause
             .downcast_ref::<pdfextractor_limits::LimitError>()
             .is_some()
     })
@@ -658,7 +666,7 @@ fn run() -> anyhow::Result<()> {
     // would otherwise inherit a secret about a document it may know nothing
     // about. Removing it here is the single point that covers every child.
     std::env::remove_var(pdfextractor_formats::PDF_PASSWORD_ENV);
-    install_budgets(&args);
+    let limits = install_budgets(&args);
 
     // A consumer asking what this build can take should not have to hold an
     // input path, run a conversion, or parse help text or a refusal message:
@@ -699,7 +707,7 @@ fn run() -> anyhow::Result<()> {
     // writes one report, rather than running the directory/format/compare
     // pipeline. Handle it before the input is expanded into a queue.
     if let Some(old) = args.redline.as_deref() {
-        return run_redline(old, input, &args);
+        return run_redline(old, input, &args, &limits);
     }
 
     let found = collect_inputs(input, args.recursive)?;
@@ -743,7 +751,7 @@ fn run() -> anyhow::Result<()> {
         // input, which is where the default output would have gone.
         let target = &targets[0];
         let base = target.with_extension(formats[0].ext());
-        let doc = build_document(target, &base, &args)?;
+        let doc = build_document(target, &base, &args, &limits)?;
         // A reader of stdout has no other sign that picture files appeared next
         // to the source, so say where they went — but only when this conversion
         // wrote one: no pictures leaves no folder, a vector figure has no
@@ -863,7 +871,7 @@ fn run() -> anyhow::Result<()> {
             .par_iter()
             .zip(outputs.par_iter())
             .map(|(path, output)| {
-                let result = convert_one(path, output, &args, &formats, &chunks);
+                let result = convert_one(path, output, &args, &formats, &chunks, &limits);
                 // Each document is reported the moment it finishes rather than
                 // being collected and printed at the end: that is what makes the
                 // progress stream live.
@@ -931,7 +939,12 @@ fn run() -> anyhow::Result<()> {
 /// comparison are accepted: a PDF's page provenance makes the report page-aware
 /// and gives it placement-box previews, and a DOCX is compared as the flow
 /// document it is.
-fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
+fn run_redline(
+    old: &Path,
+    new: &Path,
+    args: &Args,
+    limits: &pdfextractor_limits::Limits,
+) -> anyhow::Result<()> {
     if args.compare.is_some() {
         anyhow::bail!("--redline and --compare are separate modes; use one or the other");
     }
@@ -963,7 +976,7 @@ fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
         }
         let metadata = std::fs::metadata(path)
             .with_context(|| format!("read the size of {}", path.display()))?;
-        budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+        limits.check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     }
 
     let family = match (detect(old)?, detect(new)?) {
@@ -991,8 +1004,8 @@ fn run_redline(old: &Path, new: &Path, args: &Args) -> anyhow::Result<()> {
     }
 
     let scratch = RedlineScratch::new()?;
-    let old_doc = build_document(old, &scratch.path("old.json"), args)?;
-    let new_doc = build_document(new, &scratch.path("new.json"), args)?;
+    let old_doc = build_document(old, &scratch.path("old.json"), args, limits)?;
+    let new_doc = build_document(new, &scratch.path("new.json"), args, limits)?;
     let old_name = file_name(old);
     let new_name = file_name(new);
     let html = redline::render(&old_doc, &new_doc, &old_name, &new_name, family)?;
@@ -1637,6 +1650,7 @@ fn build_document(
     path: &Path,
     output_path: &Path,
     args: &Args,
+    limits: &pdfextractor_limits::Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
     let ext = path
         .extension()
@@ -1645,7 +1659,7 @@ fn build_document(
         .unwrap_or_default();
     let metadata =
         std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
-    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    limits.check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     if !is_supported_extension(&ext) {
         match carried_picture_not_a_page(&ext) {
             Some(reason) => anyhow::bail!(reason),
@@ -1671,8 +1685,45 @@ fn build_document(
         image_base: Some(&image_base),
         preview: args.preview.then_some(output_path),
         preview_dpi: args.preview_dpi,
+        limits: limits.clone(),
     };
-    pdfextractor_pipeline::build_document(path, &options)
+    pdfextractor_pipeline::build_document(path, &options).map_err(flag_named)
+}
+
+/// The pipeline's typed refusal as a user reads it.
+///
+/// The library says what happened; the sentence that names `--page-range` or
+/// `--ocr-lang`, and the password sources this binary accepts, are the command
+/// line's words, so they are written here rather than in a crate an embedder
+/// also links.
+fn flag_named(error: pdfextractor_pipeline::PipelineError) -> anyhow::Error {
+    use pdfextractor_pipeline::{Encrypted, PipelineError};
+    match error {
+        PipelineError::OcrLangEmpty => {
+            anyhow::anyhow!("--ocr-lang needs at least one language code, e.g. `eng`")
+        }
+        PipelineError::PageRange {
+            path,
+            range,
+            total,
+            unit,
+        } => {
+            anyhow::anyhow!(
+                "--page-range {range} names no {unit} of {} ({})",
+                path.display(),
+                unit.counted(total)
+            )
+        }
+        PipelineError::Encrypted {
+            path,
+            why: Encrypted::NeedsPassword,
+        } => anyhow::anyhow!(
+            "{}: this PDF is encrypted and needs a password: pass it in PDFE_PDF_PASSWORD, or \
+             name a file with --pdf-password-file",
+            path.display()
+        ),
+        other => anyhow::Error::new(other),
+    }
 }
 
 /// Directory holding a document's extracted images, sibling to its output.
@@ -1694,6 +1745,7 @@ fn convert_one(
     args: &Args,
     formats: &[OutputFormat],
     chunks: &pdfextractor_md_exporter::chunks::ChunkOptions,
+    limits: &pdfextractor_limits::Limits,
 ) -> anyhow::Result<PathBuf> {
     // Every format is written beside the same stem: `-o out.json --to md`
     // writes `out.json` and `out.md`, and the first format asked for is the
@@ -1713,7 +1765,7 @@ fn convert_one(
             std::fs::create_dir_all(parent)?;
         }
     }
-    let doc = build_document(path, &primary, args)?;
+    let doc = build_document(path, &primary, args, limits)?;
     for format in formats {
         let target = base.with_extension(format.ext());
         match format {
@@ -2309,6 +2361,19 @@ mod tests {
         });
         assert_eq!(raise_flag(&bridge), Some("--bridge-timeout"));
         assert!(flag_hint(&bridge).contains("--bridge-timeout"));
+
+        // A refusal that reached the run as the pipeline's typed case is the
+        // same refusal: the status and the kind are read from that case, not
+        // from the sentence a reader happened to wrap around it.
+        let typed = anyhow::Error::new(pdfextractor_pipeline::PipelineError::Limit(
+            pdfextractor_limits::LimitError::TooManyPages {
+                actual: 2,
+                limit: 1,
+            },
+        ));
+        assert!(is_limit_refusal(&typed), "the typed case is not a refusal");
+        assert_eq!(error_kind(&typed), "limit");
+        assert_eq!(raise_flag(&typed), Some("--max-pages"));
 
         assert_eq!(EXIT_LIMIT_REFUSED, 3, "the refusal exit code moved");
         // The other kind: a file that cannot be read is not a refusal, so it

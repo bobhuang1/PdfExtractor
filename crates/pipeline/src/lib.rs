@@ -17,6 +17,7 @@ use pdfextractor_core::{
 };
 use pdfextractor_formats::{bridge_with_limits, detect, BridgeTarget, Format};
 use pdfextractor_layout::Span as LayoutSpan;
+use pdfextractor_limits::{LimitError, Limits};
 use pdfextractor_ocr_engine::{OcrEngine, QuarterTurn};
 use pdfextractor_pdf_parser::PdfDocument;
 use std::cell::RefCell;
@@ -42,6 +43,12 @@ pub struct ConvertOptions<'a> {
     pub ocr_lang: &'a str,
     /// Tesseract page segmentation mode, 0–13.
     pub psm: Option<u8>,
+    /// The budgets this conversion is held to.
+    ///
+    /// The conversion's own, not the process's: an embedder that reads two
+    /// documents may hold each to a different ceiling, and a run's flags are
+    /// gathered into one value here rather than installed in a global.
+    pub limits: Limits,
     /// The pages to read, when fewer than all are wanted.
     pub page_range: Option<&'a page_range::PageRange>,
     /// The password of an encrypted PDF.
@@ -67,6 +74,7 @@ impl Default for ConvertOptions<'_> {
             ocr: OcrMode::Auto,
             ocr_lang: "eng",
             psm: None,
+            limits: Limits::default(),
             page_range: None,
             pdf_password: None,
             image_base: None,
@@ -76,49 +84,194 @@ impl Default for ConvertOptions<'_> {
     }
 }
 
-/// The budgets every reader and OCR pass is held to.
+/// Why a conversion stopped, in the cases a caller can act on without reading
+/// the message.
 ///
-/// One run has one set of limits; the command line installs its flags here and
-/// an embedder sets its own before converting. They are global because a
-/// conversion is one document's and the limits are the run's, exactly as the
-/// readers already treat them.
-static LIMITS: std::sync::OnceLock<pdfextractor_limits::Limits> = std::sync::OnceLock::new();
-
-pub fn limits() -> pdfextractor_limits::Limits {
-    LIMITS.get().cloned().unwrap_or_default()
+/// The readers keep their `anyhow` errors: a parser explains itself in context,
+/// and that context is worth keeping. What this boundary adds is the handful of
+/// outcomes a caller decides differently — a budget refusal to retry with a
+/// larger ceiling, a password to ask for, a name or a range to fix — and
+/// `Other` for everything that is only an explanation.
+#[derive(Debug)]
+pub enum PipelineError {
+    /// A budget refused the document, a stream, a picture or a deadline.
+    Limit(LimitError),
+    /// The file is encrypted and cannot be read as it stands.
+    Encrypted { path: PathBuf, why: Encrypted },
+    /// The bytes are a format no reader here takes.
+    UnsupportedFormat(String),
+    /// The page range named none of the document's pages, sheets or slides.
+    PageRange {
+        path: PathBuf,
+        range: page_range::PageRange,
+        total: usize,
+        unit: RangeUnit,
+    },
+    /// The OCR language list was empty: recognition needs one code at least.
+    OcrLangEmpty,
+    /// The file could not be opened, or its size read.
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// Anything else a reader said, with its own context intact.
+    Other(anyhow::Error),
 }
 
-/// Install the run's limits. The first call wins, as a run's flags do.
-pub fn set_limits(limits: pdfextractor_limits::Limits) {
-    let _ = LIMITS.set(limits);
+/// Why an encrypted PDF was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Encrypted {
+    /// No password was given and the file needs one.
+    NeedsPassword,
+    /// The password given does not open it.
+    WrongPassword,
+    /// The cipher is one this build cannot read.
+    Unsupported(String),
 }
 
-/// The limits this conversion runs under.
-fn budgets() -> pdfextractor_limits::Limits {
-    limits()
+/// What a page range counts in the document it was applied to.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RangeUnit {
+    /// A paginated document's pages.
+    Page,
+    /// An image file's own pages: its frames, or a TIFF's directories. The
+    /// refusal names the file rather than the document, because that is all an
+    /// image is.
+    ImagePage,
+    /// A workbook's sheets.
+    Sheet,
+    /// A presentation's slides.
+    Slide,
+}
+
+impl std::fmt::Display for RangeUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RangeUnit::Page | RangeUnit::ImagePage => "page",
+            RangeUnit::Sheet => "sheet",
+            RangeUnit::Slide => "slide",
+        })
+    }
+}
+
+impl RangeUnit {
+    /// The parenthetical a range refusal ends with: how many the range could
+    /// have named, and how many of that unit the document has.
+    ///
+    /// Here rather than in the caller because the words are about the format —
+    /// a workbook counts sheets, a deck slides — and a caller that says them
+    /// again would drift from this one.
+    pub fn counted(&self, total: usize) -> String {
+        match self {
+            RangeUnit::Page => format!("{total} page(s): 1-{total}"),
+            RangeUnit::ImagePage => format!("the file has {total} page(s); 1-{total}"),
+            RangeUnit::Sheet => format!("the workbook has {total} sheet(s); 1-{total}"),
+            RangeUnit::Slide => format!("the deck has {total} slide(s); 1-{total}"),
+        }
+    }
+}
+
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PipelineError::Limit(error) => write!(f, "{error}"),
+            PipelineError::Encrypted { path, why } => match why {
+                Encrypted::NeedsPassword => write!(
+                    f,
+                    "{}: this PDF is encrypted and needs a password",
+                    path.display()
+                ),
+                Encrypted::WrongPassword => write!(
+                    f,
+                    "{}: this PDF is encrypted and the password given does not open it",
+                    path.display()
+                ),
+                Encrypted::Unsupported(cipher) => write!(
+                    f,
+                    "{}: this PDF is encrypted with {cipher}, which this build cannot decrypt — \
+                     re-save it without encryption, for example `qpdf --decrypt in.pdf out.pdf`, \
+                     and read that file",
+                    path.display()
+                ),
+            },
+            PipelineError::UnsupportedFormat(what) => write!(f, "unsupported format: {what}"),
+            PipelineError::PageRange {
+                path,
+                range,
+                total,
+                unit,
+            } => write!(
+                f,
+                "{range} names no {unit} of {} ({})",
+                path.display(),
+                unit.counted(*total)
+            ),
+            PipelineError::OcrLangEmpty => f.write_str(
+                "the OCR language list is empty; at least one language code is needed, e.g. `eng`",
+            ),
+            PipelineError::Io { path, .. } => write!(f, "read {}", path.display()),
+            PipelineError::Other(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for PipelineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PipelineError::Limit(error) => Some(error),
+            PipelineError::Io { source, .. } => Some(source),
+            PipelineError::Other(error) => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl PipelineError {
+    /// This error's case, from the `anyhow` error a reader handed back.
+    ///
+    /// The specific cases a conversion raises itself travel through `?`
+    /// unchanged, so the outermost error is already one of them. A budget
+    /// refusal is recognised wherever it sits in the chain, because the reader
+    /// that hit it may have added context as it passed it on.
+    fn classify(error: anyhow::Error) -> Self {
+        match error.downcast::<PipelineError>() {
+            Ok(typed) => typed,
+            Err(error) => match budget_refusal(&error) {
+                Some(limit) => PipelineError::Limit(limit),
+                None => PipelineError::Other(error),
+            },
+        }
+    }
+}
+
+/// The budget refusal `error` carries, at any depth of its context.
+///
+/// The command line has the public predicate — whether a run exits with the
+/// refusal status is its decision, not the library's — and this is the
+/// pipeline's own reading of the same chain, for the one place that acts on a
+/// refusal here: a legacy `.doc` falls back to the built-in reader unless the
+/// budget was what refused it.
+fn budget_refusal(error: &anyhow::Error) -> Option<LimitError> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LimitError>().cloned())
 }
 
 /// The language list Tesseract wants: `eng,deu` and `eng+deu` say the same
 /// thing, and Tesseract spells it with `+`.
-fn tesseract_langs(raw: &str) -> Result<String> {
+///
+/// `None` when the list held no code at all; what to call that is the caller's
+/// word, because the flag that carried the list is the caller's too.
+fn tesseract_langs(raw: &str) -> Option<String> {
     let langs: Vec<&str> = raw
         .split([',', '+'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
     if langs.is_empty() {
-        anyhow::bail!("--ocr-lang needs at least one language code, e.g. `eng`");
+        return None;
     }
-    Ok(langs.join("+"))
-}
-
-/// Whether `error` is a budget refusal, at any depth of its context.
-pub fn is_limit_refusal(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<pdfextractor_limits::LimitError>()
-            .is_some()
-    })
+    Some(langs.join("+"))
 }
 
 /// Convert one file, deciding its format from its bytes.
@@ -126,9 +279,12 @@ pub fn is_limit_refusal(error: &anyhow::Error) -> bool {
 /// Where the conversion may write — the pictures' folder and the preview's
 /// output — is the options', so an embedder that wants none of it passes
 /// neither and still gets the document.
-pub fn build_document(path: &Path, options: &ConvertOptions<'_>) -> Result<DoclingDocument> {
-    check_input_size(path)?;
-    let detected = detect(path)?;
+pub fn build_document(
+    path: &Path,
+    options: &ConvertOptions<'_>,
+) -> Result<DoclingDocument, PipelineError> {
+    check_input_size(path, &options.limits)?;
+    let detected = detect(path).map_err(PipelineError::Other)?;
     build_document_with_format(path, &detected, options)
 }
 
@@ -144,8 +300,8 @@ pub fn build_document_with_format(
     path: &Path,
     detected: &Format,
     options: &ConvertOptions<'_>,
-) -> Result<DoclingDocument> {
-    check_input_size(path)?;
+) -> Result<DoclingDocument, PipelineError> {
+    check_input_size(path, &options.limits)?;
     let paginated = matches!(
         detected,
         Format::Pdf
@@ -163,27 +319,33 @@ pub fn build_document_with_format(
     );
     if options.page_range.is_some() && !paginated {
         tracing::info!(
-            "{}: --page-range applies to pages — a PDF's, a workbook's sheets, a \
+            "{}: a page range applies to pages — a PDF's, a workbook's sheets, a \
              presentation's slides, an image's frames; this format is read whole",
             path.display()
         );
     }
 
-    if matches!(detected, Format::Pdf | Format::Image { .. }) {
-        let langs = tesseract_langs(options.ocr_lang)?;
+    let converted = if matches!(detected, Format::Pdf | Format::Image { .. }) {
+        let Some(langs) = tesseract_langs(options.ocr_lang) else {
+            return Err(PipelineError::OcrLangEmpty);
+        };
         with_worker_ocr_engine(options.ocr, &langs, options.psm, |engine| {
             build_with_engine(path, detected, options, engine)
         })
     } else {
         build_with_engine(path, detected, options, None)
-    }
+    };
+    converted.map_err(PipelineError::classify)
 }
 
-fn check_input_size(path: &Path) -> Result<()> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("read the size of {}", path.display()))?;
-    limits().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
-    Ok(())
+fn check_input_size(path: &Path, limits: &Limits) -> Result<(), PipelineError> {
+    let metadata = std::fs::metadata(path).map_err(|source| PipelineError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    limits
+        .check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+        .map_err(PipelineError::Limit)
 }
 
 fn build_with_engine(
@@ -204,15 +366,16 @@ fn build_with_engine(
             image_base,
             options.preview,
             options.preview_dpi,
+            &options.limits,
             engine,
         )?,
         Format::Docx => {
             note_flow_format(options.preview, path);
-            convert_docx(path, image_base)?
+            convert_docx(path, image_base, &options.limits)?
         }
         Format::Odt => {
             note_flow_format(options.preview, path);
-            convert_odt(path, image_base)?
+            convert_odt(path, image_base, &options.limits)?
         }
         Format::Ods => {
             if options.preview.is_some() {
@@ -221,7 +384,7 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_ods(path, image_base, options.page_range)?
+            convert_ods(path, image_base, options.page_range, &options.limits)?
         }
         Format::Odp => {
             if options.preview.is_some() {
@@ -230,7 +393,7 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_odp(path, image_base, options.page_range)?
+            convert_odp(path, image_base, options.page_range, &options.limits)?
         }
         Format::Xlsx => {
             if options.preview.is_some() {
@@ -239,7 +402,7 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_xlsx(path, image_base, options.page_range)?
+            convert_xlsx(path, image_base, options.page_range, &options.limits)?
         }
         Format::Pptx => {
             if options.preview.is_some() {
@@ -248,7 +411,7 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_pptx(path, image_base, options.page_range)?
+            convert_pptx(path, image_base, options.page_range, &options.limits)?
         }
         Format::Image { .. } => {
             if options.preview.is_some() {
@@ -257,7 +420,7 @@ fn build_with_engine(
                     path.display()
                 );
             }
-            convert_image(path, options.page_range, engine)?
+            convert_image(path, options.page_range, &options.limits, engine)?
         }
         Format::Doc => {
             note_flow_format(options.preview, path);
@@ -265,18 +428,18 @@ fn build_with_engine(
                 path,
                 BridgeTarget::Docx,
                 "a legacy Word document",
-                &limits(),
+                &options.limits,
             ) {
                 Ok(bridged) => {
                     tracing::info!(
                         "{}: a legacy Word document, read through LibreOffice as docx",
                         path.display()
                     );
-                    let doc = convert_docx(bridged.path(), image_base)?;
-                    relabel(doc, path, "application/msword")?
+                    let doc = convert_docx(bridged.path(), image_base, &options.limits)?;
+                    relabel(doc, path, "application/msword", &options.limits)?
                 }
                 Err(error) => {
-                    if is_limit_refusal(&error) {
+                    if budget_refusal(&error).is_some() {
                         return Err(error);
                     }
                     tracing::debug!("{}: {error:#}", path.display());
@@ -284,13 +447,13 @@ fn build_with_engine(
                         "{}: reading the legacy Word document with the built-in reader",
                         path.display()
                     );
-                    convert_doc(path, image_base)?
+                    convert_doc(path, image_base, &options.limits)?
                 }
             }
         }
         Format::Flow(flow) => {
             note_flow_format(options.preview, path);
-            convert_text(flow, path, image_base)?
+            convert_text(flow, path, image_base, &options.limits)?
         }
         Format::Bridge {
             target,
@@ -308,21 +471,35 @@ fn build_with_engine(
                 }
                 _ => note_flow_format(options.preview, path),
             }
-            let bridged = bridge_with_limits(path, *target, label, &limits())?;
+            let bridged = bridge_with_limits(path, *target, label, &options.limits)?;
             tracing::info!(
                 "{}: {label}, read through LibreOffice as {}",
                 path.display(),
                 target.extension()
             );
             let doc = match target {
-                BridgeTarget::Docx => convert_docx(bridged.path(), image_base)?,
-                BridgeTarget::Xlsx => convert_xlsx(bridged.path(), image_base, options.page_range)?,
-                BridgeTarget::Csv => convert_text("csv", bridged.path(), image_base)?,
-                BridgeTarget::Pptx => convert_pptx(bridged.path(), image_base, options.page_range)?,
+                BridgeTarget::Docx => convert_docx(bridged.path(), image_base, &options.limits)?,
+                BridgeTarget::Xlsx => convert_xlsx(
+                    bridged.path(),
+                    image_base,
+                    options.page_range,
+                    &options.limits,
+                )?,
+                BridgeTarget::Csv => {
+                    convert_text("csv", bridged.path(), image_base, &options.limits)?
+                }
+                BridgeTarget::Pptx => convert_pptx(
+                    bridged.path(),
+                    image_base,
+                    options.page_range,
+                    &options.limits,
+                )?,
             };
-            relabel(doc, path, mimetype)?
+            relabel(doc, path, mimetype, &options.limits)?
         }
-        Format::Unsupported(what) => anyhow::bail!("unsupported format: {what}"),
+        Format::Unsupported(what) => {
+            return Err(PipelineError::UnsupportedFormat((*what).to_string()).into());
+        }
     };
     Ok(doc)
 }
@@ -332,20 +509,24 @@ fn build_with_engine(
 /// The readers also check their slice, but the command line has to read the
 /// file first; checking the metadata here keeps a giant file from becoming an
 /// allocation before any reader sees it.
-fn read_input(path: &Path) -> anyhow::Result<Vec<u8>> {
+fn read_input(path: &Path, limits: &Limits) -> anyhow::Result<Vec<u8>> {
     let file = std::fs::File::open(path).with_context(|| format!("read {}", path.display()))?;
-    read_open_input(&file, path)
+    read_open_input(&file, path, limits)
 }
 
 /// The bytes of a file already open, held to the input ceiling.
 ///
 /// The handle is taken rather than the name so the size that is checked and the
 /// bytes that are read are the same file: a name can be swapped between the two.
-fn read_open_input(mut file: &std::fs::File, path: &Path) -> anyhow::Result<Vec<u8>> {
+fn read_open_input(
+    mut file: &std::fs::File,
+    path: &Path,
+    limits: &Limits,
+) -> anyhow::Result<Vec<u8>> {
     let metadata = file
         .metadata()
         .with_context(|| format!("read the size of {}", path.display()))?;
-    budgets().check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+    limits.check_input(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut file, &mut bytes)
         .with_context(|| format!("read {}", path.display()))?;
@@ -361,8 +542,9 @@ fn relabel(
     mut doc: pdfextractor_core::DoclingDocument,
     original: &Path,
     mimetype: &str,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(original)?;
+    let data = read_input(original, limits)?;
     let name = original
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -429,7 +611,9 @@ fn new_ocr_engine(lang: &str, psm: Option<u8>) -> Option<OcrEngine> {
         Ok(mut engine) => {
             if let Some(psm) = psm {
                 if let Err(err) = engine.set_psm(psm) {
-                    tracing::warn!("--psm {psm} refused ({err}); keeping the engine's default");
+                    tracing::warn!(
+                        "page segmentation mode {psm} refused ({err}); keeping the engine's default"
+                    );
                 }
             }
             Some(engine)
@@ -504,14 +688,16 @@ fn convert_pdf(
     image_base: Option<&Path>,
     preview: Option<&Path>,
     preview_dpi: u32,
+    limits: &Limits,
     mut engine: Option<&mut OcrEngine>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
+    let data = read_input(path, limits)?;
     // Recognition runs after parsing and takes seconds a page where parsing
     // takes milliseconds, so it is measured against its own budget. The
     // deadline is checked before each picture is recognised.
-    let ocr_deadline = budgets().ocr_deadline();
-    let parsed = PdfDocument::parse_with_limits_and_password(&data, budgets(), reading.password)?;
+    let ocr_deadline = limits.ocr_deadline();
+    let parsed =
+        PdfDocument::parse_with_limits_and_password(&data, limits.clone(), reading.password)?;
     // A ciphered file the password does not open is refused here, by name,
     // rather than read as though its streams were plain: what came out unread
     // would be noise in a document that looks successful.
@@ -525,21 +711,23 @@ fn convert_pdf(
             }
         }
         Some(pdfextractor_pdf_parser::crypt::CryptError::WrongPassword) => {
-            let asked = if reading.password.is_some() {
-                "the password given does not open it"
+            let why = if reading.password.is_some() {
+                Encrypted::WrongPassword
             } else {
-                "it needs a password: pass it in PDFE_PDF_PASSWORD, or name a file with \
-                 --pdf-password-file"
+                Encrypted::NeedsPassword
             };
-            anyhow::bail!("{}: this PDF is encrypted and {asked}", path.display());
+            return Err(PipelineError::Encrypted {
+                path: path.to_path_buf(),
+                why,
+            }
+            .into());
         }
         Some(pdfextractor_pdf_parser::crypt::CryptError::Unsupported(what)) => {
-            anyhow::bail!(
-                "{}: this PDF is encrypted with {what}, which this build cannot decrypt — \
-                 re-save it without encryption, for example `qpdf --decrypt in.pdf out.pdf`, \
-                 and read that file",
-                path.display()
-            );
+            return Err(PipelineError::Encrypted {
+                path: path.to_path_buf(),
+                why: Encrypted::Unsupported(what.clone()),
+            }
+            .into());
         }
     }
     // The reader's page range is applied to the pages the file has, before any of
@@ -551,11 +739,13 @@ fn convert_pdf(
         let total = pages.len();
         pages.retain(|page| range.contains(page.page_no));
         if pages.is_empty() {
-            anyhow::bail!(
-                "--page-range {range} names no page of {} ({} page(s): 1-{total})",
-                path.display(),
-                total
-            );
+            return Err(PipelineError::PageRange {
+                path: path.to_path_buf(),
+                range: range.clone(),
+                total,
+                unit: RangeUnit::Page,
+            }
+            .into());
         }
         tracing::info!(
             "{}: reading {} of {} page(s) ({range})",
@@ -710,7 +900,7 @@ fn convert_pdf(
             for (data, width, height, box_) in images {
                 ocr_deadline.check("recognising a page")?;
                 let turn = if detect_sideways && picture_is_page(box_, page.width, page.height) {
-                    match engine.detect_upright(data, &budgets()) {
+                    match engine.detect_upright(data, limits) {
                         Ok(QuarterTurn::AsStored) => QuarterTurn::AsStored,
                         Ok(turn) => {
                             tracing::debug!(
@@ -735,9 +925,9 @@ fn convert_pdf(
                 // page before recognition, so its lines come back upright, in
                 // the displayed space the target box is measured in.
                 let rotated = if page.rotation != 0 {
-                    rotate_for_ocr(data, page.rotation, &budgets())
+                    rotate_for_ocr(data, page.rotation, limits)
                 } else if turn != QuarterTurn::AsStored {
-                    rotate_for_ocr(data, turn.degrees(), &budgets())
+                    rotate_for_ocr(data, turn.degrees(), limits)
                 } else {
                     None
                 };
@@ -1126,9 +1316,11 @@ fn write_kept_image(image_base: Option<&Path>, relative: &Path, data: &[u8]) -> 
 fn convert_docx(
     path: &Path,
     image_base: Option<&Path>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_docx_parser::DocxDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_docx_parser::DocxDocument::parse_bytes_with_limits(&data, limits.clone())?;
 
     let name = path
         .file_name()
@@ -1160,6 +1352,7 @@ fn convert_docx(
             image_base,
             &mut image_dir,
             &mut image_seq,
+            limits,
         );
     }
 
@@ -1172,6 +1365,7 @@ fn convert_docx(
             image_base,
             &mut image_dir,
             &mut image_seq,
+            limits,
         ) {
             furniture.push(reference);
         }
@@ -1188,9 +1382,11 @@ fn convert_docx(
 fn convert_odt(
     path: &Path,
     image_base: Option<&Path>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_odt_parser::OdtDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_odt_parser::OdtDocument::parse_bytes_with_limits(&data, limits.clone())?;
 
     let name = path
         .file_name()
@@ -1215,6 +1411,7 @@ fn convert_odt(
             image_base,
             &mut image_dir,
             &mut image_seq,
+            limits,
         );
     }
 
@@ -1228,6 +1425,7 @@ fn emit_odt_item(
     image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
+    limits: &Limits,
 ) {
     use pdfextractor_odt_parser::OdtItem;
     match item {
@@ -1248,7 +1446,7 @@ fn emit_odt_item(
             );
         }
         OdtItem::Table(table) => {
-            let grid = odt_grid(table, image_base, image_dir, image_seq);
+            let grid = odt_grid(table, image_base, image_dir, image_seq, limits);
             builder.add_table_grid(&grid);
         }
         OdtItem::Picture {
@@ -1259,7 +1457,7 @@ fn emit_odt_item(
         } => {
             *image_seq += 1;
             let name = format!("pg1_{}", image_seq);
-            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
+            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt, limits);
             let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             builder.add_picture_plain("picture", image);
@@ -1274,6 +1472,7 @@ fn odt_grid(
     image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
+    limits: &Limits,
 ) -> GridTable {
     let mut cells = Vec::new();
     for (r, row) in table.rows.iter().enumerate() {
@@ -1292,6 +1491,7 @@ fn odt_grid(
                         picture.data.clone(),
                         picture.width_pt,
                         picture.height_pt,
+                        limits,
                     );
                     write_image(image_dir, image_base, &name, mime, &data).map(|uri| {
                         describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
@@ -1301,7 +1501,7 @@ fn odt_grid(
             let tables = cell
                 .tables
                 .iter()
-                .map(|nested| odt_grid(nested, image_base, image_dir, image_seq))
+                .map(|nested| odt_grid(nested, image_base, image_dir, image_seq, limits))
                 .collect();
             cells.push(GridCell {
                 text: cell.text.clone(),
@@ -1328,17 +1528,22 @@ fn convert_xlsx(
     path: &Path,
     image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_xlsx_parser::XlsxDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_xlsx_parser::XlsxDocument::parse_bytes_with_limits(&data, limits.clone())?;
     convert_workbook(
         &parsed.sheets,
         &parsed.annotations,
-        &data,
-        path,
-        image_base,
-        range,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        &WorkbookReading {
+            data: &data,
+            path,
+            image_base,
+            range,
+            limits,
+            mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
     )
 }
 
@@ -1351,18 +1556,37 @@ fn convert_ods(
     path: &Path,
     image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_ods_parser::OdsDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_ods_parser::OdsDocument::parse_bytes_with_limits(&data, limits.clone())?;
     convert_workbook(
         &parsed.sheets,
         &parsed.annotations,
-        &data,
-        path,
-        image_base,
-        range,
-        "application/vnd.oasis.opendocument.spreadsheet",
+        &WorkbookReading {
+            data: &data,
+            path,
+            image_base,
+            range,
+            limits,
+            mimetype: "application/vnd.oasis.opendocument.spreadsheet",
+        },
     )
+}
+
+/// What a workbook's two readers hand [`convert_workbook`]: the file the sheets
+/// were read from, where its pictures go, the sheets to keep and the budgets to
+/// keep to. Gathered so the conversion takes the reading rather than six loose
+/// arguments beside it.
+#[derive(Copy, Clone)]
+struct WorkbookReading<'a> {
+    data: &'a [u8],
+    path: &'a Path,
+    image_base: Option<&'a Path>,
+    range: Option<&'a page_range::PageRange>,
+    limits: &'a Limits,
+    mimetype: &'a str,
 }
 
 /// Build a `DoclingDocument` from a workbook's sheets.
@@ -1378,12 +1602,16 @@ fn convert_ods(
 fn convert_workbook(
     workbook: &[pdfextractor_xlsx_parser::Sheet],
     annotations: &[pdfextractor_xlsx_parser::SheetAnnotation],
-    data: &[u8],
-    path: &Path,
-    image_base: Option<&Path>,
-    range: Option<&page_range::PageRange>,
-    mimetype: &str,
+    reading: &WorkbookReading<'_>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
+    let WorkbookReading {
+        data,
+        path,
+        image_base,
+        range,
+        limits,
+        mimetype,
+    } = *reading;
     // A sheet is a page, so the range is applied before the first one is read: a
     // workbook read as one sheet costs one sheet rather than all of them.
     let total = workbook.len();
@@ -1394,11 +1622,13 @@ fn convert_workbook(
         .collect();
     if let Some(range) = range {
         if sheets.is_empty() {
-            anyhow::bail!(
-                "--page-range {range} names no sheet of {} (the workbook has {total} sheet(s); \
-                 1-{total})",
-                path.display()
-            );
+            return Err(PipelineError::PageRange {
+                path: path.to_path_buf(),
+                range: range.clone(),
+                total,
+                unit: RangeUnit::Sheet,
+            }
+            .into());
         }
         tracing::info!(
             "{}: reading {} of {} sheet(s) ({range})",
@@ -1524,7 +1754,8 @@ fn convert_workbook(
                     // and re-encoded to reach the model at all. A drawing has
                     // no sheet box to be played at — a worksheet's page is a
                     // grid of cells — so it is played at its own viewport.
-                    let (mime, data) = office_media(picture.mime, picture.data.clone(), None, None);
+                    let (mime, data) =
+                        office_media(picture.mime, picture.data.clone(), None, None, limits);
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
                             &mut image_dir,
@@ -1734,9 +1965,11 @@ fn convert_pptx(
     path: &Path,
     image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_pptx_parser::PptxDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_pptx_parser::PptxDocument::parse_bytes_with_limits(&data, limits.clone())?;
 
     let total = parsed.slides.len();
     let slides: Vec<_> = parsed
@@ -1746,11 +1979,13 @@ fn convert_pptx(
         .collect();
     if let Some(range) = range {
         if slides.is_empty() {
-            anyhow::bail!(
-                "--page-range {range} names no slide of {} (the deck has {total} slide(s); \
-                 1-{total})",
-                path.display()
-            );
+            return Err(PipelineError::PageRange {
+                path: path.to_path_buf(),
+                range: range.clone(),
+                total,
+                unit: RangeUnit::Slide,
+            }
+            .into());
         }
         tracing::info!(
             "{}: reading {} of {} slide(s) ({range})",
@@ -1804,6 +2039,7 @@ fn convert_pptx(
                 background.data.clone(),
                 Some(width_pt),
                 Some(height_pt),
+                limits,
             );
             let image = image_dimensions(&data).and_then(|(width, height)| {
                 let uri = write_image(
@@ -1928,6 +2164,7 @@ fn convert_pptx(
                         picture.data.clone(),
                         Some(points),
                         Some(height),
+                        limits,
                     );
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
@@ -1982,9 +2219,11 @@ fn convert_odp(
     path: &Path,
     image_base: Option<&Path>,
     range: Option<&page_range::PageRange>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_odp_parser::OdpDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_odp_parser::OdpDocument::parse_bytes_with_limits(&data, limits.clone())?;
 
     let name = path
         .file_name()
@@ -2003,11 +2242,13 @@ fn convert_odp(
         .collect();
     if let Some(range) = range {
         if slides.is_empty() {
-            anyhow::bail!(
-                "--page-range {range} names no slide of {} (the deck has {total} slide(s); \
-                 1-{total})",
-                path.display()
-            );
+            return Err(PipelineError::PageRange {
+                path: path.to_path_buf(),
+                range: range.clone(),
+                total,
+                unit: RangeUnit::Slide,
+            }
+            .into());
         }
         tracing::info!(
             "{}: reading {} of {} slide(s) ({range})",
@@ -2124,6 +2365,7 @@ fn convert_odp(
                         picture.data.clone(),
                         Some(points),
                         Some(height),
+                        limits,
                     );
                     let image = image_dimensions(&data).and_then(|(width, height)| {
                         let uri = write_image(
@@ -2373,9 +2615,10 @@ fn comment_timestamp(date: &str) -> std::borrow::Cow<'_, str> {
 fn convert_image(
     path: &Path,
     page_range: Option<&page_range::PageRange>,
+    limits: &Limits,
     mut engine: Option<&mut OcrEngine>,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
+    let data = read_input(path, limits)?;
     let image = pdfextractor_image_parser::ImageDocument::parse_bytes(&data)?;
 
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("image");
@@ -2397,9 +2640,9 @@ fn convert_image(
     // TIFF's directories are separate sheets that need not be the same size, so
     // each page is measured from its own grid. One frame is a still image, so
     // only a file that really holds several is read as several pages.
-    let gif_frames = pdfextractor_image_parser::gif_frames_checked(&data, &budgets())?;
-    let webp_frames = pdfextractor_image_parser::webp_frames_checked(&data, &budgets())?;
-    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(&data, &budgets())?;
+    let gif_frames = pdfextractor_image_parser::gif_frames_checked(&data, limits)?;
+    let webp_frames = pdfextractor_image_parser::webp_frames_checked(&data, limits)?;
+    let tiff_pages = pdfextractor_image_parser::tiff_frames_checked(&data, limits)?;
     let animation: &[pdfextractor_image_parser::PngPicture] = if gif_frames.len() > 1 {
         &gif_frames
     } else if webp_frames.len() > 1 {
@@ -2430,7 +2673,7 @@ fn convert_image(
     let decoded = if animated {
         Some(animation[0].data.clone())
     } else if matches!(image.mimetype, "image/jp2" | "image/gif") {
-        let decoded = pdfextractor_image_parser::transcode_to_png_checked(&data, &budgets())
+        let decoded = pdfextractor_image_parser::transcode_to_png_checked(&data, limits)
             .ok()
             .map(|picture| picture.data);
         if decoded.is_none() {
@@ -2453,7 +2696,7 @@ fn convert_image(
     let detected = if declared == pdfextractor_image_parser::Orientation::Normal {
         match engine
             .as_mut()
-            .map(|engine| engine.detect_upright(source, &budgets()))
+            .map(|engine| engine.detect_upright(source, limits))
         {
             Some(Ok(turn)) => turn,
             Some(Err(err)) => {
@@ -2476,7 +2719,7 @@ fn convert_image(
     // by EXIF when there is a tag, by the reading when there is not.
     let mut upright = None;
     if declared != pdfextractor_image_parser::Orientation::Normal {
-        match orient_for_ocr(source, declared, &budgets()) {
+        match orient_for_ocr(source, declared, limits) {
             Ok(png) => upright = Some(png),
             Err(refusal) => tracing::warn!(
                 "could not apply EXIF orientation {:?} to {}; OCR sees the stored pixels: {refusal}",
@@ -2489,7 +2732,7 @@ fn convert_image(
     if declared == pdfextractor_image_parser::Orientation::Normal
         && detected != QuarterTurn::AsStored
     {
-        match rotate_for_ocr_checked(source, detected.degrees(), &budgets()) {
+        match rotate_for_ocr_checked(source, detected.degrees(), limits) {
             Ok((png, _, _)) => {
                 upright = Some(png);
                 applied = detected;
@@ -2552,15 +2795,14 @@ fn convert_image(
             // had to be turned to be read, the strip is turned with it.
             let (turned, swaps) = if declared != pdfextractor_image_parser::Orientation::Normal {
                 (
-                    orient_for_ocr(&frame.data, declared, &budgets()).ok(),
+                    orient_for_ocr(&frame.data, declared, limits).ok(),
                     declared.swaps_axes(),
                 )
             } else if applied == QuarterTurn::AsStored {
                 (None, false)
             } else {
                 (
-                    rotate_for_ocr(&frame.data, applied.degrees(), &budgets())
-                        .map(|(png, _, _)| png),
+                    rotate_for_ocr(&frame.data, applied.degrees(), limits).map(|(png, _, _)| png),
                     applied.swaps_axes(),
                 )
             };
@@ -2581,11 +2823,13 @@ fn convert_image(
         let total = page_pixels.len();
         page_pixels.retain(|page| range.contains(page.0));
         if page_pixels.is_empty() {
-            anyhow::bail!(
-                "--page-range {range} names no page of {} (the file has {total} page(s); \
-                 1-{total})",
-                path.display()
-            );
+            return Err(PipelineError::PageRange {
+                path: path.to_path_buf(),
+                range: range.clone(),
+                total,
+                unit: RangeUnit::ImagePage,
+            }
+            .into());
         }
         // A GIF's or a WebP's pages are frames, and a TIFF's are the directories
         // its reader counted; the log names the unit the file holds rather than
@@ -2623,7 +2867,7 @@ fn convert_image(
     // sheets are each their own size.
     // Frames are recognised one at a time; the deadline is checked before each,
     // so a stack of them cannot run past the OCR budget.
-    let ocr_deadline = budgets().ocr_deadline();
+    let ocr_deadline = limits.ocr_deadline();
     for (page_no, pixels, pixel_width, pixel_height, width, height) in &page_pixels {
         ocr_deadline.check("recognising a page")?;
         let page = *page_no;
@@ -2705,9 +2949,11 @@ fn convert_image(
 fn convert_doc(
     path: &Path,
     _image_base: Option<&Path>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
-    let parsed = pdfextractor_doc_parser::DocDocument::parse_bytes_with_limits(&data, budgets())?;
+    let data = read_input(path, limits)?;
+    let parsed =
+        pdfextractor_doc_parser::DocDocument::parse_bytes_with_limits(&data, limits.clone())?;
 
     let name = path
         .file_name()
@@ -2761,20 +3007,20 @@ fn convert_text(
     ext: &str,
     path: &Path,
     image_base: Option<&Path>,
+    limits: &Limits,
 ) -> anyhow::Result<pdfextractor_core::DoclingDocument> {
-    let data = read_input(path)?;
+    let data = read_input(path, limits)?;
     // A flow file is untrusted input like any other: the shared budgets bound
     // the blocks it may expand into and the time the walk through it may take.
-    let budget = budgets();
     let parsed = match ext {
-        "rtf" => pdfextractor_text_parser::rtf::parse_with_limits(&data, &budget)?,
-        "html" | "htm" => pdfextractor_text_parser::html::parse_with_limits(&data, &budget)?,
+        "rtf" => pdfextractor_text_parser::rtf::parse_with_limits(&data, limits)?,
+        "html" | "htm" => pdfextractor_text_parser::html::parse_with_limits(&data, limits)?,
         "md" | "markdown" => {
-            pdfextractor_text_parser::text::parse_markdown_with_limits(&data, &budget)?
+            pdfextractor_text_parser::text::parse_markdown_with_limits(&data, limits)?
         }
-        "csv" => pdfextractor_text_parser::csv::parse_csv_with_limits(&data, &budget)?,
-        "tsv" => pdfextractor_text_parser::csv::parse_tsv_with_limits(&data, &budget)?,
-        _ => pdfextractor_text_parser::text::parse_plain_with_limits(&data, &budget)?,
+        "csv" => pdfextractor_text_parser::csv::parse_csv_with_limits(&data, limits)?,
+        "tsv" => pdfextractor_text_parser::csv::parse_tsv_with_limits(&data, limits)?,
+        _ => pdfextractor_text_parser::text::parse_plain_with_limits(&data, limits)?,
     };
 
     let name = path
@@ -2944,7 +3190,7 @@ fn convert_text(
                 // a `data:` URI that is not a carried picture, a path that is
                 // not there — is left as the words the file contains rather
                 // than becoming a picture with nothing behind it.
-                let picture = load_flow_picture(path, source).and_then(|picture| {
+                let picture = load_flow_picture(path, source, limits).and_then(|picture| {
                     // A picture the page named beside itself keeps that name, so
                     // the page written from this document names the same file
                     // and the page is its own bytes when it is read back. One
@@ -3025,16 +3271,16 @@ struct FlowPicture {
 /// resolved against the document's own directory, because that is what a
 /// relative destination means in both formats. Only a local file is read: a
 /// converter must not fetch the network on its own.
-fn load_flow_picture(document: &Path, source: &str) -> Option<FlowPicture> {
+fn load_flow_picture(document: &Path, source: &str, limits: &Limits) -> Option<FlowPicture> {
     let (declared, data) = match data_uri_picture(source) {
         Some(carried) => carried,
         None => {
             let (path, file) = open_local_image(document, source)?;
-            let data = read_open_input(&file, &path).ok()?;
+            let data = read_open_input(&file, &path, limits).ok()?;
             (image_mimetype_for_path(&path), data)
         }
     };
-    picture_from_bytes(declared, data)
+    picture_from_bytes(declared, data, limits)
 }
 
 /// The bytes a `data:` URI carries and the media type it declares, when that
@@ -3089,7 +3335,11 @@ fn data_uri_picture(source: &str) -> Option<(Option<&'static str>, Vec<u8>)> {
 /// left unknown: without a size the model has no `image` to hold, and the page
 /// would lose a picture it was given. A file whose extension names no carried
 /// format, and whose bytes are not a picture either, is nothing to read.
-fn picture_from_bytes(declared: Option<&'static str>, data: Vec<u8>) -> Option<FlowPicture> {
+fn picture_from_bytes(
+    declared: Option<&'static str>,
+    data: Vec<u8>,
+    limits: &Limits,
+) -> Option<FlowPicture> {
     let picture = match pdfextractor_image_parser::ImageDocument::parse_bytes(&data) {
         Ok(image) => match pdfextractor_image_parser::turn_upright(&data) {
             // A camera may have stored the picture sideways: the file a reader
@@ -3114,7 +3364,7 @@ fn picture_from_bytes(declared: Option<&'static str>, data: Vec<u8>) -> Option<F
     // A WebP or a JPEG 2000 is written out as PNG, as a metafile already is:
     // Docling cannot name either type, so the picture would otherwise be a box
     // with no image. The PNG's own grid is the size to report.
-    let (mimetype, data) = docling_media(picture.mimetype, picture.data);
+    let (mimetype, data) = docling_media(picture.mimetype, picture.data, limits);
     let size = if mimetype == picture.mimetype {
         picture.size
     } else {
@@ -3237,6 +3487,7 @@ fn emit_docx_item(
     image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
+    limits: &Limits,
 ) {
     use pdfextractor_docx_parser::DocxItem;
     match item {
@@ -3267,6 +3518,7 @@ fn emit_docx_item(
                 image_dir,
                 image_seq,
                 "pg1_",
+                limits,
             );
             builder.add_table_grid(&grid);
         }
@@ -3282,7 +3534,7 @@ fn emit_docx_item(
             // which is the encoding Docling's own Word reader hands every
             // picture on under. A drawing is played at the size the drawing's
             // frame asks for, so the picture is the size the page shows.
-            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
+            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt, limits);
             let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             builder.add_picture_plain("picture", image);
@@ -3297,6 +3549,7 @@ fn emit_furniture_item(
     image_base: Option<&Path>,
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
+    limits: &Limits,
 ) -> Option<Ref> {
     use pdfextractor_docx_parser::DocxItem;
     match item {
@@ -3319,6 +3572,7 @@ fn emit_furniture_item(
                 image_dir,
                 image_seq,
                 "furniture_",
+                limits,
             );
             Some(builder.add_furniture_table_grid(&grid))
         }
@@ -3330,7 +3584,7 @@ fn emit_furniture_item(
         } => {
             *image_seq += 1;
             let name = format!("furniture_{image_seq}");
-            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt);
+            let (mime, data) = office_media(mime, data.clone(), *width_pt, *height_pt, limits);
             let image = write_image(image_dir, image_base, &name, mime, &data)
                 .map(|uri| describe_image(mime, &data, *width_pt, *height_pt, uri));
             Some(builder.add_furniture_picture("picture", image))
@@ -3359,6 +3613,7 @@ fn grid_table(
     image_dir: &mut Option<PathBuf>,
     image_seq: &mut usize,
     prefix: &str,
+    limits: &Limits,
 ) -> GridTable {
     let mut cells = Vec::new();
     for (r, row) in rows.iter().enumerate() {
@@ -3377,6 +3632,7 @@ fn grid_table(
                         picture.data.clone(),
                         picture.width_pt,
                         picture.height_pt,
+                        limits,
                     );
                     write_image(image_dir, image_base, &name, mime, &data).map(|uri| {
                         describe_image(mime, &data, picture.width_pt, picture.height_pt, uri)
@@ -3394,6 +3650,7 @@ fn grid_table(
                         image_dir,
                         image_seq,
                         prefix,
+                        limits,
                     )
                 })
                 .collect();
@@ -3494,18 +3751,10 @@ fn link_covering(links: &[pdfextractor_pdf_parser::PageLink], bbox: [f64; 4]) ->
 /// formats hold pixels that can be read, so they are handed on under the one
 /// type every reader knows rather than dropped. A picture that cannot be
 /// decoded keeps its own type and bytes: a payload is never replaced by a guess.
-fn docling_media(mime: &'static str, data: Vec<u8>) -> (&'static str, Vec<u8>) {
-    docling_media_with_limits(mime, data, &budgets())
-}
-
-/// [`docling_media`] under the run's image budgets: a picture past
-/// `max_image_pixels`, `max_image_dimension` or the allocation ceiling keeps its
-/// own type and bytes rather than being decoded anyway.
-fn docling_media_with_limits(
-    mime: &'static str,
-    data: Vec<u8>,
-    limits: &pdfextractor_limits::Limits,
-) -> (&'static str, Vec<u8>) {
+///
+/// A picture past `max_image_pixels`, `max_image_dimension` or the allocation
+/// ceiling keeps its own type and bytes rather than being decoded anyway.
+fn docling_media(mime: &'static str, data: Vec<u8>, limits: &Limits) -> (&'static str, Vec<u8>) {
     if pdfextractor_core::is_representable_media_type(mime) {
         return (mime, data);
     }
@@ -3537,24 +3786,16 @@ fn docling_media_with_limits(
 /// cannot name and this cannot decode is left a box with no image, as
 /// [`docling_media`] leaves it. That is why there is no second attempt there:
 /// the transcode has already been tried.
+///
+/// A picture past the pixel, dimension or allocation ceiling keeps its own type
+/// and bytes rather than being decoded anyway — the same answer an undecodable
+/// picture gets.
 fn office_media(
     mime: &'static str,
     data: Vec<u8>,
     width_pt: Option<f64>,
     height_pt: Option<f64>,
-) -> (&'static str, Vec<u8>) {
-    office_media_with_limits(mime, data, width_pt, height_pt, &budgets())
-}
-
-/// [`office_media`] under the run's image budgets: a picture past the pixel,
-/// dimension or allocation ceiling keeps its own type and bytes rather than
-/// being decoded anyway — the same answer an undecodable picture gets.
-fn office_media_with_limits(
-    mime: &'static str,
-    data: Vec<u8>,
-    width_pt: Option<f64>,
-    height_pt: Option<f64>,
-    limits: &pdfextractor_limits::Limits,
+    limits: &Limits,
 ) -> (&'static str, Vec<u8>) {
     if mime == "image/png" || mime == "image/jpeg" {
         return (mime, data);
@@ -3929,6 +4170,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The limits are the conversion's, not the process's: two documents read in
+    /// one process each get the ceiling their own options name. The first is
+    /// held to four bytes and is refused; the second, with the defaults, reads
+    /// the very same bytes.
+    #[test]
+    fn two_conversions_in_one_process_each_get_their_own_ceiling() {
+        let root = std::env::temp_dir().join(format!("pdfe-two-ceilings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the scratch directory");
+        let path = root.join("notes.md");
+        std::fs::write(
+            &path,
+            "# Notes\n\nA paragraph, long enough to pass a ceiling of four bytes.\n",
+        )
+        .expect("the document");
+
+        let refused = build_document_with_format(
+            &path,
+            &Format::Flow("md"),
+            &ConvertOptions {
+                limits: Limits {
+                    max_input_bytes: 4,
+                    ..Limits::default()
+                },
+                ..ConvertOptions::default()
+            },
+        );
+        match refused {
+            Err(PipelineError::Limit(LimitError::InputTooLarge { limit, .. })) => {
+                assert_eq!(limit, 4, "the refusal names another ceiling")
+            }
+            other => panic!("a four-byte ceiling did not refuse the document: {other:?}"),
+        }
+
+        // The same file, in the same process, under the ceiling the second
+        // conversion names: a global would still hold the first one's.
+        let read =
+            build_document_with_format(&path, &Format::Flow("md"), &ConvertOptions::default())
+                .expect("the defaults read the same file");
+        assert_eq!(read.name, "notes.md", "the second conversion read nothing");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn comment(
         author: Option<&str>,
         initials: Option<&str>,
@@ -4060,7 +4345,7 @@ mod tests {
         let gif =
             std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
-        let (mime, png) = office_media_with_limits(
+        let (mime, png) = office_media(
             "image/gif",
             gif.clone(),
             None,
@@ -4075,7 +4360,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            office_media_with_limits("image/gif", gif.clone(), None, None, &tight),
+            office_media("image/gif", gif.clone(), None, None, &tight),
             ("image/gif", gif),
             "a one-pixel budget must leave the picture as it was"
         );
@@ -4092,7 +4377,7 @@ mod tests {
             std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
         assert_eq!(
-            docling_media_with_limits(
+            docling_media(
                 "image/webp",
                 webp.clone(),
                 &pdfextractor_limits::Limits::default()
@@ -4107,7 +4392,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            docling_media_with_limits("image/webp", webp.clone(), &tight),
+            docling_media("image/webp", webp.clone(), &tight),
             ("image/webp", webp),
             "a one-pixel budget must leave the picture as it was"
         );
@@ -4122,7 +4407,13 @@ mod tests {
     #[test]
     fn an_office_svg_is_letterboxed_into_a_frame_of_another_shape() {
         let drawing = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24" viewBox="0 0 40 24"><rect width="40" height="24" fill="#e8eef7"/></svg>"##;
-        let (mime, png) = office_media("image/svg+xml", drawing.to_vec(), Some(36.0), Some(36.0));
+        let (mime, png) = office_media(
+            "image/svg+xml",
+            drawing.to_vec(),
+            Some(36.0),
+            Some(36.0),
+            &pdfextractor_limits::Limits::default(),
+        );
         assert_eq!(mime, "image/png", "the drawing was left as markup");
         let raster = image::load_from_memory(&png)
             .expect("the painted picture decodes")
@@ -4156,6 +4447,7 @@ mod tests {
                 drawing.into_bytes(),
                 Some(width_pt),
                 Some(height_pt),
+                &pdfextractor_limits::Limits::default(),
             );
             assert_eq!(mime, "image/png", "the drawing was left as markup");
             image::load_from_memory(&png)

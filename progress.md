@@ -630,3 +630,42 @@ and two repository gates were already red.
   green with the suite at 1,364; no-default-features build, workspace clippy
   `-D warnings` and `cargo fmt --all --check` green.
 
+### 2026-11-25 — a typed boundary and per-conversion limits (WS8 P4)
+
+- **A typed boundary, not a different error type inside.** The two public entry
+  points now return `PipelineError`: `Limit(LimitError)`, `Encrypted { path, why }`
+  (`NeedsPassword` / `WrongPassword` / `Unsupported(cipher)`), `UnsupportedFormat`,
+  `PageRange { path, range, total, unit }`, `OcrLangEmpty`, `Io { path, source }`
+  and `Other(anyhow::Error)`. The readers still speak `anyhow`: their context is
+  kept, `Other` carries it whole, and `source()` exposes the chain so a caller's
+  `{:#}` reads as it always did. The specific cases travel through `?` as
+  themselves and `classify` takes the outermost one; a budget refusal is found
+  wherever it sits in the chain, because a reader may add context as it passes
+  one on.
+- **The process's limits became the conversion's.** The `OnceLock`, `limits()`,
+  `set_limits` and `budgets()` are gone; `ConvertOptions.limits` is a `Limits`
+  value, threaded to every reader, picture transcode and OCR deadline. The
+  command line builds one from its flags — `install_budgets` now returns it —
+  and hands it to each conversion. New test
+  `two_conversions_in_one_process_each_get_their_own_ceiling`: a Markdown file
+  read under a four-byte ceiling is refused as `PipelineError::Limit`, then the
+  same bytes read under the defaults succeed in the same process.
+- **The flag names moved to the flag's owner.** The library no longer writes
+  `--ocr-lang`, `--page-range` or `--psm`: `OcrLangEmpty` and `PageRange` carry
+  data, the CLI's `flag_named` writes the sentence a user reads (with the
+  workbook/deck wording the tests assert), and the four password-source words sit
+  with `Encrypted::NeedsPassword`. The `--psm` note is now "page segmentation
+  mode N refused", which is what the pipeline actually knows. The page-range log
+  line reads "a page range applies to pages".
+- **One refusal predicate, in the CLI.** The public `is_limit_refusal` is gone;
+  the CLI's own matches the typed case or a `LimitError` anywhere in the chain,
+  so exit status `3`, `error_kind` and `raise_flag` are unchanged. The pipeline
+  keeps only `budget_refusal`, which answers *which* refusal rather than yes/no,
+  for the one internal decision that needs it (the `.doc` bridge fallback) and
+  for `classify`.
+- **Checks.** `cli_test` 140 passed; `documentation_test` 4 passed with the
+  suite at 1,365; pipeline lib 26 passed + 1 ignored bench, CLI unit tests 12;
+  the refusal tests that read the moved sentences — `page_range_test`,
+  `ods_test`, `odp_test`, `encrypted_test` — green; `cargo build -p
+  pdfextractor-cli --no-default-features` green; workspace clippy `-D warnings`
+  and `cargo fmt --all --check` green.
