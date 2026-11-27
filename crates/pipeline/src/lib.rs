@@ -60,9 +60,11 @@ pub struct ConvertOptions<'a> {
     pub deskew: bool,
     /// Rasterise a page whose text exists only as vector art.
     ///
-    /// A page with no text layer and no picture has nothing to recognise: its
-    /// words are drawn as paths. With this on, such a page is rendered through
-    /// `pdftoppm` and the render is recognised like a scan.
+    /// A page with no text layer and no raster picture has nothing to recognise:
+    /// its words are drawn as paths. With this on, such a page is rendered through
+    /// `pdftoppm` and the render is recognised like a scan. The vector boxes the
+    /// parser reports as figures do not stop it — an outlined page's own text is
+    /// clustered into those boxes — so the rule is about pixels, not boxes.
     ///
     /// Off by default, because the extraction path does not require an external
     /// renderer unless the caller asks for one. A caller who asks and has none
@@ -944,18 +946,21 @@ fn convert_pdf(
                 Vec::new()
             };
 
-            // A page with no text layer and no picture has its words drawn as
-            // paths: nothing in the file is text a reader can find. When the
-            // caller asked for vector pages, the page is rendered and the render
-            // is read like a scan. The renderer is looked for here and nowhere
-            // else, so a document that needs none never reaches for one; a
-            // caller who asked and has none is told, rather than handed a page
-            // with its text silently missing.
+            // A page with no text layer and no raster picture has its words
+            // drawn as paths: nothing in the file is text a reader can find.
+            // When the caller asked for vector pages, the page is rendered and
+            // the render is read like a scan. A vector figure does **not** stop
+            // this: the pass that finds a chart clusters the page's own outlined
+            // glyphs into the same boxes, so a real outlined export would be
+            // refused page after page (a 14-page paper gave "figures" on 13 of
+            // them, 3 to 83 each, none of them a picture). The renderer is
+            // looked for here and nowhere else, so a document that needs none
+            // never reaches for one; a caller who asked and has none is told,
+            // rather than handed a page with its text silently missing.
             let rendered: Option<(Vec<u8>, u32, u32)> = if reading.vector_pages
                 && page.spans.is_empty()
                 && page.placed_images.is_empty()
                 && page.images.is_empty()
-                && page.figures.is_empty()
             {
                 let Some(program) = renderer::pdftoppm() else {
                     return Err(PipelineError::RendererMissing {

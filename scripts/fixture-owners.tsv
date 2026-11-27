@@ -164,6 +164,7 @@ test-data/invoice_scan_skewed.png	crates/cli/tests/cli_test.rs
 test-data/fax_scan.png	crates/cli/tests/cli_test.rs
 test-data/german_scan.png	crates/cli/tests/cli_test.rs
 test-data/vector_text.pdf	crates/cli/tests/cli_test.rs
+test-data/vector_text_figure.pdf	crates/cli/tests/cli_test.rs
 test-data/invoice_scan.png	crates/pptx-parser/tests/shapes_test.rs
 test-data/invoice_scan.png	crates/cli/tests/docling_golden_test.rs
 

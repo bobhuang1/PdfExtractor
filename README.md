@@ -403,7 +403,7 @@ cargo run -p pdfextractor-cli -- -i document.pdf --to chunks --chunks-type hybri
 | `--psm <N>` | Tesseract page segmentation mode, 0–13 (6 is one block, 7 one line, 11 sparse text); the engine's own default when absent |
 | `--ocr-deskew` | turn a page that was **scanned at an angle** flat before recognising it, by the direction its text lines run. Off by default: a born-digital page has none, and the estimate is two passes over the page's ink. A page under half a degree askew is left untouched |
 | `--ocr-despeckle` | replace the isolated pixels a fax leaves — a dark speck on paper, a light one inside ink — before recognising each page. Off by default: a born-digital page has none, and every page pays for the pass |
-| `--ocr-vector-pages` | render a PDF page whose text is **only vector art** — no text layer and no picture — with `pdftoppm`, then recognise the render. Off by default: it is the one reading that needs an external renderer installed, and a document that needs none never looks for one |
+| `--ocr-vector-pages` | render a PDF page whose text is **only vector art** — no text layer and no **raster** picture — with `pdftoppm`, then recognise the render. A page's **vector figures do not stop it**: an outlined page's own paragraphs and headings are grouped into those boxes by the figure pass, so the rule is about pixels, not boxes. Off by default: it is the one reading that needs an external renderer installed, and a document that needs none never looks for one |
 | `--text-dehyphenate <BOOL>` | join words a line break split when writing `--to text` (default `true`, as pdftotext does); `--text-dehyphenate false` is the off switch — every source character is kept, at the cost of `exam- ple` style breaks |
 | `--include-notes` | include the notes layer — a deck's speaker notes and comments — in the `md`, `html` and `text` outputs. Off, those three are a reading of the slides alone; JSON and YAML always carry the whole document. Markdown writes a speaker note's paragraphs as `> **Notes:**` lines and a comment's as `> **Comment:**` lines, and HTML as an `<aside class="notes">` (or `<aside class="notes comment">`) holding one `<p>` per paragraph with a bold label on the first, so an included remark is visibly not a slide, a comment is visibly not the presenter's note, and paragraph breaks are kept; plain text keeps it unmarked. Reading such a Markdown or HTML back puts the remark on the notes layer again, paragraphs and all |
 | `--chunks-type <KIND>` | how `--to chunks` splits a document: `hierarchical` (the default) makes one chunk per body item — a run of list items is one chunk, and each carries its heading path — and `hybrid` packs sentences to the token budget, carrying the tail of one chunk into the next |
@@ -1401,6 +1401,8 @@ test-data/
 │                                            #   --ocr-lang deu (make_german_scan.py)
 ├── vector_text.pdf                          # text drawn only as paths: no font, no text
 │                                            #   operator, no image (make_vector_text_pdf.py)
+├── vector_text_figure.pdf                   # the same, its lines close enough that the
+│                                            #   parser groups the block into one figure
 ├── invoice_scan_skewed.png                  # the scan shrunk into a margin and turned
 │                                            #   ten degrees clockwise (make_skewed_scan.py)
 ├── ccitt_scan.pdf, ccitt_g3_2d_scan.pdf      # the same scan in CCITT G3/G4

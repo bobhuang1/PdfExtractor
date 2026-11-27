@@ -2184,6 +2184,88 @@ fn a_page_whose_text_is_vector_art_is_rasterised_and_read() {
     }
 }
 
+/// A page whose outlined text the parser groups into a figure is still
+/// rasterised. `vector_text_figure.pdf` sets the invoice's lines 16 points
+/// apart, so their glyph boxes touch and the figure pass merges the block into
+/// one box — which is what a real outlined export looks like: the same
+/// Ghostscript command on a 14-page paper produced six or seven such "figures"
+/// on every page. A figure is not a picture: the page still has no text and no
+/// pixel to read, and the flag renders it instead of passing it over.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn a_page_whose_outlined_text_is_grouped_into_a_figure_is_rasterised() {
+    let ws = Workspace::new("vector-figure");
+    let fixture = repository_root().join("test-data/vector_text_figure.pdf");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("vector_text_figure.pdf", &bytes);
+
+    // As it stands the page has no text, and its drawn block is reported as one
+    // vector figure — the box the rasteriser used to mistake for a picture.
+    let plain = ws.join("plain.json");
+    run_ok(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        plain.to_str().unwrap(),
+        "--ocr",
+        "never",
+    ]);
+    let doc = json_of(&plain);
+    assert!(
+        doc["texts"].as_array().is_none_or(Vec::is_empty),
+        "the fixture has a text layer, so it measures nothing: {doc:#?}"
+    );
+    assert_eq!(
+        doc["pictures"].as_array().map_or(0, Vec::len),
+        1,
+        "the outlined block is not reported as a figure: {doc:#?}"
+    );
+
+    let read = ws.join("read.json");
+    let run = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        read.to_str().unwrap(),
+        "--ocr",
+        "auto",
+        "--ocr-vector-pages",
+    ]);
+    if !run.status.success() {
+        assert!(
+            stderr_of(&run).contains("pdftoppm"),
+            "the rasteriser refused for another reason: {}",
+            stderr_of(&run)
+        );
+        eprintln!("skipped the render: this machine has no pdftoppm");
+        return;
+    }
+
+    let doc = json_of(&read);
+    let texts = doc["texts"].as_array().expect("a text list");
+    let joined = texts
+        .iter()
+        .map(|text| text["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needle in [
+        "ACME SUPPLIES",
+        "Invoice 12345",
+        "Total Due 42.50",
+        "Thank you for your business.",
+    ] {
+        assert!(joined.contains(needle), "missing {needle:?} in: {joined}");
+    }
+
+    let size = &doc["pages"]["1"]["size"];
+    assert_eq!(size["width"].as_f64(), Some(612.0), "{size:#?}");
+    assert_eq!(size["height"].as_f64(), Some(792.0), "{size:#?}");
+}
+
 /// CCITT G3/G4 and JBIG2 scans reach OCR: the codecs real faxes and scanners
 /// use, none of which an image library opens as a file. All fixtures are the
 /// same invoice; `ccitt_scan.pdf` has a G3 one-dimensional page and a G4 page,

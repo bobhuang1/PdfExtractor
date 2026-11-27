@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,378 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,379 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -173,7 +173,7 @@ interpreter exists, and otherwise stops before compiling with the same two optio
 never opts out on the caller's behalf, so a gate that stops here reads as setup and not
 as a regression.
 
-There are 145 end-to-end tests in `cli_test` that run the built binary as a child process.
+There are 146 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
@@ -418,6 +418,16 @@ One page per invocation, drawn as displayed, so the page's `/Rotate` is applied 
 the recognised boxes are scaled from the render's grid back to points. The render is at
 150 dpi: 150, 200 and 300 each read all four fixture lines, so the cheapest grid that was
 measured is the one taken.
+
+**A figure is not a picture.** The first rule also required a page to have no figures,
+on the reading that a page with a figure already has something to extract. A real outlined
+export breaks that reading: `gs -dNoOutputFonts` on the 14-page TraceMonkey paper produced
+**figures on 13 of its 14 pages, 3 to 83 each** — its paragraphs and headings, not
+pictures — and outlining `basicapi.pdf` gave one on its first page, which then read
+nothing while pages 2 and 3 read. The rule now asks for no text and no **raster** picture; the figure boxes are
+still reported, and the render supplies the words. `vector_text_figure.pdf`
+(`make_vector_text_pdf.py`, the invoice's lines set 16 points apart) pins it down: one
+figure, no text, and all four lines read with the flag.
 
 **7 — three sizes, and what parallel conversion buys.** `document_cost`
 (`crates/cli/benches/document_cost.rs`; `cargo bench -p pdfextractor-cli --bench

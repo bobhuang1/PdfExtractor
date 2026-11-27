@@ -873,3 +873,49 @@ and two repository gates were already red.
   pdfextractor-cli --tests -- -D warnings` clean; the new test passed (with
   the skip); `documentation_test` 4 passed, reading the new counts.
 
+### 2026-11-27 — outlined text grouped into a figure is read too
+
+- **The question.** The rasteriser required a page to have no figures, on the
+  reading that a figure is a picture. If the figure pass groups a page's own
+  outlined text into a box, the page would never be rendered — so the first
+  thing to establish was whether a real outlined export does that.
+- **Yes, on real files.** Outlining with `gs -dNoOutputFonts`:
+  - `test-data/real/basicapi.pdf` (3 pages, no images) gave page 1 one figure,
+    `[46.0, 119.1, 532.9, 144.5]` — a header line — and pages 2 and 3 none. With
+    `--ocr-vector-pages`, pages 2 and 3 read (`Chapter 1`, `page 2/3`) and page
+    1 stayed empty.
+  - `test-data/real/tracemonkey.pdf` (14 pages) gave figures on 13 of the 14
+    pages, 3 to 83 each (17 on page 2, 83 on page 11); only the pages that
+    also carry raster images had anything to recognise.
+  - The invoice laid out with its lines 16 points apart gave exactly one figure
+    and no text; the flag returned nothing.
+  - `brief.docx` outlined also carries its embedded invoice picture: OCR
+    recovered that picture's words (`ACME SUPPLIES`, ...) while the outlined
+    text around it stayed missing. Pages with raster images are still not
+    rendered whole, so that case is unchanged.
+- **Decision: cover it.** The gate now asks for no text layer, no placed image
+  and no image, and ignores figures: a vector box is not a picture, and on a
+  page with no pixels the only thing the renderer can lose is a genuine chart's
+  box, which is still reported. The figure boxes are still emitted as pictures
+  alongside the recognised text — on the dense fixture the output is four lines
+  plus one figure box.
+- **The fixture and the test.** `test-data/vector_text_figure.pdf` is written by
+  `make_vector_text_pdf.py` (the same invoice, lines 16 points apart);
+  `a_page_whose_outlined_text_is_grouped_into_a_figure_is_rasterised` checks
+  that it has no text and one picture as stored, then that the flag reads all
+  four lines on 612 x 792. Owned in `scripts/fixture-owners.tsv`.
+- **The generator's reproducibility claim was stale.** Ghostscript 10 writes
+  the run's clock into an XMP packet and a per-run UUID into
+  `xapMM:DocumentID`, neither of which the normalisation covered, so
+  regenerating did not reproduce the committed bytes. Both are pinned now
+  (same width), the output is byte-stable across runs, and `vector_text.pdf`
+  was regenerated — same 10,457 bytes, metadata only.
+- **Docs and counts.** README's `--ocr-vector-pages` row and fixture tree, the
+  plan's rasteriser section and this note; suite 1,378 -> 1,379 and `cli_test`
+  145 -> 146.
+- **Checks.** The new test passed (6.0 s); the existing
+  `a_page_whose_text_is_vector_art_is_rasterised_and_read` still passed;
+  `cargo clippy -p pdfextractor-pipeline -p pdfextractor-cli --tests -- -D
+  warnings` and `cargo fmt --all --check` clean; `documentation_test` 4 passed
+  with the new counts.
+
