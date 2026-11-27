@@ -803,3 +803,39 @@ and two repository gates were already red.
   passed; `documentation_test` 4 passed with the suite at 1,377; workspace
   clippy `-D warnings` and `cargo fmt --all --check` clean.
 
+### 2026-11-27 — benchmarks over three sizes, serial and parallel
+
+- **The bench.** `crates/cli/benches/document_cost.rs` (`harness = false`, std
+  clock, the min/median/p95/mean report `engine_cost` uses), run with `cargo
+  bench -p pdfextractor-cli --bench document_cost`. It sits in the CLI because
+  `rayon` and the `--parallel` pool already do; the reading is
+  `pdfextractor_pipeline::build_document` called directly, so process startup
+  is not in the numbers, and pictures are described rather than written. The
+  fixtures are `brief.docx` (49,679 B, 12 text items), `real/basicapi.pdf`
+  (105,779 B, 3 pages) and `real/tracemonkey.pdf` (1,016,315 B, 14 pages, 296
+  text items). Each is timed alone (10 samples), then as four copies on one
+  thread and across a four-thread pool (5 samples), which is what `--parallel
+  1` and `--parallel 4` do to four inputs. `BENCH_ITERS` / `BENCH_BATCH_ITERS`
+  override the sample counts.
+- **The numbers**, medians of two runs on a 2-core/4-thread `i7-3687U`:
+
+  | fixture | one doc | 4 serial | 4 parallel | speedup |
+  |---|---:|---:|---:|---:|
+  | `brief.docx` | 9.4 / 9.3 ms | 36.7 / 37.8 ms | 20.8 / 25.3 ms | 1.76x / 1.49x |
+  | `basicapi.pdf` | 261 / 280 ms | 1,121 / 1,089 ms | 596 / 601 ms | 1.88x / 1.81x |
+  | `tracemonkey.pdf` | 124 / 125 ms | 521 / 543 ms | 264 / 249 ms | 1.98x / 2.18x |
+
+- **What it says.** With two physical cores the ceiling is just under 2x, and
+  the middle and large documents reach 1.8–2.2x; the small one gains least
+  because a 9 ms conversion is mostly fixed per-document cost. The 3-page PDF
+  costs more than the 14-page paper — its pages are font- and vector-heavy
+  (TCPDF), not text-heavy — so the ladder is by document size, not page count.
+- **A rejected fixture.** `real/math_gan.pdf` (9 pages) looked like a better
+  medium, but its figures go through OCR: one conversion took **24.4 s**, so
+  it would have made the batch impossible and is not representative of the
+  reading's ordinary cost.
+- **Checks.** The bench ran twice, exit 0 both times (compile 7m48s the first
+  time; the run itself ~20 s); `cargo clippy -p pdfextractor-cli --benches --
+  -D warnings` and `cargo fmt --all --check` clean. No suite count moves: a
+  `harness = false` bench is not part of `cargo test --list`.
+

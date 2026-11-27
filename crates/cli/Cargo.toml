@@ -44,6 +44,13 @@ pdfextractor-md-exporter = { path = "../md-exporter" }
 # left out: the library is the comparison, not the window.
 pdfextractor-ui = { path = "../ui", default-features = false }
 
+# A hand-rolled benchmark rather than a framework, like the OCR engine's: the
+# conversion of three fixture sizes, once serially and once across the same
+# rayon pool `--parallel` builds.
+[[bench]]
+name = "document_cost"
+harness = false
+
 [features]
 default = ["ocr"]
 # The pipeline owns the reading, OCR included: `--no-default-features` builds a

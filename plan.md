@@ -353,7 +353,7 @@ from a measurement rather than from scratch.
 | 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
 | 5 | Formula regions | heuristic boxes over maths-like lines | the corpus equation counts do not move without an accepted delta |
 | 6 | EPUB and e-mail | an `epub-parser` crate (container → OPF → spine → the existing HTML reader), then `.eml` | a generated fixture converts with its headings and pictures |
-| 7 | Benchmarks with varied sizes | benches over small, medium and large documents, serial and parallel | the numbers are recorded in a round note |
+| 7 | Benchmarks with varied sizes | **landed**: `document_cost` over a short brief, a three-page PDF and a fourteen-page paper, serial against a four-thread pool, with the numbers below | `cargo bench -p pdfextractor-cli --bench document_cost` |
 | — | GPU, service mode | **not started**: no GPU on this machine or in CI, and a service mode needs a design decision (protocol, lifetime, authentication) before any code | — |
 
 **1 — despeckle.** `--ocr-despeckle` replaces the
@@ -407,6 +407,31 @@ the recognised boxes are scaled from the render's grid back to points. The rende
 150 dpi: 150, 200 and 300 each read all four fixture lines, so the cheapest grid that was
 measured is the one taken.
 
+**7 — three sizes, and what parallel conversion buys.** `document_cost`
+(`crates/cli/benches/document_cost.rs`; `cargo bench -p pdfextractor-cli --bench
+document_cost`) uses the same std-clock shape as `engine_cost`: `harness = false`, a
+warm-up outside the samples, and min/median/p95/mean in milliseconds. It lives in the
+CLI because that is where `rayon` and the `--parallel` pool already are; the reading
+itself is the pipeline's, called directly so process startup is not in the numbers, and
+pictures are described rather than written so the cost is the reading's. The three
+fixtures are `brief.docx` (49,679 bytes, 12 text items), `real/basicapi.pdf` (105,779
+bytes, 3 pages) and `real/tracemonkey.pdf` (1,016,315 bytes, 14 pages, 296 text items).
+Each is timed alone (10 samples), then as four copies — one thread in sequence, then a
+four-thread pool (5 samples) — which is what `--parallel 1` and `--parallel 4` do to
+four inputs. Medians of one run; a second run reproduced them within 8%:
+
+| fixture | one document | 4 serial | 4 parallel | speedup |
+|---|---:|---:|---:|---:|
+| `brief.docx` | 9.4 ms | 36.7 ms | 20.8 ms | 1.76x |
+| `basicapi.pdf` | 261 ms | 1,121 ms | 596 ms | 1.88x |
+| `tracemonkey.pdf` | 124 ms | 521 ms | 264 ms | 1.98x |
+
+The machine measured on has **two physical cores and four hardware threads**
+(`i7-3687U`), so just under 2x is its ceiling; 1.76x on the smallest document is the
+fixed per-document cost and the pool's dispatch showing. The 3-page PDF costs more than
+the 14-page paper because its pages are font- and vector-heavy (TCPDF output), so the
+ladder is by document size, not by page count, and the numbers should be read that way.
+
 ## Deferred — recorded, not in this plan
 
 Each is real work that is larger than a finishing pass, or needs measurement on the
@@ -420,4 +445,3 @@ Linux OCR floors, or ML; the old plan's text for each is in
 - Formats: EPUB and e-mail; `.doc` character formatting without LibreOffice; DOCX
   page geometry; slide transitions.
 - GPU (Phase 9), a custom OCR engine, a service mode, model-based layout.
-- Benchmarks and performance tests with varied sizes and parallelism.
