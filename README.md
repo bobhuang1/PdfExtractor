@@ -69,6 +69,11 @@ and [plan.md](plan.md) for the full roadmap.
   ```
 
   Without these, build with `--no-default-features`; OCR calls then return a clear error.
+- **German OCR (for one check):** `a_german_scan_is_read_with_the_german_model` reads
+  `test-data/german_scan.png` with `--ocr-lang deu`, which needs
+  `deu.traineddata` — `tesseract-ocr-deu` on Debian/Ubuntu, `tesseract-lang` on
+  Homebrew, or the file in the `tessdata` directory `TESSDATA_PREFIX` names. Without it
+  the test prints those routes and skips rather than reporting a reading.
 - **LibreOffice (optional):** only for the formats no reader here implements —
   Microsoft Works (`.wps`, `.wp`, `.wks`, `.wdb`), WordPerfect (`.wpd`), legacy
   Excel (`.xls`) and legacy PowerPoint (`.ppt`). `PDFE_SOFFICE` names the executable; without it
@@ -1392,6 +1397,8 @@ test-data/
 ├── invoice_scan.png                         # image fixture (make_scan_images.py)
 ├── fax_scan.png                             # the same scan with a fax's salt-and-pepper
 │                                            #   noise (make_fax_scan.py)
+├── german_scan.png                          # the invoice laid out in German, read with
+│                                            #   --ocr-lang deu (make_german_scan.py)
 ├── vector_text.pdf                          # text drawn only as paths: no font, no text
 │                                            #   operator, no image (make_vector_text_pdf.py)
 ├── invoice_scan_skewed.png                  # the scan shrunk into a margin and turned

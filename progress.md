@@ -839,3 +839,37 @@ and two repository gates were already red.
   -D warnings` and `cargo fmt --all --check` clean. No suite count moves: a
   `harness = false` bench is not part of `cargo test --list`.
 
+### 2026-11-27 — the German scan, and the test that skips without `deu`
+
+- **The fixture.** `test-data/german_scan.png` (14,548 bytes) from
+  `test-data/make_german_scan.py`: the invoice's 620 x 350 frame at 150 dpi,
+  laid out in German — `MUSTER GMBH`, `Rechnung Nr. 4711`, `Gesamtbetrag
+  1.234,56 €`, `Musterstraße 7, 10115 Berlin`, `Vielen Dank für Ihr
+  Vertrauen.` — with the umlaut and `ß` rendered as Pillow's DejaVu writes them.
+  The fixture is owned by `crates/cli/tests/cli_test.rs` in
+  `scripts/fixture-owners.tsv`.
+- **The test.** `a_german_scan_is_read_with_the_german_model` runs the built
+  binary with `--ocr always --ocr-lang deu`, then asserts the page is
+  297.575 x 167.986 points and the text carries `MUSTER GMBH`, `Rechnung`,
+  `Gesamtbetrag`, `Vielen Dank` and `für`.
+- **The skip, measured.** This machine has only `eng` and `osd`, and a `deu`
+  run does not fail: Tesseract writes `Failed loading language 'deu'` and
+  `Tesseract couldn't load any languages!` to stderr, then hands back an empty
+  page with **exit 0** and a 594-byte JSON. The test therefore looks for
+  `deu.traineddata` or `Failed loading language 'deu'` on stderr, prints the
+  install routes and returns. Measured here: 1 passed, 144 filtered out, 0.05 s,
+  with the skip line printed under `--nocapture`. The silent empty page at the
+  library boundary is noted, not changed here.
+- **Not measured: the German reading itself.** No `deu.traineddata` is
+  installed on this machine, so the asserted words are the fixture's, not a
+  recorded recognition. `tesseract-ocr-deu` (Debian/Ubuntu),
+  `tesseract-lang` (Homebrew) or `deu.traineddata` in the `TESSDATA_PREFIX`
+  directory is what makes the check measure something; README and plan.md say
+  so.
+- **Docs and counts.** plan.md's workstream 3 is marked landed with the new
+  paragraph; the suite counts moved 1,377 -> 1,378 and `cli_test` 144 -> 145;
+  README gained the German-data requirement and the fixture in its tree.
+- **Checks.** `cargo fmt --all --check` clean; `cargo clippy -p
+  pdfextractor-cli --tests -- -D warnings` clean; the new test passed (with
+  the skip); `documentation_test` 4 passed, reading the new counts.
+

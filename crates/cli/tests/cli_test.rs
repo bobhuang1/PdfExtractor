@@ -12291,6 +12291,81 @@ fn a_clean_scan_reads_the_same_with_despeckle() {
     }
 }
 
+/// A German scan is read with the German model. `german_scan.png` is the
+/// invoice layout in German — `Rechnung`, `Gesamtbetrag`, the umlaut in
+/// `für`, the `ß` in `Musterstraße` — so the words under test are the ones a
+/// language model decides, not ones an English model already reads.
+///
+/// Tesseract's German data is a separate install. When it is missing,
+/// Tesseract says `Failed loading language 'deu'` on stderr and hands back an
+/// empty page (the run still exits 0), so this test names the install routes
+/// and skips rather than passing an empty document off as a reading.
+#[test]
+#[cfg_attr(
+    not(feature = "ocr"),
+    ignore = "reads text by OCR: needs the `ocr` feature (Tesseract)"
+)]
+fn a_german_scan_is_read_with_the_german_model() {
+    let ws = Workspace::new("german-scan");
+    let fixture = repository_root().join("test-data/german_scan.png");
+    let bytes =
+        std::fs::read(&fixture).unwrap_or_else(|e| panic!("missing {}: {e}", fixture.display()));
+    let input = ws.write("german_scan.png", &bytes);
+    let output = ws.join("german_scan.json");
+
+    let out = run(&[
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--ocr",
+        "always",
+        "--ocr-lang",
+        "deu",
+    ]);
+
+    // No `deu.traineddata`: Tesseract itself names the file it could not open.
+    // Skip with the install routes instead of failing for a missing package.
+    if stderr_of(&out).contains("deu.traineddata")
+        || stderr_of(&out).contains("Failed loading language 'deu'")
+    {
+        eprintln!(
+            "skipped the German read: Tesseract has no `deu.traineddata` — install \
+             `tesseract-ocr-deu` (Debian/Ubuntu) or `tesseract-lang` (Homebrew), or put \
+             `deu.traineddata` in the tessdata directory named by TESSDATA_PREFIX"
+        );
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "the German read failed: {}",
+        stderr_of(&out)
+    );
+
+    let doc = json_of(&output);
+    let size = &doc["pages"]["1"]["size"];
+    let width = size["width"].as_f64().expect("a width");
+    let height = size["height"].as_f64().expect("a height");
+    assert!((width - 297.575).abs() < 0.1, "width {width}");
+    assert!((height - 167.986).abs() < 0.1, "height {height}");
+
+    let texts = doc["texts"].as_array().expect("a text list");
+    let joined = texts
+        .iter()
+        .map(|text| text["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for needle in [
+        "MUSTER GMBH",
+        "Rechnung",
+        "Gesamtbetrag",
+        "Vielen Dank",
+        "für",
+    ] {
+        assert!(joined.contains(needle), "missing {needle:?} in: {joined}");
+    }
+}
+
 /// The fax defect, measured rather than asserted: `fax_scan.png` is
 /// `invoice_scan.png` with two percent of its pixels replaced — salt on paper,
 /// pepper inside ink (see `test-data/make_fax_scan.py`), which is what a fax

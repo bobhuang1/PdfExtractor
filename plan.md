@@ -163,7 +163,7 @@ workstream is four phases and not eight.
 The workspace's minimum Rust is 1.92 (`rust-version` in `Cargo.toml`); the toolchain it is
 built with is pinned at 1.99.0 in `rust-toolchain.toml`, and README states both.
 
-The workspace builds with zero warnings, and the suite holds 1,377 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
+The workspace builds with zero warnings, and the suite holds 1,378 tests on Linux (`cargo test --workspace -- --list`; Windows lists fewer, `job_test` being Unix-only).
 A full-suite run also needs the `docling-core` oracle. `docling_core_accepts_our_documents`
 fails rather than passing silently when no interpreter loads it: point `DOCLING_PY` at a
 Python with `docling-core` installed (`~/.venvs/pdfextractor-docling/bin/python` on the
@@ -173,7 +173,7 @@ interpreter exists, and otherwise stops before compiling with the same two optio
 never opts out on the caller's behalf, so a gate that stops here reads as setup and not
 as a regression.
 
-There are 144 end-to-end tests in `cli_test` that run the built binary as a child process.
+There are 145 end-to-end tests in `cli_test` that run the built binary as a child process.
 The golden binary `docling_golden_test` has forty-three tests in the binary: the corpus-wide conformance check, nineteen fixture checks, a version check, twenty comparison units and two acceptance tests.
 58 real Docling conversions are committed under `test-data/golden/docling/`.
 
@@ -349,7 +349,7 @@ from a measurement rather than from scratch.
 |---|---|---|---|
 | 1 | OCR preprocessing | **landed**: despeckle (`--ocr-despeckle`) and deskew (`--ocr-deskew`), with the measurements below | `cargo test -p pdfextractor-ocr-engine --lib preprocess::` |
 | 2 | Vector-page rasterising | **landed** (`--ocr-vector-pages`), with the renderer rule recorded below | `a_page_whose_text_is_vector_art_is_rasterised_and_read` |
-| 3 | Non-English and fax fixtures | **the fax half landed** (`fax_scan.png`, from `make_fax_scan.py`); the German scan is open | `despeckle_recovers_words_a_faxed_scan_loses`; the German words read |
+| 3 | Non-English and fax fixtures | **landed**: the fax fixture (`fax_scan.png`) and the German scan (`german_scan.png`, from `make_german_scan.py`) | `despeckle_recovers_words_a_faxed_scan_loses`; the German words read when `deu` is installed, and the test skips by name without it |
 | 4 | PDF tables and spans | detect ruled tables in layout and emit `Table` items with spans | a pinned fixture's grid matches and no corpus document's agreement falls |
 | 5 | Formula regions | heuristic boxes over maths-like lines | the corpus equation counts do not move without an accepted delta |
 | 6 | EPUB and e-mail | an `epub-parser` crate (container → OPF → spine → the existing HTML reader), then `.eml` | a generated fixture converts with its headings and pictures |
@@ -385,6 +385,18 @@ noise costs are the two the pass recovers. The page is 297.6 x 168 points and on
 either way, and the boxes stay inside it: the pass filters pixels and does not move the
 grid. The recovery is partial in the last line (`THiank you for your business.`), which is
 what the test asserts instead of claiming the pass restores the scan.
+
+**3 — the German fixture is the language check.** `german_scan.png` is the same 620 x
+350 page laid out in German — `Rechnung`, `Gesamtbetrag`, the umlaut in `für`, the `ß` in
+`Musterstraße` — so the words under test are ones an English model loses rather than ones
+the OCR path already reads. The test runs the CLI with `--ocr-lang deu` and asserts those
+lines. Tesseract's German data is a separate install — `tesseract-ocr-deu` on
+Debian/Ubuntu, `tesseract-lang` on Homebrew, or `deu.traineddata` in the `tessdata`
+directory `TESSDATA_PREFIX` names — and without it Tesseract prints `Failed loading
+language 'deu'` and returns an empty page, so the test prints those routes and skips
+rather than passing an empty document off as a reading. **The reading was not measured
+on the machine this was written on**, which has only `eng` and `osd`: the fixture's
+layout is fixed and the German words are asserted, not recorded.
 
 **2 — the rasteriser, and how extraction may use a renderer.** `vector_text.pdf` is the
 invoice laid out as text and flattened by Ghostscript with `-dNoOutputFonts`: no font, no
